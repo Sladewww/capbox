@@ -963,7 +963,7 @@ ensure_rootfs_dirs() {
   local r="${1:-$CAPBOX_ROOTFS}"
   [[ -n "$r" ]] || return 0
   local d
-  for d in proc sys dev tmp run root etc workspace var var/log home mnt; do
+  for d in proc sys dev tmp run root etc workspace var var/log var/lib/capbox-data home mnt; do
     mkdir -p "$r/$d" 2>/dev/null || true
   done
   mkdir -p "$r/etc/apk" "$r/etc/profile.d" "$r/etc/apt/apt.conf.d" "$r/etc/ssl/certs" 2>/dev/null || true

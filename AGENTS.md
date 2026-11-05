@@ -58,11 +58,11 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 
 - `CAPBOX_NET=none|restricted|open`（`host`=`open`）。`restricted` 需 `CAPBOX_NET_ALLOW` + python3/nsenter；原始网络被 unshare，仅代理出站。
 - `capbox recipe apply`：KEY=value only，never source.
-- Resource limits prefer cgroup v2; otherwise WARN (no fake enforcement).
+- Resource limits prefer cgroup v2 (`CAPBOX_CGROUP_ROOT` optional strict parent); otherwise WARN (no fake enforcement).
 
 ## UID map / services
 
-- `CAPBOX_IDMAP=auto|on|off`；doctor 会报告 multi/single/blocked。blocked+on = 硬失败。
+- `CAPBOX_IDMAP=auto|on|off`；doctor 会报告 multi/single/blocked。blocked+on = 硬失败。`--uid` 降权优先用宿主 `gcc -static` 构建的 `capbox-drop-priv`（见 `lib/guest/capbox-drop-priv.c`）。
 - `capbox exec --uid/--gid/--user`；`capbox service start|stop|status|logs`.
 - 慢测：`./test/slow/run-slow.sh`（勿删 mssql 数据目录）。
 
@@ -71,7 +71,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 - Project workspace is RW at `/workspace` by design — treat its contents as trusted (use `FS_HIDE` / untrusted profile for sensitive subpaths).
 - `bin/` / `lib/` / `config.env` are `--ro-bind`; other project files the host may execute later are not.
 - Default profile is `compat` (full caps, no seccomp). Use `CAPBOX_SECURITY_PROFILE=untrusted|strict` for explicit hardening; multi-UID idmap skips `--disable-userns` (bwrap incompatibility).
-- cgroup/disk limits need host delegation/loop privileges; otherwise CapBox WARNs or fail-closes — it does not fake enforcement.
+- cgroup/disk limits need host delegation/loop+mount privileges (DISK_MAX is not rootless; uses sudo -n or root); otherwise CapBox WARNs or fail-closes — it does not fake enforcement. DISK_MAX covers guest /var/lib/capbox-data only.
 - Mirror reachability depends on the network (`doctor` reports it; override with `CAPBOX_MIRROR_*`).
 
 ## Hardening / observability / reproducibility

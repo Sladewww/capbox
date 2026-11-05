@@ -200,8 +200,15 @@ capbox exec --profile untrusted -- sh -c 'mount -t tmpfs none /mnt; echo RC=$?'
 
 `capbox metrics` 查看 `cgroup_status`：
 
-- `denied`：有 cgroup v2 但当前用户不能建子目录（无委派）。`warn` 模式 MEMORY 可能降级 prlimit（近似）；`require` 模式硬失败。
-- `DISK_MAX` 需要可写 `/dev/loop-control`；否则明确 `unavailable`，不会假装限额。
+- `denied`：有 cgroup v2 但当前用户不能建子目录，或子 cgroup 无控制器接口（例如进程所在 scope 上写 `subtree_control` 得到 EBUSY）。`warn` 模式 MEMORY 可能降级 prlimit（近似）；`require` 模式硬失败。
+- 可设 `CAPBOX_CGROUP_ROOT` 指向已启用 cpu/memory/pids 的空父 cgroup；该覆盖失败时不 silently 降级 prlimit。
+- `DISK_MAX` 需要能建立 loop+ext4 并 `mount`（通常 root 或 `sudo -n`；可写 `/dev/loop-control` 不够时仍要 mount 能力）。成功时配额盘在 guest `/var/lib/capbox-data`。否则明确 `unavailable`，`require` 硬失败，不会假装限额。这不是无特权方案。
+
+---
+
+## exec --uid 报 BusyBox setpriv / cannot drop privileges
+
+Alpine 默认只有 BusyBox `setpriv`（无 `--reuid`），且 `/etc/passwd` 常无 uid 33，`su 33` 会失败。CapBox 在宿主用 `gcc -static` 从 `lib/guest/capbox-drop-priv.c` 构建数字 uid helper，装入 rootfs 的 `/usr/libexec/capbox-drop-priv`（不改系统包、不加账户）。`capbox init` / 首次 `--uid` 会构建；doctor 会报告 helper 状态。回退仍保留 GNU setpriv / python3 / chpst / su。
 
 ---
 

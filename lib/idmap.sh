@@ -153,11 +153,27 @@ _idmap_probe() {
   }
 
   # 实探：fork + unshare + newuidmap
-  local ok=0 detail=""
+  # 使用私有 mktemp 目录承载 chown 探测文件，避免 sticky /tmp 固定名留下
+  # 无法删除的 subuid 属主文件（也不依赖 sudo 清理）。
+  local ok=0 detail="" probe_dir="" probe_file=""
+  probe_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/capbox-idmap.XXXXXX")" || {
+    CAPBOX_IDMAP_STATUS="blocked"
+    CAPBOX_IDMAP_DETAIL="无法创建 idmap 探测临时目录"
+    [[ "$mode" == "on" ]] && return 2
+    return 1
+  }
+  probe_file="$probe_dir/probe"
+  : >"$probe_file" || {
+    rmdir "$probe_dir" 2>/dev/null || true
+    CAPBOX_IDMAP_STATUS="blocked"
+    CAPBOX_IDMAP_DETAIL="无法创建 idmap 探测文件"
+    [[ "$mode" == "on" ]] && return 2
+    return 1
+  }
   detail="$(
-    python3 - "$uid_spec" "$gid_spec" <<'PY' 2>&1
+    python3 - "$uid_spec" "$gid_spec" "$probe_file" <<'PY' 2>&1
 import os, subprocess, sys
-uid_spec, gid_spec = sys.argv[1], sys.argv[2]
+uid_spec, gid_spec, probe_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def parse(spec):
     out=[]
@@ -176,10 +192,11 @@ if pid==0:
     os.unshare(CLONE_NEWUSER)
     os.write(pw, b'R'); os.close(pw)
     os.read(gr, 1)
-    # verify chown + setgroups + setuid
-    open('/tmp/.capbox-idmap-probe','w').write('x')
+    # verify chown + setgroups + setuid against host-provided private path
     try:
-        os.chown('/tmp/.capbox-idmap-probe', 33, 33)
+        with open(probe_path, 'w') as f:
+            f.write('x')
+        os.chown(probe_path, 33, 33)
         os.setgroups([0,33])
         c=os.fork()
         if c==0:
@@ -187,11 +204,11 @@ if pid==0:
             os._exit(0 if os.getuid()==33 else 1)
         _, st = os.waitpid(c,0)
         rc = os.WEXITSTATUS(st) if os.WIFEXITED(st) else 1
-        um=open('/proc/self/uid_map').read().strip().replace('\n',';')
-        print('OK', um, 'rc', rc)
+        um=open('/proc/self/uid_map').read().strip().replace('\n','|')
+        print('OK', um, 'rc', rc, flush=True)
         os._exit(0 if rc==0 else 1)
     except Exception as e:
-        print('FAIL', type(e).__name__, e)
+        print('FAIL', type(e).__name__, e, flush=True)
         os._exit(1)
 
 os.close(pw); os.close(gr)
@@ -207,13 +224,9 @@ sys.exit(0 if os.WIFEXITED(st) and os.WEXITSTATUS(st)==0 else 1)
 PY
   )" && ok=1 || ok=0
 
-  rm -f /tmp/.capbox-idmap-probe 2>/dev/null || true
-  # 探测可能在 subuid 属主下留下文件
-  if [[ -e /tmp/.capbox-idmap-probe ]]; then
-    if have_cmd sudo; then
-      sudo -n rm -f /tmp/.capbox-idmap-probe 2>/dev/null || true
-    fi
-  fi
+  # 私有目录无 sticky bit：即使 probe 已被 chown 到 subuid，目录属主仍可 unlink
+  rm -f "$probe_file" 2>/dev/null || true
+  rmdir "$probe_dir" 2>/dev/null || true
 
   if (( ok == 1 )); then
     CAPBOX_IDMAP_STATUS="multi"
@@ -363,8 +376,95 @@ _idmap_inject_block_fds() {
   __inj_av=("${head[@]}" --info-fd "$info_spec" --userns-block-fd "$block_fd" "${tail[@]}")
 }
 
+
+# ---------------------------------------------------------------------------
+# Numeric uid/gid drop helper (host-built static binary for musl guests)
+# ---------------------------------------------------------------------------
+# BusyBox setpriv lacks --reuid; su needs a passwd name; alpine often has no
+# python3. Prefer a tiny static helper built from lib/guest/capbox-drop-priv.c
+# with host `gcc -static`, installed into the CapBox rootfs at
+# /usr/libexec/capbox-drop-priv (not a packaged system account change).
+
+_idmap_drop_priv_src() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$here/guest/capbox-drop-priv.c" ]]; then
+    printf '%s' "$here/guest/capbox-drop-priv.c"
+    return 0
+  fi
+  if [[ -n "${CAPBOX_GUEST_DIR:-}" && -f "${CAPBOX_GUEST_DIR}/capbox-drop-priv.c" ]]; then
+    printf '%s' "${CAPBOX_GUEST_DIR}/capbox-drop-priv.c"
+    return 0
+  fi
+  return 1
+}
+
+_idmap_drop_priv_host_bin() {
+  printf '%s' "${CAPBOX_DIR:-/tmp}/run/helpers/capbox-drop-priv"
+}
+
+_idmap_drop_priv_guest_bin() {
+  printf '%s' /usr/libexec/capbox-drop-priv
+}
+
+# Build (gcc -static) + install into CAPBOX_ROOTFS. Returns 0 if guest can exec it.
+_idmap_ensure_drop_priv_helper() {
+  local src bin guest_abs cc tmp err
+  src="$(_idmap_drop_priv_src)" || {
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="missing capbox-drop-priv.c"
+    return 1
+  }
+  bin="$(_idmap_drop_priv_host_bin)"
+  mkdir -p "$(dirname "$bin")" 2>/dev/null || true
+
+  if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
+    cc=""
+    if have_cmd gcc; then
+      cc=gcc
+    elif have_cmd cc; then
+      cc=cc
+    else
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="no gcc/cc to build static helper"
+      return 1
+    fi
+    tmp="$(mktemp "${TMPDIR:-/tmp}/capbox-drop-priv.XXXXXX")"
+    err="$("$cc" -static -O2 -s -o "$tmp" "$src" 2>&1)" || {
+      rm -f "$tmp"
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="gcc -static failed: ${err:-unknown}"
+      return 1
+    }
+    mv -f "$tmp" "$bin"
+    chmod 755 "$bin"
+  fi
+
+  if [[ -n "${CAPBOX_ROOTFS:-}" && -d "${CAPBOX_ROOTFS}" ]]; then
+    mkdir -p "${CAPBOX_ROOTFS}/usr/libexec" 2>/dev/null || true
+    guest_abs="${CAPBOX_ROOTFS}$(_idmap_drop_priv_guest_bin)"
+    if [[ ! -x "$guest_abs" || "$bin" -nt "$guest_abs" ]]; then
+      cp -f "$bin" "$guest_abs" 2>/dev/null || {
+        CAPBOX_IDMAP_DROP_HELPER_DETAIL="cannot install helper into rootfs: $guest_abs"
+        return 1
+      }
+      chmod 755 "$guest_abs" 2>/dev/null || true
+    fi
+    if [[ -x "$guest_abs" ]]; then
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper ready ($guest_abs)"
+      return 0
+    fi
+  fi
+
+  # rootfs not ready yet — host bin alone is enough for later install
+  if [[ -x "$bin" ]]; then
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper built ($bin); rootfs install pending"
+    return 0
+  fi
+  CAPBOX_IDMAP_DROP_HELPER_DETAIL="helper missing after build"
+  return 1
+}
+
 # bwrap 在 --userns-block-fd 路径下不会可靠应用 --uid/--gid（实测恒为 0）。
-# 多映射启用时，用 setpriv/python 在 guest 内降权。
+# 多映射启用时在 guest 内降权：优先宿主 gcc -static 构建的 capbox-drop-priv
+#（数字 uid，无需 passwd）；否则回退 GNU setpriv / python3 / chpst / su。
 _idmap_wrap_argv_for_uid() {
   # $1 = 调用方数组变量名
   local __wname="$1"
@@ -379,15 +479,82 @@ _idmap_wrap_argv_for_uid() {
   local -a rest=("${_argv[@]:$((dd+1))}")
   ((${#rest[@]} > 0)) || return 0
   local -a wrap=()
-  # 优先 setpriv（util-linux，alpine/ubuntu 常见）
-  wrap=(setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "${rest[@]}")
-  # 若 guest 无 setpriv，退化为 python3；再不行则 busybox 无法可靠 setuid
+  local guest_helper host_helper guest_abs
+
+  # 1) 首选：宿主 gcc -static 构建的数字 uid helper（不依赖 guest 包/passwd）
+  if _idmap_ensure_drop_priv_helper; then
+    guest_helper="$(_idmap_drop_priv_guest_bin)"
+    host_helper="$(_idmap_drop_priv_host_bin)"
+    guest_abs="${CAPBOX_ROOTFS:-}${guest_helper}"
+    if [[ -n "${CAPBOX_ROOTFS:-}" && -x "$guest_abs" ]]; then
+      wrap=("$guest_helper" "$uid" "$gid" "${rest[@]}")
+      _argv=("${_argv[@]:0:$dd}" -- "${wrap[@]}")
+      return 0
+    fi
+    # rootfs 尚未装上：临时 ro-bind 宿主静态二进制
+    if [[ -x "$host_helper" ]]; then
+      local -a head=("${_argv[@]:0:$dd}")
+      _argv=("${head[@]}" --ro-bind "$host_helper" "$guest_helper" -- "$guest_helper" "$uid" "$gid" "${rest[@]}")
+      return 0
+    fi
+  fi
+
+  # 2) 回退：guest 运行时选择器（GNU setpriv / python3 / chpst / su）
+  # shellcheck disable=SC2016
+  wrap=(
+    /bin/sh -c '
+uid=$1
+gid=$2
+shift 2
+is_gnu_setpriv() {
+  sp=$1
+  [ -n "$sp" ] && [ -x "$sp" ] || return 1
+  link=$(readlink -f "$sp" 2>/dev/null || readlink "$sp" 2>/dev/null || printf %s "$sp")
+  case "$link" in
+    *busybox*) return 1 ;;
+  esac
+  "$sp" --help 2>&1 | grep -q -- "--reuid"
+}
+try_gnu_setpriv() {
+  sp=$1
+  shift
+  is_gnu_setpriv "$sp" || return 1
+  exec "$sp" --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+}
+try_gnu_setpriv /usr/bin/setpriv "$@"
+if command -v setpriv >/dev/null 2>&1; then
+  try_gnu_setpriv "$(command -v setpriv)" "$@"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 -c "import os,sys
+uid=int(sys.argv[1]); gid=int(sys.argv[2]); cmd=sys.argv[3:]
+os.setgid(gid)
+try:
+    os.setgroups([gid])
+except Exception:
+    pass
+os.setuid(uid)
+os.execvp(cmd[0], cmd)" "$uid" "$gid" "$@"
+fi
+if command -v chpst >/dev/null 2>&1; then
+  exec chpst -u ":${uid}:${gid}" "$@"
+fi
+if command -v su >/dev/null 2>&1; then
+  if su "$uid" -s /bin/sh -c "exec \"\$@\"" -- "$@" 2>/dev/null; then
+    exit $?
+  fi
+  name=$(awk -F: -v u="$uid" '\''($3==u){print $1; exit}'\'' /etc/passwd 2>/dev/null || true)
+  if [ -n "$name" ]; then
+    exec su "$name" -s /bin/sh -c "exec \"\$@\"" -- "$@"
+  fi
+fi
+printf "capbox: cannot drop privileges to %s:%s (need host gcc -static helper, util-linux setpriv, python3, chpst, or su; BusyBox setpriv --reuid unsupported)\n" "$uid" "$gid" >&2
+exit 127
+' sh "$uid" "$gid" "${rest[@]}"
+  )
   _argv=("${_argv[@]:0:$dd}" -- "${wrap[@]}")
 }
 
-# 在完整 bwrap argv（含二进制，含 -- cmd）上启用多映射前台运行。
-# 用法: _idmap_run_bwrap_argv -- cmd...   或者传入已构造好的完整 argv 数组名
-# 这里用 "$@" 作为完整 argv。
 _idmap_run_bwrap_argv() {
   [[ $# -gt 0 ]] || return 2
   local -a _run_argv=("$@")
@@ -527,6 +694,11 @@ _idmap_doctor_report() {
   case "${CAPBOX_IDMAP_STATUS}" in
     multi)
       _doctor_pass "UID 映射 multi（${CAPBOX_IDMAP_DETAIL}）"
+      if _idmap_ensure_drop_priv_helper; then
+        _doctor_pass "drop-priv helper（${CAPBOX_IDMAP_DROP_HELPER_DETAIL}）"
+      else
+        _doctor_warn "drop-priv helper 不可用（${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-unknown}）；--uid 将依赖 guest setpriv/python/chpst/su"
+      fi
       ;;
     single)
       _doctor_warn "UID 映射 single（${CAPBOX_IDMAP_DETAIL}）。chown/setgroups/多用户服务会失败"
