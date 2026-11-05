@@ -9,9 +9,6 @@
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
 **在容器内拥有完整 root 权限** 的持久环境 —— 全部状态就是项目下的 `.capbox/` 目录。
 
-<p align="center">
-  <img src="docs/assets/demo-commands.gif" alt="CapBox common commands demo" width="880" />
-</p>
 
 ## 为什么会有这个东西
 
@@ -73,11 +70,6 @@ capbox init --distro alpine      # ~3.4 MB
 capbox exec -- id -u             # → 0
 ```
 
-<p align="center">
-  <img src="docs/assets/demo-quickstart.gif" alt="CapBox quickstart demo" width="880" />
-</p>
-
-常用命令见上方第一张演示 GIF（`exec` / `pkg` / `cp` / `status`）。
 
 `init` 幂等。再要 ubuntu：`capbox init --distro ubuntu`（更大），用
 `capbox config set CAPBOX_DISTRO ubuntu` 切换。
@@ -178,7 +170,7 @@ GitHub Actions：见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。�
 
 ## 演示 GIF
 
-源文件在 [`docs/assets/`](docs/assets/)。有 [vhs](https://github.com/charmbracelet/vhs) 时：
+演示源文件在 [`docs/assets/`](docs/assets/) 和 [`docs/tapes/`](docs/tapes/)；生成脚本会产出两个 GIF。当前仓库未附带二进制 GIF，可用下面命令本地生成。有 [vhs](https://github.com/charmbracelet/vhs) 时：
 
 ```sh
 vhs docs/tapes/quickstart.tape
