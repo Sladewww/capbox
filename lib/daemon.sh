@@ -150,6 +150,9 @@ _daemon_bwrap_args() {
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
 
+  # 与 common.sh build_bwrap_args 同构：先 clearenv，再允许 net/security/白名单 setenv。
+  a+=(--clearenv)
+
   if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
     _net_append_bwrap_args a
   else
@@ -168,14 +171,26 @@ _daemon_bwrap_args() {
   a+=(--hostname "$CAPBOX_HOSTNAME")
   a+=(--chdir /workspace)
   a+=(--die-with-parent)
+  if declare -F _security_append_bwrap_args >/dev/null 2>&1; then
+    _security_append_bwrap_args a || true
+  fi
   a+=(--setenv HOME /root)
   a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
   a+=(--setenv TERM "${TERM:-xterm-256color}")
+  a+=(--setenv LANG "${LANG:-C.UTF-8}")
 
-  if [[ -n "$CAPBOX_PROXY" ]]; then
-    local np="localhost,127.0.0.1,::1,*.local"
-    a+=(--setenv http_proxy "$CAPBOX_PROXY" --setenv https_proxy "$CAPBOX_PROXY")
-    a+=(--setenv all_proxy "$CAPBOX_PROXY" --setenv no_proxy "$np")
+  if [[ -n "${CAPBOX_PROXY:-}" ]]; then
+    local _mode="${CAPBOX_NET:-open}"
+    if declare -F _net_mode >/dev/null 2>&1; then
+      _mode="$(_net_mode)"
+    fi
+    if [[ "$_mode" != "restricted" ]]; then
+      local np="localhost,127.0.0.1,::1,*.local"
+      a+=(--setenv http_proxy "$CAPBOX_PROXY" --setenv https_proxy "$CAPBOX_PROXY")
+      a+=(--setenv all_proxy "$CAPBOX_PROXY" --setenv no_proxy "$np")
+      a+=(--setenv HTTP_PROXY "$CAPBOX_PROXY" --setenv HTTPS_PROXY "$CAPBOX_PROXY")
+      a+=(--setenv ALL_PROXY "$CAPBOX_PROXY" --setenv NO_PROXY "$np")
+    fi
   fi
 
   printf '%s\n' "${a[@]}"
@@ -576,7 +591,7 @@ _daemon_build_up_argv() {
   _out+=(--bind "$CAPBOX_TMP_DIR" /tmp)
   _out+=(--bind "$CAPBOX_RUN_DIR/guest-run" /run)
 
-  # 服务端需要的环境
+  # 服务端需要的环境（base 已 --clearenv；此处仅白名单注入 daemon/guest 必需项）
   _out+=(--setenv CAPBOX_DAEMON_DIR "$guest_daemon_dir")
   _out+=(--setenv CAPBOX_DISTRO "$CAPBOX_DISTRO")
   _out+=(--setenv CAPBOX_ROOTFS_HOST "$CAPBOX_ROOTFS")
@@ -584,6 +599,7 @@ _daemon_build_up_argv() {
   _out+=(--setenv CAPBOX_HOSTNAME "$CAPBOX_HOSTNAME")
   _out+=(--setenv CAPBOX_DAEMON_MAXJOBS "${CAPBOX_DAEMON_MAXJOBS:-8}")
   _out+=(--setenv CAPBOX_DAEMON_TICK "${CAPBOX_DAEMON_TICK:-0.2}")
+  _out+=(--setenv CAPBOX_DAEMON_BEAT_EVERY "${CAPBOX_DAEMON_BEAT_EVERY:-5}")
   _out+=(--setenv CAPBOX_DAEMON_HB_TTL "${CAPBOX_DAEMON_HB_TTL:-6}")
   _out+=(--setenv CAPBOX_DAEMON_STOP_WAIT "${CAPBOX_DAEMON_STOP_WAIT:-30}")
 
