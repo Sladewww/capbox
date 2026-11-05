@@ -21,7 +21,7 @@ assert_file_absent /tmp/.capbox-idmap-probe "第二次 doctor 后仍无固定 pr
 assert_out_not_matches 'PermissionError' "第二次 doctor 无 PermissionError"
 if printf '%s' "${RUN_STDOUT}${RUN_STDERR}" | grep -q 'UID 映射 multi'; then
   _ok "doctor 报告 multi"
-elif printf '%s' "${RUN_STDOUT}${RUN_STDERR}" | grep -qE 'UID 映射 (single|不可用|被阻塞)'; then
+elif printf '%s' "${RUN_STDOUT}${RUN_STDERR}" | grep -qE 'UID 映射 (single|不可用|被阻塞)|UID 映射不可用'; then
   mark_known_issue "本环境无法多 UID 映射；后续断言改为验证单 UID 边界"
   run_cmd "$CAPBOX_BIN" exec -- sh -c 'touch /tmp/t27; chown 33:33 /tmp/t27 2>&1 || true'
   if printf '%s' "$RUN_STDOUT" | grep -qiE 'Invalid argument|Operation not permitted|chown:'; then

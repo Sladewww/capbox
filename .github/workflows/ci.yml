@@ -64,6 +64,10 @@ jobs:
           sysctl kernel.unprivileged_userns_clone 2>/dev/null || true
 
       - name: Init alpine rootfs
+        env:
+          # Test the repository itself as /workspace, not its parent directory.
+          CAPBOX_WORKSPACE: ${{ github.workspace }}
+          CAPBOX_TEST_WS: ${{ github.workspace }}
         run: |
           # Repo itself acts as CapBox dir when not named .capbox
           ./bin/capbox init --distro alpine
@@ -74,12 +78,18 @@ jobs:
           # T19 = ubuntu slow; T15/T16 need background daemon
           CAPBOX_TEST_SLOW: "0"
           CAPBOX_TEST_DAEMON: "0"
+          CAPBOX_WORKSPACE: ${{ github.workspace }}
+          CAPBOX_TEST_WS: ${{ github.workspace }}
         run: |
           # Explicitly select non-slow, non-daemon cases
           ./test/run.sh T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 \
                        T11 T12 T13 T14 T17 T18 T20 T21 T22 \
                        T23 T24 T25 T26 T27 T28 T29 T30 T31 \
                        T32 T33 T34 T35 T36 T37
+
+      - name: Make failure logs readable
+        if: failure()
+        run: sudo find test/tmp -type d -exec chmod u+rwx {} + -o -type f -exec chmod u+rw {} +
 
       - name: Upload test tmp on failure
         if: failure()
