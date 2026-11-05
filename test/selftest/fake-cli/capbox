@@ -1,0 +1,681 @@
+#!/usr/bin/env bash
+# =============================================================================
+# .capbox/test/selftest/fake-cli/capbox — 假 CLI 桩（仅用于自测测试框架本身）
+# -----------------------------------------------------------------------------
+# 目的：在真实 CLI 还没就绪时，验证 .capbox/test/run.sh + lib.sh 的
+#   PASS/FAIL 判定、SKIP 门控、选择性执行、汇总与退出码是否正确。
+#
+# 它**不是** CapBox 的实现，也不参与真实验收：真正验收跑的是 .capbox/bin/capbox。
+# 它用一个「模拟容器」：把 guest 绝对路径重写到 < .capbox/os/<distro>/ 下，
+# 因此持久化、工作区互通、cp 这些语义能真的跑起来，断言才有意义。
+#
+# 故障注入：FAKE_DEFECTS="缺陷名,缺陷名" 用来验证「测试能抓到问题」：
+#   help-missing        帮助里不列 ls        → T01 应 FAIL
+#   doctor-always-ok    doctor 永远退出 0    → T02 应 FAIL
+#   exec-uid-1000       id -u 返回 1000      → T06 应 FAIL
+#   stdout-noisy        exec 往 stdout 多加行 → T06 应 FAIL
+#   exitcode-swallow    exec 永远返回 0      → T12 应 FAIL
+#   no-timeout          忽略 --timeout       → T13 应 FAIL
+#   status-bad-json     status --json 非法   → T14 应 FAIL
+#   status-missing-key  status --json 缺字段 → T14 应 FAIL
+# =============================================================================
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+CAPBOX_DIR="$(cd "$SELF_DIR/.." && pwd)"
+WS="$(cd "$CAPBOX_DIR/.." && pwd)"
+DAEMON_DIR="$CAPBOX_DIR/run/daemon"
+
+DEFECTS="${FAKE_DEFECTS:-}"
+
+defect() {
+  case ",$DEFECTS," in
+    *",$1,"*) return 0 ;;
+  esac
+  return 1
+}
+
+# --------------------------- 配置 ---------------------------
+cfg() {
+  local key="$1" def="${2:-}" v=""
+  case "$key" in
+    CAPBOX_DISTRO) v="${CAPBOX_DISTRO:-}" ;;
+    CAPBOX_PROXY) v="${CAPBOX_PROXY:-}" ;;
+    CAPBOX_MIRROR) v="${CAPBOX_MIRROR:-}" ;;
+  esac
+  if [ -z "$v" ] && [ -f "$CAPBOX_DIR/config.env" ]; then
+    v=$(sed -n "s/^[[:space:]]*$key=//p" "$CAPBOX_DIR/config.env" | tail -n 1 |
+      sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  fi
+  printf '%s' "${v:-$def}"
+}
+
+DISTRO="$(cfg CAPBOX_DISTRO alpine)"
+ROOTFS="$CAPBOX_DIR/os/$DISTRO"
+PROXY="$(cfg CAPBOX_PROXY '')"
+MIRROR="$(cfg CAPBOX_MIRROR cn)"
+BWRAP="${CAPBOX_BWRAP:-/usr/bin/bwrap}"
+VERSION="0.1.0"
+
+log() { printf '[capbox] %s\n' "$*" >&2; }
+die() { local c="$1"; shift; printf '[capbox] 错误：%s\n' "$*" >&2; exit "$c"; }
+
+# --------------------------- daemon 状态 ---------------------------
+daemon_json="$DAEMON_DIR/daemon.json"
+daemon_running() {
+  [ -f "$daemon_json" ] || return 1
+  local pid
+  pid=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$daemon_json" | head -n 1)
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  return 0
+}
+daemon_pid() {
+  sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$daemon_json" 2>/dev/null | head -n 1
+}
+
+# --------------------------- 模拟容器执行 ---------------------------
+# 将 guest 绝对路径改写到模拟 rootfs。
+# 关键：宿主路径（ROOTFS / WS / SIM_TMP）本身含 /tmp/，若先替换 /root/ 再替换 /tmp/，
+# 会把刚插入的宿主路径再改写一次（自测时踩过这个坑）。因此顺序是：
+#   1) 先把 guest 的 /tmp/ 换成哨兵
+#   2) 再替换会插入宿主路径的规则
+#   3) 最后把哨兵换成真实 SIM_TMP（此后不再有替换，宿主路径里的 /tmp 安全）
+rewrite() {
+  printf '%s' "$1" | sed \
+    -e 's#/tmp/#@@CAPBOX_GTMP@@/#g' \
+    -e "s#/workspace#${WS}#g" \
+    -e "s#/root/#${ROOTFS}/root/#g" \
+    -e "s#/root\$#${ROOTFS}/root#g" \
+    -e "s#/etc/#${ROOTFS}/etc/#g" \
+    -e "s#/mnt#${ROOTFS}/mnt#g" \
+    -e "s#@@CAPBOX_GTMP@@#${SIM_TMP:-/tmp}#g"
+}
+
+prep_guest_env() {
+  mkdir -p "$ROOTFS/root" "$ROOTFS/etc" "$ROOTFS/mnt" 2>/dev/null
+  if [ -n "$PROXY" ]; then
+    export http_proxy="$PROXY" https_proxy="$PROXY" all_proxy="$PROXY" no_proxy="localhost,127.0.0.1"
+    mkdir -p "$ROOTFS/etc/profile.d" 2>/dev/null
+    printf 'export http_proxy=%s\nexport https_proxy=%s\nexport all_proxy=%s\n' \
+      "$PROXY" "$PROXY" "$PROXY" >"$ROOTFS/etc/profile.d/capbox-proxy.sh" 2>/dev/null
+  fi
+}
+
+# 执行 guest 命令；$1=timeout 秒（0=不限），其余为命令
+guest_run() {
+  local tmo="$1"; shift
+  local runner=(env)
+  local rc
+  if [ "$tmo" != "0" ] && command -v timeout >/dev/null 2>&1; then
+    runner=(timeout -k 2 "$tmo")
+  fi
+  "${runner[@]}" "$@"
+  rc=$?
+  return $rc
+}
+
+sim_tmp_init() { # $1=oneshot|daemon
+  if [ "$1" = "daemon" ]; then
+    SIM_TMP="$DAEMON_DIR/gtmp"
+    mkdir -p "$SIM_TMP"
+  else
+    SIM_TMP=$(mktemp -d "$CAPBOX_DIR/run/tmp/ec-XXXXXX" 2>/dev/null || mktemp -d)
+  fi
+  export SIM_TMP
+}
+
+# 把一条 guest 命令翻译成宿主上可执行的等价形式并运行
+  # exec_guest MODE TIMEOUT CMD...   （GUEST_CWD 由 cmd_exec 在解析 --cwd 后设置）
+exec_guest() {
+  local mode="$1" tmo="$2"; shift 2
+  local cmd=("$@")
+
+  sim_tmp_init "$mode"
+  prep_guest_env
+
+  # ---- 特殊命令（模拟，不真跑）----
+  if [ "${cmd[0]}" = "id" ] && [ "${cmd[1]:-}" = "-u" ]; then
+    if defect exec-uid-1000; then echo 1000; return 0; fi
+    echo 0
+    return 0
+  fi
+  # pwd：在容器内应打印**容器视角**的路径，而不是宿主上被改写后的真实目录。
+  # 有 --cwd 时打印 --cwd；否则打印默认 /workspace。
+  if [ "${cmd[0]}" = "pwd" ]; then
+    printf '%s\n' "${GUEST_CWD:-/workspace}"
+    return 0
+  fi
+  if [ "${cmd[0]}" = "nproc" ]; then
+    nproc
+    return 0
+  fi
+  if [ "${cmd[0]}" = "apk" ] && [ "${cmd[1]:-}" = "update" ]; then
+    printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main/x86_64/APKINDEX.tar.gz\n'
+    printf 'v3.20.3-0-g6a1c4b3 [https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main]\nOK: 9 MiB in 21 packages\n'
+    return 0
+  fi
+  if [ "${cmd[0]}" = "apt-get" ] && [ "${cmd[1]:-}" = "-v" ]; then
+    printf 'apt 2.7.14 (amd64)\n'
+    return 0
+  fi
+  if [ "${cmd[0]}" = "apt-get" ]; then
+    if [ "${cmd[1]:-}" = "-o" ] || [ "${cmd[2]:-}" = "-o" ]; then
+      printf 'Hit:1 http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble InRelease\nReading package lists... Done\n'
+      return 0
+    fi
+  fi
+  if [ "${cmd[0]}" = "sh" ] && [ "${cmd[1]:-}" = "-c" ]; then
+    local body="${cmd[2]:-}"
+    case "$body" in
+      *"grep ^CapEff"*)
+        printf 'CapEff:\t000001ffffffffff\n'
+        return 0
+        ;;
+      *"command -v curl"*)
+        if [ -f "$ROOTFS/.pkg-curl" ]; then echo present; else echo absent; fi
+        return 0
+        ;;
+    esac
+    local translated
+    translated=$(rewrite "$body")
+    # 注入 mount 之类的特权命令模拟（容器内 CapEff 全量，这些本该成功）
+    local prelude="mount() { return 0; }; umount() { return 0; }; "
+    guest_run "$tmo" bash -c "$prelude$translated"
+    return $?
+  fi
+  if [ "${cmd[0]}" = "echo" ]; then
+    echo "${cmd[1]:-}"
+    if defect stdout-noisy; then echo "[capbox] (noise) --tmpfs /tmp"; fi
+    return 0
+  fi
+  if [ "${cmd[0]}" = "true" ]; then return 0; fi
+  if [ "${cmd[0]}" = "cat" ]; then
+    local p
+    p=$(rewrite "${cmd[1]:-}")
+    cat "$p"
+    return $?
+  fi
+  if [ "${cmd[0]}" = "printenv" ]; then
+    printenv "${cmd[1]:-}"
+    return $?
+  fi
+  if [ "${cmd[0]}" = "sleep" ]; then
+    guest_run "$tmo" sleep "${cmd[1]:-1}"
+    return $?
+  fi
+
+  # ---- 其他：翻译后真跑 ----
+  local translated_cmd=()
+  local a
+  for a in "${cmd[@]}"; do
+    translated_cmd+=("$(rewrite "$a")")
+  done
+  guest_run "$tmo" "${translated_cmd[@]}"
+  return $?
+}
+
+# --------------------------- 子命令 ---------------------------
+cmd_help() {
+  cat <<EOF
+capbox $VERSION — 在 DSH 工作区里运行一个拥有完整 root 权限的 Linux 操作系统
+
+用法：capbox <command> [options] [-- args]
+
+命令：
+  bootstrap                                  在当前工作区脚手架 .capbox/
+  init [--distro D] [--force] [--from URL]   下载并解包 rootfs
+  status [--json]                            显示状态
+  exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--] CMD...
+                                             在容器内执行命令
+  shell [--daemon]                           交互式 shell
+  cp SRC DST                                 宿主↔容器拷贝
+  pkg install|remove|update|list [--] PKG...  装包
+  up                                         启动常驻守护容器（前台阻塞）
+  down                                       停止守护容器
+  ls [PATH]                                  列容器内目录
+  ps                                         列容器内进程
+  logs [-f] [-n N]                           守护容器日志
+  doctor                                     自检
+  distros                                    列出支持的发行版
+  config get|set|list                        配置
+  clean [--all]                              清理
+  version                                    版本
+EOF
+  if defect help-missing; then
+    printf '' # 帮助里故意漏掉 ls 命令的细节（见名字列表已被 grep 命中，改用下面的删除实现）
+  fi
+}
+
+# help-missing 需要真的砍掉 "ls" 那一行；上面 heredoc 太僵硬，这里后处理
+cmd_help2() {
+  cmd_help | grep -v '^  ls \[PATH\]' 
+}
+
+cmd_version() { printf 'capbox %s\n' "$VERSION"; }
+
+cmd_init() {
+  local distro=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --distro) distro="${2:-}"; shift 2 ;;
+      --force) shift ;;
+      --from) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$distro" ] || distro="$(cfg CAPBOX_DISTRO alpine)"
+
+  local rf="$CAPBOX_DIR/os/$distro"
+  if [ -x "$rf/bin/sh" ]; then
+    log "rootfs 已存在，复用缓存（跳过下载）：$rf"
+    printf 'CAPBOX_DISTRO=%s\n' "$distro" >"$CAPBOX_DIR/config.env"
+    return 0
+  fi
+
+  local cache="$CAPBOX_DIR/cache"
+  mkdir -p "$cache" "$rf/bin" "$rf/etc/apk" "$rf/etc/apt/apt.conf.d" "$rf/root" "$rf/mnt"
+  printf '#!/bin/sh\necho "fake %s sh"\n' "$distro" >"$rf/bin/sh"
+  chmod +x "$rf/bin/sh"
+
+  # 模拟镜像源注入（契约 §6）
+  printf 'https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main\nhttps://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/community\n' \
+    >"$rf/etc/apk/repositories"
+  printf 'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble main universe\n' \
+    >"$rf/etc/apt/sources.list"
+  printf 'Acquire::Sandbox::User "root";\nAcquire::Retries "3";\n' \
+    >"$rf/etc/apt/apt.conf.d/99capbox"
+
+  # 缓存占位 tarball：用于验证 T04「第二次 init 不重新下载」（mtime 不变）
+  local tb
+  if [ "$distro" = "alpine" ]; then
+    tb="$cache/alpine-minirootfs-3.20.3-x86_64.tar.gz"
+  else
+    tb="$cache/ubuntu-base-24.04.3-base-amd64.tar.gz"
+  fi
+  [ -f "$tb" ] || printf 'fake-tarball-%s\n' "$distro" >"$tb"
+
+  printf 'CAPBOX_DISTRO=%s\nCAPBOX_MIRROR=%s\n' "$distro" "$MIRROR" >"$CAPBOX_DIR/config.env"
+  log "初始化完成：$distro → $rf"
+  return 0
+}
+
+cmd_doctor() {
+  local fails=0
+  chk() { if eval "$2"; then printf 'PASS  %s\n' "$1"; else printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); fi; }
+
+  chk "bwrap 已安装 ($BWRAP)" '[ -x "$BWRAP" ]'
+  chk "userns 全权限（uid 0 + CapEff 全量）" 'true'
+  chk "rootfs 存在（$ROOTFS）" '[ -x "$ROOTFS/bin/sh" ]'
+  chk "网络可用" 'true'
+  chk "镜像源已注入" '[ -f "$ROOTFS/etc/apk/repositories" ] || [ -f "$ROOTFS/etc/apt/sources.list" ]'
+  if daemon_running; then
+    printf 'PASS  daemon 运行中 (pid %s)\n' "$(daemon_pid)"
+  else
+    printf 'PASS  daemon 未运行（非必需）\n'
+  fi
+
+  if defect doctor-always-ok; then
+    return 0
+  fi
+  [ "$fails" -eq 0 ] || return 1
+  return 0
+}
+
+cmd_status() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+
+  local running=false pid=0 uptime=0 started=0
+  if daemon_running; then
+    running=true
+    pid=$(daemon_pid)
+    started=$(sed -n 's/.*"started_at":\([0-9]*\).*/\1/p' "$daemon_json" | head -n 1)
+    [ -n "$started" ] || started=0
+    uptime=$(( $(date +%s) - started ))
+  fi
+  local bytes=0
+  [ -d "$ROOTFS" ] && bytes=$(du -sb "$ROOTFS" 2>/dev/null | awk '{print $1}')
+
+  if [ "$json" = "1" ]; then
+    if defect status-bad-json; then
+      printf '{"distro": "%s", "rootfs": "%s",}\n' "$DISTRO" "$ROOTFS"
+      return 0
+    fi
+    if defect status-missing-key; then
+      printf '{"distro":"%s","rootfs":"%s","rootfs_bytes":%s,"net":"host","mirror":"%s","proxy":"%s","bwrap":"%s","version":"%s"}\n' \
+        "$DISTRO" "$ROOTFS" "${bytes:-0}" "$MIRROR" "${PROXY:-}" "$BWRAP" "$VERSION"
+      return 0
+    fi
+    printf '{"distro":"%s","rootfs":"%s","rootfs_bytes":%s,"daemon":{"running":%s,"pid":%s,"uptime":%s},"net":"host","mirror":"%s","proxy":"%s","bwrap":"%s","version":"%s"}\n' \
+      "$DISTRO" "$ROOTFS" "${bytes:-0}" "$running" "$pid" "$uptime" "$MIRROR" "${PROXY:-}" "$BWRAP" "$VERSION"
+    return 0
+  fi
+
+  printf 'distro      : %s\n' "$DISTRO"
+  printf 'rootfs      : %s\n' "$ROOTFS"
+  printf 'daemon      : %s\n' "$running"
+  printf 'net         : host\n'
+  printf 'mirror      : %s\n' "$MIRROR"
+  printf 'workspace   : %s\n' "$WS"
+  printf 'version     : %s\n' "$VERSION"
+  return 0
+}
+
+cmd_exec() {
+  local mode=oneshot tmo=600 daemon=0 cwd=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --daemon) daemon=1; shift ;;
+      --timeout) tmo="${2:-600}"; shift 2 ;;
+      --cwd) cwd="${2:-}"; shift 2 ;;
+      --root) shift ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  [ "$daemon" = "1" ] && mode=daemon
+
+  if [ ! -x "$ROOTFS/bin/sh" ]; then
+    die 4 "rootfs 不存在（$ROOTFS），请先运行 capbox init"
+  fi
+  if [ "$daemon" = "1" ] && ! daemon_running; then
+    die 3 "守护进程未运行，请先运行 capbox up"
+  fi
+  # --cwd 校验必须在**父 shell**里做（模拟 主模块 修掉的那个 bug 的正确行为）：
+  # 无效目录直接 die 2，绝不静默降级到默认 cwd 继续执行。
+  # 注意用 rewrite() 而不是 cp_resolve()：/workspace 要映射到宿主工作区 WS，
+  # 而 cp_resolve 会把裸路径一律当 rootfs 相对路径（两者语义不同）。
+  if [ -n "$cwd" ]; then
+    local host_cwd
+    host_cwd=$(rewrite "$cwd")
+    if [ ! -d "$host_cwd" ]; then
+      die 2 "exec: 容器内目录不存在: $cwd"
+    fi
+    GUEST_CWD="$cwd"
+  else
+    GUEST_CWD="/workspace"
+  fi
+  if defect no-timeout; then
+    tmo=0
+  fi
+
+  # daemon 模式：模拟 IPC（req/out 文件真实产生并清理）
+  if [ "$daemon" = "1" ]; then
+    local id="$(date +%s%N)-$$-$RANDOM"
+    mkdir -p "$DAEMON_DIR/req" "$DAEMON_DIR/out"
+    printf 'cd /workspace; %s\n' "$*" >"$DAEMON_DIR/req/$id.sh.tmp"
+    mv "$DAEMON_DIR/req/$id.sh.tmp" "$DAEMON_DIR/req/$id.sh"
+    { exec_guest daemon "$tmo" "$@" >"$DAEMON_DIR/out/$id.log" 2>&1; echo $? >"$DAEMON_DIR/out/$id.rc"; }
+    local rc
+    rc=$(cat "$DAEMON_DIR/out/$id.rc")
+    cat "$DAEMON_DIR/out/$id.log"
+    rm -f "$DAEMON_DIR/req/$id.sh" "$DAEMON_DIR/out/$id.log" "$DAEMON_DIR/out/$id.rc"
+    return "$rc"
+  fi
+
+  [ $# -gt 0 ] || die 2 "缺少要执行的命令"
+  exec_guest "$mode" "$tmo" "$@"
+  local rc=$?
+  if [ "$rc" = "124" ]; then
+    log "容器内命令超时（${tmo}s）"
+    return 124
+  fi
+  if defect exitcode-swallow; then return 0; fi
+  return "$rc"
+}
+
+cmd_cp() {
+  [ $# -ge 2 ] || die 2 "用法：capbox cp SRC DST"
+  local src="$1" dst="$2"
+  local s d
+  s=$(cp_resolve "$src")
+  d=$(cp_resolve "$dst")
+  mkdir -p "$(dirname "$d")"
+  cp -a "$s" "$d" || die 1 "拷贝失败：$src → $dst"
+  return 0
+}
+cp_resolve() {
+  local p="$1" out
+  case "$p" in
+    guest:*)
+      out=$(printf '%s/%s' "$ROOTFS" "${p#guest:}" | sed 's#//*#/#g')
+      # 拒绝逃出 rootfs（对齐真 CLI）
+      local canon root_canon
+      root_canon=$(realpath -m "$ROOTFS" 2>/dev/null || printf '%s' "$ROOTFS")
+      canon=$(realpath -m "$out" 2>/dev/null || printf '%s' "$out")
+      case "$canon" in
+        "$root_canon"|"$root_canon"/*) printf '%s' "$out" ;;
+        *) die 2 "cp: guest 路径越界: $p" ;;
+      esac
+      ;;
+    host:*) printf '%s' "${p#host:}" ;;
+    /*) printf '%s' "$p" ;;
+    *) printf '%s/%s' "$ROOTFS" "$p" ;;
+  esac
+}
+
+cmd_pkg() {
+  local action="${1:-}"; shift || true
+  [ "${1:-}" = "--" ] && shift
+  case "$action" in
+    install)
+      local p
+      for p in "$@"; do
+        touch "$ROOTFS/.pkg-$p"
+      done
+      printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main/x86_64/APKINDEX.tar.gz\n'
+      printf 'OK: %s packages installed\n' "${#:-0}"
+      return 0
+      ;;
+    remove)
+      local p
+      for p in "$@"; do rm -f "$ROOTFS/.pkg-$p"; done
+      return 0
+      ;;
+    update) return 0 ;;
+    list)
+      printf 'alpine-baselayout\nbusybox\nmusl\n'
+      local f
+      for f in "$ROOTFS"/.pkg-*; do
+        [ -e "$f" ] || continue
+        base=$(basename "$f")
+        printf '%s-8.5.0-r0\n' "${base#.pkg-}"
+      done
+      return 0
+      ;;
+    *) die 2 "未知的 pkg 动作：$action" ;;
+  esac
+}
+
+cmd_ls() {
+  local p="${1:-/workspace}"
+  ls -la "$(cp_resolve "$p" 2>/dev/null || printf '%s' "$p")" 2>/dev/null || die 1 "路径不存在：$p"
+}
+
+cmd_ps() {
+  printf 'PID   USER     TIME  COMMAND\n'
+  printf '1     root     0:00  /bin/sh\n'
+}
+
+cmd_logs() {
+  local n=50
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f) shift ;;
+      -n) n="${2:-50}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -f "$DAEMON_DIR/daemon.log" ]; then
+    tail -n "$n" "$DAEMON_DIR/daemon.log"
+  else
+    printf '[daemon] no log yet\n'
+  fi
+  return 0
+}
+
+cmd_distros() {
+  printf 'alpine  https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz\n'
+  printf 'ubuntu  https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz\n'
+}
+
+cmd_config() {
+  local action="${1:-list}"
+  case "$action" in
+    get) cfg "${2:-CAPBOX_DISTRO}" "" ;;
+    set)
+      local k="${2:-}" v="${3:-}"
+      [ -n "$k" ] || die 2 "用法：capbox config set KEY VALUE"
+      case "$k" in
+        CAPBOX_DISTRO | CAPBOX_MIRROR | CAPBOX_PROXY | CAPBOX_NET | CAPBOX_HOSTNAME | CAPBOX_EXEC_TIMEOUT) ;;
+        *) die 2 "未知配置键：$k" ;;
+      esac
+      touch "$CAPBOX_DIR/config.env"
+      grep -v "^[[:space:]]*$k=" "$CAPBOX_DIR/config.env" >"$CAPBOX_DIR/config.env.tmp" 2>/dev/null || true
+      printf '%s=%s\n' "$k" "$v" >>"$CAPBOX_DIR/config.env.tmp"
+      mv "$CAPBOX_DIR/config.env.tmp" "$CAPBOX_DIR/config.env"
+      log "已设置 $k=$v"
+      ;;
+    list)
+      if [ -f "$CAPBOX_DIR/config.env" ]; then cat "$CAPBOX_DIR/config.env"; fi
+      ;;
+    *) die 2 "用法：capbox config get|set|list" ;;
+  esac
+}
+
+cmd_clean() {
+  if [ "${1:-}" = "--all" ]; then rm -rf "$CAPBOX_DIR/os"; fi
+  return 0
+}
+
+cmd_up() {
+  mkdir -p "$DAEMON_DIR/req" "$DAEMON_DIR/out" "$DAEMON_DIR/ctl"
+  printf '{"pid":%s,"started_at":%s,"distro":"%s","rootfs":"%s","v":1}\n' \
+    "$$" "$(date +%s)" "$DISTRO" "$ROOTFS" >"$daemon_json"
+  printf '[daemon] started pid=$$ distro=%s\n' "$DISTRO" >>"$DAEMON_DIR/daemon.log"
+  while [ ! -f "$DAEMON_DIR/ctl/stop" ]; do sleep 0.2; done
+  rm -f "$daemon_json" "$DAEMON_DIR/ctl/stop"
+  return 0
+}
+
+# 自测专用：模拟一个已经在跑的 daemon（供 CAPBOX_TEST_DAEMON=1 的门控测试）
+cmd_daemon_helper() {
+  mkdir -p "$DAEMON_DIR/req" "$DAEMON_DIR/out" "$DAEMON_DIR/ctl"
+  printf '{"pid":%s,"started_at":%s,"distro":"%s","rootfs":"%s","v":1}\n' \
+    "$$" "$(date +%s)" "$DISTRO" "$ROOTFS" >"$daemon_json"
+  printf '[daemon] helper started pid=%s\n' "$$" >>"$DAEMON_DIR/daemon.log"
+  trap 'rm -f "$daemon_json"' EXIT
+  local i=0
+  while [ "$i" -lt 300 ]; do
+    [ -f "$DAEMON_DIR/ctl/stop" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  rm -f "$daemon_json" "$DAEMON_DIR/ctl/stop" 2>/dev/null
+  return 0
+}
+
+cmd_down() {
+  if ! daemon_running; then
+    rm -f "$daemon_json"
+    return 3
+  fi
+  mkdir -p "$DAEMON_DIR/ctl"
+  touch "$DAEMON_DIR/ctl/stop"
+  local i=0
+  while [ -f "$daemon_json" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  rm -f "$daemon_json"
+  rm -rf "$DAEMON_DIR/gtmp"
+  log "守护容器已停止"
+  return 0
+}
+
+# --------------------------- 分发 ---------------------------
+# 解析全局 --root/--debug（与真 CLI 对齐；假桩仅重绑 CAPBOX_DIR）
+_fake_parse_globals() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --debug) shift ;;
+      --root)
+        [ $# -ge 2 ] || die 2 "--root 需要参数"
+        local root="$2"; shift 2
+        root="$(cd -- "$root" 2>/dev/null && pwd || printf '%s' "$root")"
+        CAPBOX_DIR="$root/.capbox"
+        WS="$root"
+        DAEMON_DIR="$CAPBOX_DIR/run/daemon"
+        daemon_json="$DAEMON_DIR/daemon.json"
+        DISTRO="$(cfg CAPBOX_DISTRO alpine)"
+        ROOTFS="$CAPBOX_DIR/os/$DISTRO"
+        PROXY="$(cfg CAPBOX_PROXY '')"
+        MIRROR="$(cfg CAPBOX_MIRROR cn)"
+        ;;
+      --root=*)
+        set -- --root "${1#*=}" "${@:2}"
+        ;;
+      *) break ;;
+    esac
+  done
+  FAKE_REMAINING=("$@")
+}
+
+cmd_bootstrap() {
+  # 假桩：把自身模板树（脚本旁的 .capbox）脚手架到目标 CAPBOX_DIR
+  local template
+  template="$(cd "$SELF_DIR/.." && pwd)"
+  mkdir -p "$CAPBOX_DIR/bin" "$CAPBOX_DIR/lib" "$CAPBOX_DIR/skill"     "$CAPBOX_DIR/run/tmp" "$CAPBOX_DIR/cache" "$CAPBOX_DIR/logs" "$CAPBOX_DIR/state" "$CAPBOX_DIR/os"
+  if [ ! -e "$CAPBOX_DIR/bin/capbox" ]; then
+    cp -a "$SELF_DIR/capbox" "$CAPBOX_DIR/bin/capbox" 2>/dev/null || cp -a "$0" "$CAPBOX_DIR/bin/capbox"
+    chmod +x "$CAPBOX_DIR/bin/capbox"
+  fi
+  if [ ! -f "$CAPBOX_DIR/lib/common.sh" ]; then
+    # 最小占位，满足 T22 文件存在性；假桩不跑真逻辑
+    printf '# fake common.sh
+' >"$CAPBOX_DIR/lib/common.sh"
+  fi
+  if [ -d "$template/skill" ] && [ ! -e "$CAPBOX_DIR/skill/SKILL.md" ]; then
+    mkdir -p "$CAPBOX_DIR/skill"
+    [ -f "$template/skill/SKILL.md" ] && cp -a "$template/skill/SKILL.md" "$CAPBOX_DIR/skill/SKILL.md" ||       printf '# fake skill
+' >"$CAPBOX_DIR/skill/SKILL.md"
+  elif [ ! -e "$CAPBOX_DIR/skill/SKILL.md" ]; then
+    mkdir -p "$CAPBOX_DIR/skill"
+    printf '# fake skill
+' >"$CAPBOX_DIR/skill/SKILL.md"
+  fi
+  log "bootstrap 完成 → $CAPBOX_DIR"
+  return 0
+}
+
+main() {
+  local FAKE_REMAINING=()
+  _fake_parse_globals "$@"
+  set -- "${FAKE_REMAINING[@]}"
+  local cmd="${1:-}"
+  [ $# -gt 0 ] && shift || true
+  case "$cmd" in
+    '' | --help | -h | help)
+      if defect help-missing; then cmd_help2; else cmd_help; fi
+      ;;
+    version | --version) cmd_version ;;
+    bootstrap) cmd_bootstrap "$@" ;;
+    init) cmd_init "$@" ;;
+    status) cmd_status "$@" ;;
+    exec) cmd_exec "$@" ;;
+    cp) cmd_cp "$@" ;;
+    pkg) cmd_pkg "$@" ;;
+    ls) cmd_ls "$@" ;;
+    ps) cmd_ps ;;
+    logs) cmd_logs "$@" ;;
+    doctor) cmd_doctor ;;
+    distros) cmd_distros ;;
+    config) cmd_config "$@" ;;
+    clean) cmd_clean "$@" ;;
+    up) cmd_up ;;
+    down) cmd_down ;;
+    shell) exec_guest oneshot 600 sh -c 'cat' ;;
+    daemon-helper) cmd_daemon_helper ;;
+    *) die 2 "未知命令：$cmd（capbox --help 查看命令列表）" ;;
+  esac
+}
+
+main "$@"
