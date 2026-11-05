@@ -150,7 +150,15 @@ _daemon_bwrap_args() {
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
 
-  [[ "$CAPBOX_NET" == "none" ]] && a+=(--unshare-net)
+  if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
+    _net_append_bwrap_args a
+  else
+    case "${CAPBOX_NET:-open}" in
+      none | restricted) a+=(--unshare-net) ;;
+    esac
+  fi
+  # 注意：restricted 的代理桥目前主要覆盖 oneshot exec；daemon 仅保证 unshare-net。
+  # 若 CAPBOX_NET=restricted，daemon 内原始网络不可用，需走一次性 exec 或后续增强。
   a+=(--unshare-user --unshare-uts --unshare-ipc --unshare-pid)
   a+=(--uid 0 --gid 0 --cap-add ALL)
   a+=(--hostname "$CAPBOX_HOSTNAME")

@@ -63,6 +63,7 @@ cmd_exec() {
   local timeout_s="${CAPBOX_EXEC_TIMEOUT:-600}"
   local cwd="/workspace"
   local root_mode=0
+  local net_override=""
   local -a cmd=()
 
   while [[ $# -gt 0 ]]; do
@@ -84,6 +85,14 @@ cmd_exec() {
         cwd="${1#*=}"
         shift
         ;;
+      --net)
+        net_override="${2:-}"
+        shift 2 || shift
+        ;;
+      --net=*)
+        net_override="${1#*=}"
+        shift
+        ;;
       --root)
         root_mode=1
         cwd="/"
@@ -96,12 +105,13 @@ cmd_exec() {
         ;;
       -h | --help)
         cat <<'EOF'
-用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--] CMD...
+用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE] [--] CMD...
 
   --daemon     在常驻容器内执行（需先启动 capbox up）
   --timeout N  一次性执行超时秒数，0=不限，默认取 CAPBOX_EXEC_TIMEOUT
   --cwd DIR    容器内工作目录（默认 /workspace，相对路径按 /workspace 解释）
   --root       在容器根目录 / 下执行（等价于 --cwd /；与权限无关，容器内恒为 uid 0）
+  --net MODE   覆盖 CAPBOX_NET：none|restricted|open（host=open 别名）；仅本次 oneshot
 
 stdout 只包含容器内命令的输出，可直接被管道消费。
 退出码透传容器内退出码；超时为 124；需要 daemon 但未运行为 3。
@@ -121,6 +131,16 @@ EOF
   [[ ${#cmd[@]} -gt 0 ]] || die 2 "exec: 缺少要执行的命令，例如: capbox exec -- id -u"
 
   [[ "$timeout_s" =~ ^[0-9]+$ ]] || die 2 "exec: --timeout 必须是非负整数秒（当前: $timeout_s）"
+
+  if [[ -n "$net_override" ]]; then
+    case "$net_override" in
+      none | restricted | open | host) CAPBOX_NET="$net_override" ;;
+      *) die 2 "exec: --net 必须是 none|restricted|open（host 别名）；当前: $net_override" ;;
+    esac
+    if [[ "$net_override" == "restricted" ]] && [[ -z "${CAPBOX_NET_ALLOW:-}" ]]; then
+      die 2 "exec: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）"
+    fi
+  fi
 
   # --cwd 校验必须在父 shell 里做（不能用 $( ) 包住 die，否则 exit 只退子 shell，
   # 用户会看到错误信息却拿到 rc=0 并在错误的目录里执行）。

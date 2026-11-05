@@ -34,8 +34,12 @@ readonly CAPBOX_CFG_KEYS=(
   MIRROR_UBUNTU
   PROXY
   NET
+  NET_ALLOW
   HOSTNAME
   EXEC_TIMEOUT
+  MEMORY_MAX
+  CPU_MAX
+  PIDS_MAX
   BWRAP
 )
 
@@ -155,10 +159,42 @@ _cfg_validate() {
       }
       ;;
     NET)
-      [[ "$v" == "host" || "$v" == "none" ]] || {
-        log_err "CAPBOX_NET 只能是 host 或 none（当前: '$v'）"
+      [[ "$v" == "host" || "$v" == "open" || "$v" == "none" || "$v" == "restricted" ]] || {
+        log_err "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的兼容别名；当前: '$v'）"
         return 2
       }
+      ;;
+    NET_ALLOW)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[A-Za-z0-9._:,/\-]+$ ]] || {
+          log_err "CAPBOX_NET_ALLOW 只能包含域名/IP/逗号/冒号/斜线（当前: '$v'）"
+          return 2
+        }
+      fi
+      ;;
+    MEMORY_MAX)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[0-9]+([KkMmGg]i?[Bb]?)?$ ]] || {
+          log_err "CAPBOX_MEMORY_MAX 格式无效（例 512M / 1G；当前: '$v'）"
+          return 2
+        }
+      fi
+      ;;
+    CPU_MAX)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[0-9]+%$ || "$v" =~ ^[0-9]+[[:space:]]+[0-9]+$ || "$v" == "max" ]] || {
+          log_err "CAPBOX_CPU_MAX 格式无效（例 50% 或 '50000 100000'；当前: '$v'）"
+          return 2
+        }
+      fi
+      ;;
+    PIDS_MAX)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[0-9]+$ ]] || {
+          log_err "CAPBOX_PIDS_MAX 必须是正整数（当前: '$v'）"
+          return 2
+        }
+      fi
       ;;
     EXEC_TIMEOUT)
       [[ "$v" =~ ^[0-9]+$ ]] || {
@@ -369,14 +405,20 @@ load_config() {
   : "${CAPBOX_MIRROR_ALPINE=https://mirrors.aliyun.com/alpine}"
   : "${CAPBOX_MIRROR_UBUNTU=https://mirrors.aliyun.com/ubuntu}"
   : "${CAPBOX_PROXY=}"
-  : "${CAPBOX_NET=host}"
+  : "${CAPBOX_NET=open}"
+  : "${CAPBOX_NET_ALLOW=}"
+  : "${CAPBOX_MEMORY_MAX=}"
+  : "${CAPBOX_CPU_MAX=}"
+  : "${CAPBOX_PIDS_MAX=}"
   : "${CAPBOX_HOSTNAME=capbox}"
   : "${CAPBOX_EXEC_TIMEOUT=600}"
 
   # 空值兜底（配置文件写坏了也不至于炸）
   [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; log_warn "CAPBOX_DISTRO 为空，回退 alpine"; }
   [[ -n "${CAPBOX_MIRROR:-}" ]] || CAPBOX_MIRROR=cn
-  [[ -n "${CAPBOX_NET:-}" ]] || CAPBOX_NET=host
+  [[ -n "${CAPBOX_NET:-}" ]] || CAPBOX_NET=open
+  # host 为历史别名
+  [[ "${CAPBOX_NET}" == "host" ]] && CAPBOX_NET=open
   [[ -n "${CAPBOX_HOSTNAME:-}" ]] || CAPBOX_HOSTNAME=capbox
   [[ "${CAPBOX_EXEC_TIMEOUT:-}" =~ ^[0-9]+$ ]] || CAPBOX_EXEC_TIMEOUT=600
 
@@ -827,8 +869,14 @@ build_bwrap_args() {
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
 
-  # ---- 命名空间 ----
-  [[ "${CAPBOX_NET:-host}" == "none" ]] && a+=(--unshare-net)
+  # ---- 命名空间 / 网络三档 ----
+  if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
+    _net_append_bwrap_args a
+  else
+    case "${CAPBOX_NET:-open}" in
+      none | restricted) a+=(--unshare-net) ;;
+    esac
+  fi
   a+=(--unshare-user --unshare-uts --unshare-ipc)
   # 交互式/调试时可关掉 pid ns（pid 1 收不到某些信号）
   [[ "${CAPBOX_BWRAP_NO_PIDNS:-0}" == "1" ]] || a+=(--unshare-pid)
@@ -845,16 +893,23 @@ build_bwrap_args() {
   a+=(--setenv TERM "${TERM:-xterm-256color}")
   a+=(--setenv LANG "${LANG:-C.UTF-8}")
 
+  # restricted 模式由 net.sh 注入桥接代理；此处仅处理用户显式 CAPBOX_PROXY（open 模式）
   if [[ -n "${CAPBOX_PROXY:-}" ]]; then
-    local np="localhost,127.0.0.1,::1,*.local"
-    a+=(--setenv http_proxy "$CAPBOX_PROXY")
-    a+=(--setenv https_proxy "$CAPBOX_PROXY")
-    a+=(--setenv all_proxy "$CAPBOX_PROXY")
-    a+=(--setenv no_proxy "$np")
-    a+=(--setenv HTTP_PROXY "$CAPBOX_PROXY")
-    a+=(--setenv HTTPS_PROXY "$CAPBOX_PROXY")
-    a+=(--setenv ALL_PROXY "$CAPBOX_PROXY")
-    a+=(--setenv NO_PROXY "$np")
+    local _mode="${CAPBOX_NET:-open}"
+    if declare -F _net_mode >/dev/null 2>&1; then
+      _mode="$(_net_mode)"
+    fi
+    if [[ "$_mode" != "restricted" ]]; then
+      local np="localhost,127.0.0.1,::1,*.local"
+      a+=(--setenv http_proxy "$CAPBOX_PROXY")
+      a+=(--setenv https_proxy "$CAPBOX_PROXY")
+      a+=(--setenv all_proxy "$CAPBOX_PROXY")
+      a+=(--setenv no_proxy "$np")
+      a+=(--setenv HTTP_PROXY "$CAPBOX_PROXY")
+      a+=(--setenv HTTPS_PROXY "$CAPBOX_PROXY")
+      a+=(--setenv ALL_PROXY "$CAPBOX_PROXY")
+      a+=(--setenv NO_PROXY "$np")
+    fi
   fi
 
   # 逃生口：daemon 或特殊场景附加额外 bwrap 参数
@@ -886,7 +941,19 @@ run_bwrap_oneshot() {
 
   [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}（apt install bubblewrap）"
 
+  # restricted：走 net.sh 的 unshare-net + allowlist 代理桥
+  if declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
+    if declare -F _net_run_bwrap_oneshot >/dev/null 2>&1; then
+      _net_run_bwrap_oneshot "$cwd" "$to" "$@"
+      return $?
+    fi
+    die 5 "CAPBOX_NET=restricted 但 net.sh 未加载"
+  fi
+
   full=("$CAPBOX_BWRAP" "${args[@]}" -- "$@")
+  if declare -F _resources_wrap_argv >/dev/null 2>&1; then
+    _resources_wrap_argv full || true
+  fi
 
   local rc=0
   if (( to > 0 )) && have_cmd timeout; then
@@ -1096,7 +1163,7 @@ status_oneshot() {
       "$(json_escape "$CAPBOX_ROOTFS")" \
       "$bytes" \
       "$running" "$pid" "$uptime" \
-      "$(json_escape "${CAPBOX_NET:-host}")" \
+      "$(json_escape "${CAPBOX_NET:-open}")" \
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
@@ -1116,7 +1183,7 @@ status_oneshot() {
   else
     printf '守护进程   : 未运行\n'
   fi
-  printf '网络模式   : %s\n' "${CAPBOX_NET:-host}"
+  printf '网络模式   : %s\n' "${CAPBOX_NET:-open}"
   if [[ "${CAPBOX_MIRROR:-cn}" == "none" ]]; then
     printf '镜像源     : none（未注入）\n'
   else
@@ -1313,15 +1380,21 @@ cmd_doctor() {
       else
         _doctor_fail "镜像源不可达 ($url)；检查网络或 CAPBOX_MIRROR 配置"
       fi
-      if [[ "${CAPBOX_NET:-host}" == "host" ]]; then
-        if curl -fsSI -m 8 -o /dev/null "${CAPBOX_MIRROR_ALPINE%/}/" 2>/dev/null; then
-          _doctor_pass "宿主网络可用"
-        else
-          _doctor_warn "宿主到公网镜像的探测失败（可能是离线环境）"
-        fi
-      else
-        _doctor_warn "CAPBOX_NET=none，容器内无网络"
-      fi
+      case "${CAPBOX_NET:-open}" in
+        open | host)
+          if curl -fsSI -m 8 -o /dev/null "${CAPBOX_MIRROR_ALPINE%/}/" 2>/dev/null; then
+            _doctor_pass "宿主网络可用"
+          else
+            _doctor_warn "宿主到公网镜像的探测失败（可能是离线环境）"
+          fi
+          ;;
+        none)
+          _doctor_warn "CAPBOX_NET=none，容器内无网络（--unshare-net）"
+          ;;
+        restricted)
+          _doctor_warn "CAPBOX_NET=restricted：镜像连通性取决于 allowlist 代理（见下方网络模式项）"
+          ;;
+      esac
     else
       _doctor_warn "缺少 curl，跳过网络连通性检查"
     fi
@@ -1364,6 +1437,14 @@ cmd_doctor() {
         fi
         ;;
     esac
+  fi
+
+  # 8b) 网络三档 + 资源限额
+  if declare -F _net_doctor_report >/dev/null 2>&1; then
+    _net_doctor_report
+  fi
+  if declare -F _resources_doctor_report >/dev/null 2>&1; then
+    _resources_doctor_report
   fi
 
   # 9) daemon

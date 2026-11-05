@@ -108,7 +108,7 @@ run_suite() { # run_suite WS [args...]  → 输出到 $WS/last.log，返回套�
 # ---------------------------------------------------------------------------
 # A. 好桩：全套跑一遍，应该 PASS 大多数、无 FAIL、exit 0
 # ---------------------------------------------------------------------------
-printf '\n%s[A] 好桩（无故障注入）：全套 T01–T22 应该无 FAIL（T21/T22 在假桩下 SKIP）%s\n' "$YEL" "$RST"
+printf '\n%s[A] 好桩（无故障注入）：全套 T01–T25 应该无 FAIL（T21–T25 在假桩下 SKIP）%s\n' "$YEL" "$RST"
 WS=$(build_sandbox good)
 rc=0
 run_suite "$WS" || rc=$?
@@ -247,7 +247,9 @@ chk "--list 列出 T01" grep -q 'T01' <<<"$out"
 chk "--list 列出 T20" grep -q 'T20' <<<"$out"
 chk "--list 列出 T21" grep -q 'T21' <<<"$out"
 chk "--list 列出 T22" grep -q 'T22' <<<"$out"
-chk "--list 列出 22 个用例" grep -q '共 22 个用例' <<<"$out"
+chk "--list 列出 T23" grep -q 'T23' <<<"$out"
+chk "--list 列出 T25" grep -q 'T25' <<<"$out"
+chk "--list 列出 25 个用例" grep -q '共 25 个用例' <<<"$out"
 chk "--list 不执行任何用例（无 PASS/FAIL 汇总）" bash -c '! grep -q "汇总：" <<<"$1"' _ "$out"
 
 r=0

@@ -239,6 +239,7 @@ capbox $VERSION — 在 DSH 工作区里运行一个拥有完整 root 权限的 
   doctor                                     自检
   distros                                    列出支持的发行版
   config get|set|list                        配置
+  recipe apply|show [FILE]                   配方
   clean [--all]                              清理
   version                                    版本
 EOF
@@ -669,6 +670,7 @@ main() {
     doctor) cmd_doctor ;;
     distros) cmd_distros ;;
     config) cmd_config "$@" ;;
+    recipe) printf "recipe ok\n" ;;
     clean) cmd_clean "$@" ;;
     up) cmd_up ;;
     down) cmd_down ;;
