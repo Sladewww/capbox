@@ -153,6 +153,10 @@ source "$_capbox_lib_dir/common.sh" || {
 [ -f "$_capbox_lib_dir/resources.sh" ] && source "$_capbox_lib_dir/resources.sh"
 # shellcheck source=/dev/null
 [ -f "$_capbox_lib_dir/recipe.sh" ] && source "$_capbox_lib_dir/recipe.sh"
+# shellcheck source=/dev/null
+[ -f "$_capbox_lib_dir/idmap.sh" ] && source "$_capbox_lib_dir/idmap.sh"
+# shellcheck source=/dev/null
+[ -f "$_capbox_lib_dir/service.sh" ] && source "$_capbox_lib_dir/service.sh"
 unset _capbox_lib_dir
 
 # ---------- 2. 帮助 -----------------------------------------------------------
@@ -176,8 +180,10 @@ CapBox —— 工作区内持久化的 root Linux 容器
   clean [--all]                     清理缓存与日志；--all 一并删除 rootfs
 
 执行
-  exec [--daemon] [--timeout N] [--cwd DIR] [--] CMD...
+  exec [--daemon] [--timeout N] [--cwd DIR] [--uid N] [--gid N] [--user NAME] [--] CMD...
                                     在容器内执行命令（默认一次性无状态容器）
+  service start|stop|status|logs|list
+                                    配置化服务（.capbox/services/<name>.env）
   shell [--daemon]                  交互式 shell（无 tty 时退化为读取 stdin 的 sh）
   ls [PATH]                         列出容器内目录（默认 /workspace）
   ps                                列出容器内进程
@@ -225,7 +231,8 @@ CapBox —— 工作区内持久化的 root Linux 容器
   124 容器内命令超时
 
 要点
-  * 容器内是 uid 0 且拥有全量 capability，可 mount / 装包 / 起服务。
+  * 容器内默认 uid 0 且拥有全量 capability，可 mount / 装包 / 起服务。
+  * CAPBOX_IDMAP=auto 时尝试 newuidmap 多 UID 映射；失败则诚实回退单 UID（见 doctor）。
   * 所有状态持久化在 .capbox/ 内；容器内 /workspace 就是宿主工作区。
   * 常驻容器不能 nohup & 启动（DSH 会杀进程树），只能用后台任务跑 capbox up。
 EOF
@@ -295,7 +302,7 @@ capbox_main() {
 
   # 危险操作：禁止把 $HOME 或 / 当成工作区 RW bind 进容器
   case "$cmd" in
-    bootstrap | init | exec | run | do | shell | up | cp | pkg | ls | ps | recipe)
+    bootstrap | init | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service)
       if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
         _capbox_require_safe_workspace || return 1
       fi
@@ -389,6 +396,10 @@ capbox_main() {
     recipe)
       _require_decl cmd_recipe recipe "lib/recipe.sh" || return 1
       cmd_recipe "$@"
+      ;;
+    service)
+      _require_decl cmd_service service "lib/service.sh" || return 1
+      cmd_service "$@"
       ;;
     version | --version)
       cmd_version

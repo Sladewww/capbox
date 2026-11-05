@@ -160,7 +160,11 @@ _daemon_bwrap_args() {
   # 注意：restricted 的代理桥目前主要覆盖 oneshot exec；daemon 仅保证 unshare-net。
   # 若 CAPBOX_NET=restricted，daemon 内原始网络不可用，需走一次性 exec 或后续增强。
   a+=(--unshare-user --unshare-uts --unshare-ipc --unshare-pid)
-  a+=(--uid 0 --gid 0 --cap-add ALL)
+  local _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
+  local _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
+  [[ "$_eu" =~ ^[0-9]+$ ]] || _eu=0
+  [[ "$_eg" =~ ^[0-9]+$ ]] || _eg=0
+  a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)
   a+=(--hostname "$CAPBOX_HOSTNAME")
   a+=(--chdir /workspace)
   a+=(--die-with-parent)
@@ -691,8 +695,20 @@ EOF
   }
   trap _daemon_up_on_signal TERM INT
 
-  "${argv[@]}" >>"$logf" 2>&1 &
-  child=$!
+  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+    CAPBOX_IDMAP_SPAWN_LOG="$logf"
+    child="$(_idmap_spawn_bwrap_argv "${argv[@]}")" || {
+      log_err "idmap 启动守护容器失败：${CAPBOX_IDMAP_DETAIL:-unknown}"
+      return 1
+    }
+  else
+    if [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
+      log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+      return 1
+    fi
+    "${argv[@]}" >>"$logf" 2>&1 &
+    child=$!
+  fi
 
   # 等待容器就绪（最多 20s），期间保持对信号的响应。
   # 必须等 daemon.json，不能只等 hb：服务端的顺序是「先 beat() 写 hb，再 write_json

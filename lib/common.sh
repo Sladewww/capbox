@@ -41,6 +41,12 @@ readonly CAPBOX_CFG_KEYS=(
   CPU_MAX
   PIDS_MAX
   BWRAP
+  IDMAP
+  UID_MAP
+  GID_MAP
+  SETGROUPS
+  EXEC_UID
+  EXEC_GID
 )
 
 # 支持的发行版
@@ -230,6 +236,41 @@ _cfg_validate() {
         return 2
       }
       ;;
+    IDMAP)
+      [[ "$v" == "auto" || "$v" == "on" || "$v" == "off" ]] || {
+        log_err "CAPBOX_IDMAP 只能是 auto / on / off（当前: '$v'）"
+        return 2
+      }
+      ;;
+    UID_MAP | GID_MAP)
+      if [[ -n "$v" && "$v" != "auto" ]]; then
+        local part
+        local IFS=','
+        for part in $v; do
+          part="${part#"${part%%[![:space:]]*}"}"
+          part="${part%"${part##*[![:space:]]}"}"
+          [[ -z "$part" ]] && continue
+          [[ "$part" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]] || {
+            log_err "CAPBOX_$k 段须为 guest:host:count（当前段: '$part'）"
+            return 2
+          }
+        done
+      fi
+      ;;
+    SETGROUPS)
+      if [[ -n "$v" ]]; then
+        [[ "$v" == "allow" || "$v" == "deny" ]] || {
+          log_err "CAPBOX_SETGROUPS 只能是 allow / deny（当前: '$v'）"
+          return 2
+        }
+      fi
+      ;;
+    EXEC_UID | EXEC_GID)
+      [[ "$v" =~ ^[0-9]+$ ]] || {
+        log_err "CAPBOX_$k 必须是非负整数（当前: '$v'）"
+        return 2
+      }
+      ;;
     *)
       log_err "未知配置项: CAPBOX_${k}"
       return 2
@@ -412,6 +453,12 @@ load_config() {
   : "${CAPBOX_PIDS_MAX=}"
   : "${CAPBOX_HOSTNAME=capbox}"
   : "${CAPBOX_EXEC_TIMEOUT=600}"
+  : "${CAPBOX_IDMAP=auto}"
+  : "${CAPBOX_UID_MAP=}"
+  : "${CAPBOX_GID_MAP=}"
+  : "${CAPBOX_SETGROUPS=}"
+  : "${CAPBOX_EXEC_UID=0}"
+  : "${CAPBOX_EXEC_GID=0}"
 
   # 空值兜底（配置文件写坏了也不至于炸）
   [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; log_warn "CAPBOX_DISTRO 为空，回退 alpine"; }
@@ -881,11 +928,19 @@ build_bwrap_args() {
   # 交互式/调试时可关掉 pid ns（pid 1 收不到某些信号）
   [[ "${CAPBOX_BWRAP_NO_PIDNS:-0}" == "1" ]] || a+=(--unshare-pid)
 
-  # ---- 权限：容器内 uid 0 + 全量 capability ----
-  a+=(--uid 0 --gid 0 --cap-add ALL)
+  # ---- 权限：容器内初始身份 + 全量 capability ----
+  # EXEC_UID/GID 可被 CAPBOX_EXEC_UID_OVERRIDE（exec --uid / service）覆盖
+  local _eu _eg
+  _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
+  _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
+  [[ "$_eu" =~ ^[0-9]+$ ]] || _eu=0
+  [[ "$_eg" =~ ^[0-9]+$ ]] || _eg=0
+  a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)
   a+=(--hostname "${CAPBOX_HOSTNAME:-capbox}")
   a+=(--chdir "$cwd")
-  a+=(--die-with-parent)
+  if [[ "${CAPBOX_BWRAP_NO_DIE_WITH_PARENT:-0}" != "1" ]]; then
+    a+=(--die-with-parent)
+  fi
 
   # ---- 环境 ----
   a+=(--setenv HOME /root)
@@ -955,7 +1010,44 @@ run_bwrap_oneshot() {
     _resources_wrap_argv full || true
   fi
 
-  local rc=0
+  local rc=0 use_idmap=0
+  if declare -F _idmap_enabled >/dev/null 2>&1; then
+    if _idmap_enabled; then
+      use_idmap=1
+    else
+      local _irc=$?
+      # _idmap_enabled 返回 2 = 强制 on 但不可用
+      if (( _irc == 2 )) || [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS}" == "blocked" ]]; then
+        die 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+      fi
+    fi
+  fi
+
+  if (( use_idmap == 1 )); then
+    if (( to > 0 )); then
+      _idmap_run_bwrap_argv "${full[@]}" &
+      local bp=$!
+      local waited=0
+      while kill -0 "$bp" 2>/dev/null; do
+        if (( waited >= to )); then
+          kill -TERM -$bp 2>/dev/null || kill -TERM "$bp" 2>/dev/null || true
+          sleep 1
+          kill -KILL -$bp 2>/dev/null || kill -KILL "$bp" 2>/dev/null || true
+          wait "$bp" 2>/dev/null || true
+          return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+      done
+      wait "$bp"
+      rc=$?
+    else
+      _idmap_run_bwrap_argv "${full[@]}"
+      rc=$?
+    fi
+    return "$rc"
+  fi
+
   if (( to > 0 )) && have_cmd timeout; then
     timeout --kill-after=5 "$to" "${full[@]}"
     rc=$?
@@ -1332,6 +1424,12 @@ cmd_doctor() {
     fi
   else
     _doctor_fail "userns 全权限未探测（bwrap 不可用）"
+  fi
+
+  if declare -F _idmap_doctor_report >/dev/null 2>&1; then
+    _idmap_doctor_report
+  else
+    _doctor_warn "UID 映射模块未加载（lib/idmap.sh）"
   fi
 
   # 3) 依赖命令

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T25-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T29-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -137,6 +137,7 @@ capbox down
 | `pkg install\|remove\|update\|list PKG...` | apk / apt |
 | `cp SRC DST` | 宿主 ↔ 容器（`guest:` / `host:`） |
 | `up` / `down` / `logs` | 常驻容器 |
+| `service start\|stop\|status\|logs\|list` | 配置化服务（`.capbox/services/*.env`） |
 | `ls` / `ps` | 容器内目录 / 进程 |
 | `doctor` | 自检（有 FAIL 则退出 1） |
 | `config get\|set\|list` | 读写配置 |
@@ -147,7 +148,28 @@ capbox down
 退出码：`0` 成功，`1` 一般错误，`2` 用法错误，`3` 常驻容器未运行，`4` rootfs 不存在，
 `5` 依赖缺失，`124` 超时；其余透传容器内退出码。
 
+## 配置化服务
+
+在 `.capbox/services/<name>.env` 写纯 `KEY=value`（不会被 source）：
+
+```sh
+CMD='nginx -g "daemon off;"'
+USER=www-data          # 或 UID=/GID=
+CWD=/
+REQUIRE_IDMAP=0        # sshd 等需要 setgroups 时设 1
+```
+
+```sh
+capbox service start nginx
+capbox service status nginx
+capbox service logs nginx -n 50
+capbox service stop nginx
+```
+
+`start` 使用独立 bwrap（不依赖 `capbox up`），并去掉 `--die-with-parent` 以便活过启动命令本身。
+
 ## 目录结构
+
 
 ```
 <project>/
@@ -173,8 +195,11 @@ capbox down
 CAPBOX_DISTRO=alpine        # alpine | ubuntu
 CAPBOX_MIRROR=cn            # cn | global | none
 CAPBOX_PROXY=               # 空=直连；http(s):// / socks5h://
-CAPBOX_NET=host             # host | none
+CAPBOX_NET=host             # host | none | open | restricted
 CAPBOX_EXEC_TIMEOUT=600
+CAPBOX_IDMAP=auto           # auto | on | off（多 UID；需 newuidmap + subuid）
+CAPBOX_EXEC_UID=0           # 默认容器初始 uid；可被 exec --uid 覆盖
+CAPBOX_EXEC_GID=0
 ```
 
 也可用 `capbox config set CAPBOX_PROXY http://127.0.0.1:7890`。
@@ -202,10 +227,11 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh
 bash test/selftest/run-selftest.sh
 
 # 验收用例（需 bubblewrap；首次会 init alpine）
-./test/run.sh                  # T01–T22
+./test/run.sh                  # T01–T29
 ./test/run.sh T21 T22            # 安全边界 + 自动脚手架
 CAPBOX_TEST_SLOW=1 ./test/run.sh T19   # ubuntu 慢测
 CAPBOX_TEST_DAEMON=1 ./test/run.sh T15 T16  # 需先后台 capbox up
+./test/slow/run-slow.sh                  # Nginx/Redis/MariaDB/sshd 等真实服务（需已装包的 ubuntu 工作区）
 ```
 
 GitHub Actions：见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。推送后可在仓库 Actions 页查看运行结果。
@@ -213,7 +239,9 @@ GitHub Actions：见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。�
 ## 常见问题
 
 **装包时一堆 `chown ... Invalid argument`？**  
-正常。只映射一个 uid，不影响安装。看退出码即可。
+若 `doctor` 显示 UID 映射 `multi`，这不应再成批出现；若仍是 `single`/`blocked`，属单 UID 限制。
+`capbox pkg install` 结束后会跑 `dpkg --audit` 并明确报告 iU/iF，不会把半截安装当成功。
+启用多映射：安装 `uidmap`，确保 `/etc/subuid` 有条目，`capbox config set CAPBOX_IDMAP auto`（默认）。
 
 **`exec --daemon` 返回 3？**  
 常驻容器没起。用后台任务跑 `capbox up`。

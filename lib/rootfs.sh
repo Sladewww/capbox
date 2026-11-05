@@ -557,10 +557,14 @@ _init_finalize() {
   # 否则 `init --distro ubuntu` 会退出 0 但 config 仍停在旧发行版。
   if [[ "$(config_get DISTRO 2>/dev/null | tr -d '\n')" != "$distro" ]]; then
     config_set DISTRO "$distro" || true
-    CAPBOX_DISTRO="$distro"
-    _capbox_derive_paths
-    rootfs="$CAPBOX_ROOTFS"
   fi
+  # 无论走「新建 config」还是「config_set」，都必须同步内存中的
+  # CAPBOX_DISTRO 与派生路径。否则缺 config.env 时上面先把 DISTRO 写成
+  # 目标值并 config_save，随后 config_get 已相等而跳过 derive，
+  # run_bootstrap → exec_in_guest 仍使用启动时缓存的 CAPBOX_ROOTFS（默认 alpine）。
+  CAPBOX_DISTRO="$distro"
+  _capbox_derive_paths
+  rootfs="$CAPBOX_ROOTFS"
 
   ensure_rootfs_dirs "$rootfs"
   refresh_resolv || true

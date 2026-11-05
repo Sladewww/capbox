@@ -6,33 +6,35 @@ SKILL.md 只留了指针，细节在这里。按症状查。
 
 ## 装包时满屏 `chown ... Invalid argument` 警告
 
-**正常现象，忽略。** 不影响安装结果。
+先看 `capbox doctor` 的 **UID 映射** 行：
 
-原因：容器是 bwrap userns，`/proc/self/uid_map` 只有一行 `0 1000 1`——**只映射了一个 uid**。
-`dpkg`/`apk` 在安装脚本里 `chown root:adm`、`chown root:shadow` 这类第二个 uid 的操作必然 `EINVAL`。
-包内容本身已经装好，只是文件属组没改成它想要的值。
+- **multi**：已用 `newuidmap` 映射 subuid；`chown`/`setgroups`/`setuid` 应可用。若仍有个别失败，看具体包的 postinst。
+- **single / blocked**：当前环境只能把宿主一个 uid 映射进容器。此时 `chown` 到其它 uid 必然 `EINVAL`。
+  - `CAPBOX_IDMAP=auto`（默认）会在可能时启用 multi，否则诚实回退。
+  - `CAPBOX_IDMAP=on` 在不可用时**直接失败**，不会假装多用户可用。
+  - 需要：`uidmap` 包（`newuidmap`/`newgidmap` 且 setuid）、`/etc/subuid` 有当前用户条目。
 
-**判据**：看 `pkg install` 的退出码和最后一行，不看中间的告警行。
-验证方式是装完直接跑一次：
+`capbox pkg install` 在 ubuntu 上装完会跑 `dpkg --audit` 并扫描 iU/iF；有残留会明确报错，不把半截安装当成功。
+
+验证：
 
 ```sh
+.capbox/bin/capbox doctor
+.capbox/bin/capbox exec -- sh -c 'touch /tmp/t; chown 33:33 /tmp/t; ls -ln /tmp/t'
 .capbox/bin/capbox exec -- curl --version
 ```
-
-**不要**因此做这些事：重试安装、加 `--force`、改用 `fakeroot` 包住 pacman、手动 `chown`。
-真要 chown 语义时用 `fakeroot`，但那不是修包安装的手段。
 
 ---
 
 ## `su` / `setgroups` 报 "can't set groups"
 
-**设计如此。容器内只支持 root 单用户。**
+若 UID 映射是 **multi** 且 `CAPBOX_SETGROUPS=allow`（默认），`setgroups`/`setuid` 应可用；sshd 密钥登录可测。
 
-userns 只映射一个 uid，`setgroups` 被 deny。所以：
+若仍是 **single**：容器内只有一个映射 uid，`setgroups` 被 deny。此时：
 
-- 不要 `su otheruser`、不要 `useradd` 后切换、不要 `sudo -u`
-- 需要以非 root 身份跑（某些构建脚本拒绝 root）时，用 `fakeroot`，或改脚本
-- 一切以 root 跑；需要降权语义的地方 rethink，而不是绕 userns
+- `capbox exec --uid 33` / `--user www-data` 可把**初始进程**降到该身份（单映射时是把宿主 uid 映射成该 guest uid）
+- 不要期望在同一容器里再 `su` 到另一个未映射用户
+- 装 `uidmap` 并保证 subuid 后，`CAPBOX_IDMAP=auto` 应升到 multi
 
 ---
 

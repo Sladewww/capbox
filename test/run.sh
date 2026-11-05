@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# .capbox/test/run.sh — CapBox 验收测试主入口（契约 §7，T01–T22）
+# .capbox/test/run.sh — CapBox 验收测试主入口（契约 §7，T01–T29）
 # -----------------------------------------------------------------------------
 # 用法：
-#   .capbox/test/run.sh                 # 跑全部 T01–T22
+#   .capbox/test/run.sh                 # 跑全部 T01–T29
 #   .capbox/test/run.sh --list          # 只列出用例
 #   .capbox/test/run.sh T05 T06         # 只跑指定用例（大小写均可）
 #   .capbox/test/run.sh --list -v       # 带说明的清单
@@ -11,6 +11,7 @@
 # 环境变量：
 #   CAPBOX_TEST_DAEMON=1   允许执行 T15/T16（需先在 DSH 后台 job 里 `capbox up`）
 #   CAPBOX_TEST_SLOW=1     允许执行 T19（ubuntu，慢，下载 30MB）
+#   真实服务慢测见 test/slow/run-slow.sh（默认不进 CI）
 #   CAPBOX_TEST_BIN=PATH   指定被测 CLI（默认为 <ws>/.capbox/bin/capbox；自测时指向桩）
 #   CAPBOX_TEST_KEEP_TMP=1 保留 tmp/qa 便于排查
 #   CAPBOX_TEST_TIMEOUT=N  单个用例超时秒数（默认 1800）
