@@ -1016,6 +1016,11 @@ build_bwrap_args() {
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
 
+  # ---- 环境：先无条件清空宿主继承，再白名单重建 ----
+  # 必须在任何 --setenv（含 net.sh / security.sh 注入）之前。
+  # 否则容器会继承 AWS_*/GITHUB_TOKEN/SSH_AUTH_SOCK 等宿主密钥（见 SECURITY.md / CVE-2026-108592 同类根因）。
+  a+=(--clearenv)
+
   # ---- 命名空间 / 网络三档 ----
   if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
     _net_append_bwrap_args a
@@ -1046,7 +1051,7 @@ build_bwrap_args() {
     _security_append_bwrap_args a || return $?
   fi
 
-  # ---- 环境 ----
+  # ---- 环境白名单（clearenv 之后显式重建；勿透传宿主 *TOKEN/*_KEY/SSH/GPG）----
   a+=(--setenv HOME /root)
   a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
   a+=(--setenv TERM "${TERM:-xterm-256color}")
@@ -1670,7 +1675,31 @@ cmd_doctor() {
     _image_doctor_report
   fi
 
-  # 9) daemon
+  # 9) 环境变量清空（--clearenv 白名单）
+  if rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+    local env_probe="" env_rc=0
+    # 用真实 oneshot 路径探测；哨兵与常见密钥名都不得出现，HOME/PATH 仍须可用。
+    env_probe="$(
+      CAPBOX_TEST_SENTINEL=leak-me-doctor       AWS_ACCESS_KEY_ID=AKIA_DOCTOR_PROBE       GITHUB_TOKEN=ghp_doctor_probe       SSH_AUTH_SOCK=/tmp/capbox-doctor-ssh.sock       GPG_AGENT_INFO=/tmp/capbox-doctor-gpg       OPENAI_API_KEY=sk-doctor-probe       run_bwrap_oneshot /workspace 30 /bin/sh -c         'if test -n "${CAPBOX_TEST_SENTINEL:-}" || test -n "${AWS_ACCESS_KEY_ID:-}" || test -n "${GITHUB_TOKEN:-}" || test -n "${SSH_AUTH_SOCK:-}" || test -n "${GPG_AGENT_INFO:-}" || test -n "${OPENAI_API_KEY:-}"; then
+           echo LEAK
+           exit 1
+         fi
+         if test -z "${HOME:-}" || test -z "${PATH:-}"; then
+           echo NO_WHITELIST
+           exit 1
+         fi
+         echo OK'
+    )" || env_rc=$?
+    if [[ "$env_rc" -eq 0 && "$env_probe" == *OK* ]]; then
+      _doctor_pass "环境变量已清空（宿主敏感变量不继承；白名单 HOME/PATH 可用）"
+    else
+      _doctor_fail "环境变量未清空或白名单缺失（probe rc=$env_rc out=${env_probe:-<empty>}）；应无条件 bwrap --clearenv 后再 --setenv"
+    fi
+  else
+    _doctor_warn "跳过环境清空探测（rootfs 或 bwrap 不可用）"
+  fi
+
+  # 10) daemon
   if _probe_daemon; then
     _doctor_pass "守护容器运行中 (pid $(_daemon_json_field pid))"
   else

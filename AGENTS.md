@@ -78,3 +78,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 
 - Security profiles, FS hide/bind, snapshots, image export/import, audit JSONL, metrics: see README.
 - Service `.env` may include `READY_*`, `HEALTH_*`, `RESTART*`, `DEPENDS_ON`, `STOP_TIMEOUT`, `PUBLISH`.
+
+## Environment isolation
+
+- All bwrap launches use unconditional `--clearenv` then a minimal `--setenv` whitelist (`lib/common.sh` `build_bwrap_args`, `lib/daemon.sh` fallback). See `SECURITY.md`.
