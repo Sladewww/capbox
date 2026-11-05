@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.1.0}"
+: "${CAPBOX_VERSION:=0.3.0}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -1002,7 +1002,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.1.0}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.0}")"
     return 0
   fi
 
@@ -1035,7 +1035,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.1.0}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.0}"
   return 0
 }
 

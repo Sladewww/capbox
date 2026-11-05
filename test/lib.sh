@@ -24,9 +24,34 @@ CAPBOX_TEST_LIB_LOADED=1
 CAPBOX_TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 本套件位于 <capbox dir>/test/，上一级就是 CapBox 根。不假设它叫 .capbox ——
 # 仓库可能以任意目录名存在（甚至直接放在工作区根做开发）。
-CAPBOX_DIR="$(cd "$CAPBOX_TEST_DIR/.." && pwd)"
-CAPBOX_TEST_WS="$(dirname "$CAPBOX_DIR")"                  # 工作区根
-CAPBOX_BIN="${CAPBOX_TEST_BIN:-$CAPBOX_DIR/bin/capbox}"    # 被测 CLI
+# 仓库布局兼容：
+#   A) 测试在 .capbox/test/ → CAPBOX_DIR=.capbox，工作区=其父目录
+#   B) 测试在 repo/test/ 且存在 repo/.capbox → CAPBOX_DIR=repo/.capbox，工作区=repo
+#   C) 旧式「仓库即状态」→ CAPBOX_DIR=repo
+_capbox_test_repo="$(cd "$CAPBOX_TEST_DIR/.." && pwd)"
+if [ "$(basename "$CAPBOX_TEST_DIR")" = "test" ] && [ "$(basename "$_capbox_test_repo")" = ".capbox" ]; then
+  CAPBOX_DIR="$_capbox_test_repo"
+  CAPBOX_TEST_WS="$(dirname "$CAPBOX_DIR")"
+elif [ -d "$_capbox_test_repo/.capbox/lib" ] || [ -e "$_capbox_test_repo/.capbox/bin/capbox" ]; then
+  CAPBOX_DIR="$_capbox_test_repo/.capbox"
+  CAPBOX_TEST_WS="$_capbox_test_repo"
+else
+  CAPBOX_DIR="$_capbox_test_repo"
+  CAPBOX_TEST_WS="$(dirname "$CAPBOX_DIR")"
+fi
+# 优先用仓库根/模板上的 bin（开发树）；否则用状态树内 bin
+if [ -z "${CAPBOX_TEST_BIN:-}" ]; then
+  if [ -x "$_capbox_test_repo/bin/capbox" ]; then
+    CAPBOX_BIN="$_capbox_test_repo/bin/capbox"
+  elif [ -x "$CAPBOX_DIR/bin/capbox" ]; then
+    CAPBOX_BIN="$CAPBOX_DIR/bin/capbox"
+  else
+    CAPBOX_BIN="$CAPBOX_DIR/bin/capbox"
+  fi
+else
+  CAPBOX_BIN="$CAPBOX_TEST_BIN"
+fi
+unset _capbox_test_repo
 CAPBOX_TEST_TMP="${CAPBOX_TEST_TMP:-$CAPBOX_TEST_DIR/tmp}" # 临时根
 # 本框架独占的临时区。
 # ⚠ 必须带运行实例 ID 后缀：run.sh 启动时会 rm -rf 整个 qa/，如果两个人（或两个 DSH 会话）

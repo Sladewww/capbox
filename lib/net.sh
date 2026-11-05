@@ -328,3 +328,166 @@ _net_doctor_report() {
       ;;
   esac
 }
+
+
+
+# ---------- 端口发布 / 转发 --------------------------------------------------
+# PUBLISH=hostPort:guestPort[,...] 或 hostPort:IP:guestPort
+# open：共享宿主网络，guest bind 已在宿主可见 — 只记录，不做转发，不声称过滤。
+# none/restricted：宿主监听 hostPort，经 nsenter 进入服务 netns 拨到 guest 地址。
+
+_net_publish_dir() { printf '%s/publish' "$(_net_dir)"; }
+
+_net_parse_publish_item() {
+  local item="${1:-}"
+  _pub_host_port="" _pub_guest_addr="127.0.0.1" _pub_guest_port=""
+  if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+    _pub_host_port="${BASH_REMATCH[1]}"; _pub_guest_port="${BASH_REMATCH[2]}"; return 0
+  fi
+  if [[ "$item" =~ ^([0-9]+):([0-9.]+):([0-9]+)$ ]]; then
+    _pub_host_port="${BASH_REMATCH[1]}"; _pub_guest_addr="${BASH_REMATCH[2]}"; _pub_guest_port="${BASH_REMATCH[3]}"; return 0
+  fi
+  log_err "PUBLISH 项非法（期望 HOST:GUEST 或 HOST:IP:GUEST）: $item"
+  return 2
+}
+
+_net_publish_start() {
+  local name="${1:-}" raw="${2:-}"
+  [[ -n "$raw" ]] || return 0
+  local mode pd
+  mode="$(_net_mode)"
+  pd="$(_net_publish_dir)/$name"
+  mkdir -p "$pd"
+  printf '%s\n' "$raw" >"$pd/spec"
+  printf '%s\n' "$mode" >"$pd/mode"
+
+  if [[ "$mode" == "open" ]]; then
+    log_info "PUBLISH=$raw：NET=open 共享宿主网络，guest 端口已在宿主可见（无额外转发；不声称出站过滤）"
+    return 0
+  fi
+
+  have_cmd python3 || { log_err "PUBLISH 在 none/restricted 下需要 python3"; return 5; }
+  have_cmd nsenter || { log_err "PUBLISH 在 none/restricted 下需要 nsenter"; return 5; }
+
+  local item pyf
+  pyf="$pd/forward.py"
+  cat >"$pyf" <<'PYF'
+#!/usr/bin/env python3
+import os, sys, time, socket, select, subprocess, threading
+host_port=int(sys.argv[1]); guest_addr=sys.argv[2]; guest_port=int(sys.argv[3])
+child_pid_file=sys.argv[4]; ready_file=sys.argv[5]
+
+def wait_child():
+    for _ in range(300):
+        if os.path.isfile(child_pid_file):
+            try:
+                pid=int(open(child_pid_file).read().strip())
+                if pid>0 and os.path.exists(f"/proc/{pid}/ns/net"):
+                    return pid
+            except Exception:
+                pass
+        time.sleep(0.05)
+    raise SystemExit("publish: child netns not ready")
+
+child=wait_child()
+
+def splice(a,b):
+    try:
+        while True:
+            r,_,_=select.select([a,b],[],[],300)
+            if not r: return
+            for s in r:
+                o=b if s is a else a
+                d=s.recv(65536)
+                if not d: return
+                o.sendall(d)
+    except Exception:
+        pass
+    finally:
+        for s in (a,b):
+            try: s.close()
+            except Exception: pass
+
+def handle(client):
+    try:
+        # Dial guest from inside its netns; shuttle bytes via stdio of nsenter helper
+        helper = (
+            "import socket,sys,os,select\n"
+            f"g=socket.create_connection(('{guest_addr}',{guest_port}))\n"
+            "h=socket.socket(fileno=0)\n"
+            "while True:\n"
+            " r,_,_=select.select([g,h],[],[],300)\n"
+            " if not r: break\n"
+            " for x in r:\n"
+            "  y=h if x is g else g\n"
+            "  d=x.recv(65536)\n"
+            "  if not d: raise SystemExit\n"
+            "  y.sendall(d)\n"
+        )
+        sp_h, sp_c = socket.socketpair()
+        proc=subprocess.Popen(
+            ["nsenter", f"--net=/proc/{child}/ns/net", "--preserve-credentials", "--",
+             "python3", "-c", helper],
+            stdin=sp_c, stdout=sp_c, stderr=subprocess.DEVNULL,
+            pass_fds=(sp_c.fileno(),),
+        )
+        sp_c.close()
+        t=threading.Thread(target=splice, args=(client, sp_h), daemon=True)
+        t.start(); t.join(timeout=3600)
+        try: proc.kill()
+        except Exception: pass
+    except Exception:
+        try: client.close()
+        except Exception: pass
+
+ls=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+ls.bind(("127.0.0.1", host_port))
+ls.listen(64)
+open(ready_file,"w").write("ok\n")
+while True:
+    c,_=ls.accept()
+    threading.Thread(target=handle, args=(c,), daemon=True).start()
+PYF
+  chmod +x "$pyf"
+
+  IFS=',' read -r -a _pubs <<<"$raw"
+  for item in "${_pubs[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [[ -n "$item" ]] || continue
+    _net_parse_publish_item "$item" || return 2
+    local ready pidf child_pid_file
+    ready="$pd/ready-${_pub_host_port}"
+    pidf="$pd/pid-${_pub_host_port}"
+    child_pid_file="${CAPBOX_RUN_DIR}/services/${name}/supervisor.pid.child"
+    rm -f "$ready"
+    nohup python3 "$pyf" "$_pub_host_port" "$_pub_guest_addr" "$_pub_guest_port" "$child_pid_file" "$ready" \
+      >>"$pd/forward.log" 2>&1 &
+    echo $! >"$pidf"
+    local j
+    for j in $(seq 1 80); do
+      [[ -f "$ready" ]] && break
+      kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null || {
+        log_warn "PUBLISH forwarder 尚未就绪（可能仍在等服务 netns）；见 $pd/forward.log"
+        break
+      }
+      sleep 0.05
+    done
+    log_info "PUBLISH 127.0.0.1:${_pub_host_port} → guest ${_pub_guest_addr}:${_pub_guest_port}"
+  done
+  return 0
+}
+
+_net_publish_stop() {
+  local name="${1:-}" pd pidf pid
+  pd="$(_net_publish_dir)/$name"
+  [[ -d "$pd" ]] || return 0
+  for pidf in "$pd"/pid-*; do
+    [[ -f "$pidf" ]] || continue
+    pid="$(cat "$pidf" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    rm -f "$pidf"
+  done
+  return 0
+}

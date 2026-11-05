@@ -35,7 +35,11 @@ _service_load() {
     key="${BASH_REMATCH[1]}"
     raw="${BASH_REMATCH[2]}"
     case "$key" in
-      CMD|UID|GID|USER|CWD|PIDFILE|LOG|NET|REQUIRE_IDMAP) ;;
+      CMD|UID|GID|USER|CWD|PIDFILE|LOG|NET|REQUIRE_IDMAP|\
+      READY_CMD|READY_TCP|READY_HTTP|READY_TIMEOUT|\
+      HEALTH_CMD|HEALTH_INTERVAL|HEALTH_RETRIES|\
+      RESTART|RESTART_MAX|RESTART_BACKOFF|STOP_TIMEOUT|\
+      DEPENDS_ON|PUBLISH) ;;
       *) log_warn "服务 $name: 忽略未知键 $key"; continue ;;
     esac
     if [[ "$raw" == \'*\' && ${#raw} -ge 2 ]]; then
@@ -97,6 +101,12 @@ cmd_service() {
   CMD='nginx -g "daemon off;"'
   USER=www-data
   CWD=/
+  READY_TCP=127.0.0.1:18080
+  HEALTH_INTERVAL=5
+  RESTART=on-failure
+  RESTART_MAX=3
+  STOP_TIMEOUT=10
+  DEPENDS_ON=other
 HELP
       return 0
       ;;
@@ -134,6 +144,39 @@ _service_is_running() {
   kill -0 "$pid" 2>/dev/null
 }
 
+_service_supervisor_py() {
+  local cands=(
+    "${CAPBOX_LIB_DIR:-}/service-supervisor.py"
+    "${_CAPBOX_TEMPLATE_DIR:-}/lib/service-supervisor.py"
+    "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/service-supervisor.py"
+  )
+  local p
+  for p in "${cands[@]}"; do
+    [[ -n "$p" && -f "$p" ]] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+_service_start_deps() {
+  local deps="${1:-}" d
+  [[ -n "$deps" ]] || return 0
+  IFS=',' read -r -a _deps <<<"$deps"
+  for d in "${_deps[@]}"; do
+    d="${d#"${d%%[![:space:]]*}"}"
+    d="${d%"${d##*[![:space:]]}"}"
+    [[ -n "$d" ]] || continue
+    _service_valid_name "$d" || die 2 "DEPENDS_ON 非法服务名: $d"
+    if ! _service_is_running "$d"; then
+      log_info "依赖 $d 未运行，先启动"
+      _service_start "$d" || {
+        log_err "依赖服务 $d 启动失败"
+        return 1
+      }
+    fi
+  done
+  return 0
+}
+
 _service_start() {
   local name="${1:-}"
   [[ -n "$name" ]] || die 2 "用法: capbox service start NAME"
@@ -154,9 +197,22 @@ _service_start() {
     return 0
   fi
 
+  _service_start_deps "${svc[DEPENDS_ON]:-}" || return 1
+
   local uid="${svc[UID]:-}" gid="${svc[GID]:-}" user="${svc[USER]:-}"
   local cwd="${svc[CWD]:-/}" require_idmap="${svc[REQUIRE_IDMAP]:-0}"
   local net="${svc[NET]:-}"
+  local stop_timeout="${svc[STOP_TIMEOUT]:-10}"
+  local restart="${svc[RESTART]:-no}"
+  local restart_max="${svc[RESTART_MAX]:-3}"
+  local restart_backoff="${svc[RESTART_BACKOFF]:-1}"
+  local ready_timeout="${svc[READY_TIMEOUT]:-30}"
+  local health_interval="${svc[HEALTH_INTERVAL]:-0}"
+  local health_retries="${svc[HEALTH_RETRIES]:-3}"
+
+  [[ "$stop_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]] || die 2 "STOP_TIMEOUT 非法"
+  [[ "$restart_max" =~ ^[0-9]+$ ]] || die 2 "RESTART_MAX 非法"
+  case "$restart" in no|on-failure|always) ;; *) die 2 "RESTART 只能是 no|on-failure|always" ;; esac
 
   if [[ -n "$user" ]]; then
     local resolved
@@ -205,12 +261,10 @@ _service_start() {
   wrap="mkdir -p /run/capbox-svc 2>/dev/null || true; echo \$\$ > /run/capbox-svc/${name}.pid; cd $(printf %q "$cwd") || exit 1; exec /bin/sh -c $(printf %q "$cmd")"
 
   local -a args=() full=()
-  # 服务必须活过 `capbox service start` 进程本身，故去掉 --die-with-parent
   CAPBOX_BWRAP_NO_DIE_WITH_PARENT=1
   export CAPBOX_BWRAP_NO_DIE_WITH_PARENT
   mapfile -t args < <(build_bwrap_args oneshot "$cwd")
   ((${#args[@]} > 0)) || die 4 "无法构造 bwrap 参数"
-  # 双保险：过滤残留
   local -a filtered=()
   local a
   for a in "${args[@]}"; do
@@ -222,59 +276,157 @@ _service_start() {
   args+=(--bind "$rd/guest-run" /run)
   full=("$CAPBOX_BWRAP" "${args[@]}" -- /bin/sh -c "$wrap")
 
+  if declare -F _security_wrap_argv >/dev/null 2>&1; then
+    _security_wrap_argv full || true
+  fi
+  if declare -F _resources_wrap_argv >/dev/null 2>&1; then
+    _resources_wrap_argv full || {
+      unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
+      _service_diagnose "$name" "资源限额无法应用"
+      return 1
+    }
+  fi
+
   {
     printf 'NAME=%s\n' "$(_shq "$name")"
     printf 'UID=%s\n' "$(_shq "$uid")"
     printf 'GID=%s\n' "$(_shq "$gid")"
     printf 'CWD=%s\n' "$(_shq "$cwd")"
     printf 'CMD=%s\n' "$(_shq "$cmd")"
+    printf 'RESTART=%s\n' "$(_shq "$restart")"
+    printf 'STOP_TIMEOUT=%s\n' "$(_shq "$stop_timeout")"
     printf 'STARTED_AT=%s\n' "$(_shq "$(date -Iseconds 2>/dev/null || date)")"
   } >"$rd/meta.env"
 
-  local bp
-  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
-    CAPBOX_IDMAP_SPAWN_LOG="$rd/service.log"
-    bp="$(_idmap_spawn_bwrap_argv "${full[@]}")" || {
-      unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
-      _service_diagnose "$name" "idmap 启动失败"
-      return 1
-    }
-  else
-    # setsid：独立会话，便于 stop 时按进程组回收
-    setsid "${full[@]}" >>"$rd/service.log" 2>&1 &
+  local sup py bp
+  py="$(_service_supervisor_py 2>/dev/null || true)"
+  local -a sup_cmd=()
+  if [[ -n "$py" ]] && have_cmd python3; then
+    # 写 child argv（NUL 分隔）。多 UID 时由 run-child 内调用 idmap 包装。
+    : >"$rd/child.argv"
+    local x
+    for x in "${full[@]}"; do
+      printf '%s\0' "$x" >>"$rd/child.argv"
+    done
+    if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+      cat >"$rd/run-child.sh" <<EOS
+#!/usr/bin/env bash
+set -euo pipefail
+CAPBOX_DIR=$(printf %q "$CAPBOX_DIR")
+# shellcheck source=/dev/null
+source "\$CAPBOX_DIR/lib/common.sh"
+# shellcheck source=/dev/null
+source "\$CAPBOX_DIR/lib/idmap.sh"
+ARGV_FILE="$(printf %q "$rd")/child.argv"
+mapfile -d '' -t args <"\$ARGV_FILE"
+_idmap_run_bwrap_argv "\${args[@]}"
+EOS
+    else
+      cat >"$rd/run-child.sh" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+ARGV_FILE="$(dirname "$0")/child.argv"
+mapfile -d '' -t args <"$ARGV_FILE"
+exec "${args[@]}"
+EOS
+    fi
+    chmod +x "$rd/run-child.sh"
+    sup_cmd=(
+      python3 "$py"
+      --name "$name"
+      --log "$rd/service.log"
+      --pidfile "$rd/supervisor.pid"
+      --ready-timeout "$ready_timeout"
+      --restart "$restart"
+      --restart-max "$restart_max"
+      --restart-backoff "$restart_backoff"
+      --stop-timeout "$stop_timeout"
+      --health-interval "$health_interval"
+      --health-retries "$health_retries"
+    )
+    [[ -n "${svc[READY_CMD]:-}" ]] && sup_cmd+=(--ready-cmd "${svc[READY_CMD]}")
+    [[ -n "${svc[READY_TCP]:-}" ]] && sup_cmd+=(--ready-tcp "${svc[READY_TCP]}")
+    [[ -n "${svc[READY_HTTP]:-}" ]] && sup_cmd+=(--ready-http "${svc[READY_HTTP]}")
+    [[ -n "${svc[HEALTH_CMD]:-}" ]] && sup_cmd+=(--health-cmd "${svc[HEALTH_CMD]}")
+    # PUBLISH: open 模式无需转发；none/restricted 记录到 meta（port proxy 由 net 管理）
+    if [[ -n "${svc[PUBLISH]:-}" ]]; then
+      printf 'PUBLISH=%s\n' "$(_shq "${svc[PUBLISH]}")" >>"$rd/meta.env"
+      if declare -F _net_publish_start >/dev/null 2>&1; then
+        _net_publish_start "$name" "${svc[PUBLISH]}" || log_warn "PUBLISH 启动失败（见日志）"
+      fi
+    fi
+    setsid "${sup_cmd[@]}" -- "$rd/run-child.sh" >>"$rd/service.log" 2>&1 &
     bp=$!
+  else
+    # 无 supervisor：回退旧行为
+    if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+      CAPBOX_IDMAP_SPAWN_LOG="$rd/service.log"
+      bp="$(_idmap_spawn_bwrap_argv "${full[@]}")" || {
+        unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
+        _service_diagnose "$name" "idmap 启动失败"
+        return 1
+      }
+    else
+      setsid "${full[@]}" >>"$rd/service.log" 2>&1 &
+      bp=$!
+    fi
+    printf '%s\n' "$bp" >"$rd/supervisor.pid"
   fi
   unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
 
-  printf '%s\n' "$bp" >"$rd/supervisor.pid"
-  sleep 0.3
-  if ! kill -0 "$bp" 2>/dev/null; then
-    wait "$bp" 2>/dev/null || true
+  # supervisor 自己写 pidfile；稍等
+  local i
+  for i in $(seq 1 30); do
+    [[ -f "$rd/supervisor.pid" ]] && kill -0 "$(cat "$rd/supervisor.pid")" 2>/dev/null && break
+    sleep 0.1
+  done
+  if [[ ! -f "$rd/supervisor.pid" ]] || ! kill -0 "$(cat "$rd/supervisor.pid")" 2>/dev/null; then
     _service_diagnose "$name" "进程启动后立即退出"
-    rm -f "$rd/supervisor.pid"
     return 1
   fi
-  log_info "服务 $name 已启动（supervisor pid $bp, uid=$uid gid=$gid）"
+  # ready 等待（supervisor 内部也会等；这里再给一点时间）
+  if [[ -n "${svc[READY_CMD]:-}${svc[READY_TCP]:-}${svc[READY_HTTP]:-}" ]]; then
+    sleep 0.3
+  fi
+  log_info "服务 $name 已启动（supervisor pid $(cat "$rd/supervisor.pid"), uid=$uid gid=$gid）"
+  if declare -F audit_event >/dev/null 2>&1; then
+    audit_event service start "object=$name" "uid=$uid" "detail=restart=$restart"
+  fi
   return 0
 }
 
 _service_stop() {
   local name="${1:-}"
   [[ -n "$name" ]] || die 2 "用法: capbox service stop NAME"
-  local rd pid
+  local rd pid stop_timeout=10
   rd="$(_service_run_dir "$name")"
+  if [[ -f "$rd/meta.env" ]]; then
+    local line
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^STOP_TIMEOUT=\'([0-9.]+)\'$ ]] || [[ "$line" =~ ^STOP_TIMEOUT=([0-9.]+)$ ]]; then
+        stop_timeout="${BASH_REMATCH[1]}"
+      fi
+    done <"$rd/meta.env"
+  fi
   if ! _service_is_running "$name"; then
     log_info "服务 $name 未在运行"
     rm -f "$rd/supervisor.pid" 2>/dev/null || true
+    if declare -F _net_publish_stop >/dev/null 2>&1; then
+      _net_publish_stop "$name" 2>/dev/null || true
+    fi
     return 0
   fi
   pid="$(cat "$rd/supervisor.pid")"
-  # 先杀进程组/子树，再按 guest-run 路径扫尾（防 idmap 子进程漏网）
-  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  pkill -TERM -P "$pid" 2>/dev/null || true
-  pkill -TERM -f "$rd/guest-run" 2>/dev/null || true
-  local i
-  for i in $(seq 1 50); do
+  kill -TERM "$pid" 2>/dev/null || true
+  local i max
+  # 秒 → 100ms 轮询次数
+  max=100
+  if [[ "$stop_timeout" =~ ^([0-9]+)([.][0-9]+)?$ ]]; then
+    max=$(( ${BASH_REMATCH[1]} * 10 ))
+    (( max < 1 )) && max=1
+    (( max > 6000 )) && max=6000
+  fi
+  for i in $(seq 1 "$max"); do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
   done
@@ -284,8 +436,14 @@ _service_stop() {
   fi
   pkill -KILL -f "$rd/guest-run" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  rm -f "$rd/supervisor.pid"
+  rm -f "$rd/supervisor.pid" "$rd/supervisor.pid.child"
+  if declare -F _net_publish_stop >/dev/null 2>&1; then
+    _net_publish_stop "$name" 2>/dev/null || true
+  fi
   log_info "服务 $name 已停止"
+  if declare -F audit_event >/dev/null 2>&1; then
+    audit_event service stop "object=$name"
+  fi
   return 0
 }
 

@@ -65,6 +65,7 @@ cmd_exec() {
   local root_mode=0
   local net_override=""
   local uid_override="" gid_override="" user_override=""
+  local profile_override=""
   local -a cmd=()
 
   while [[ $# -gt 0 ]]; do
@@ -118,6 +119,14 @@ cmd_exec() {
         user_override="${1#*=}"
         shift
         ;;
+      --profile)
+        profile_override="${2:-}"
+        shift 2 || shift
+        ;;
+      --profile=*)
+        profile_override="${1#*=}"
+        shift
+        ;;
       --root)
         root_mode=1
         cwd="/"
@@ -131,7 +140,7 @@ cmd_exec() {
       -h | --help)
         cat <<'EOF'
 用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE]
-                  [--uid N] [--gid N] [--user NAME] [--] CMD...
+                  [--uid N] [--gid N] [--user NAME] [--profile compat|untrusted|strict] [--] CMD...
 
   --daemon     在常驻容器内执行（需先启动 capbox up）
   --timeout N  一次性执行超时秒数，0=不限，默认取 CAPBOX_EXEC_TIMEOUT
@@ -141,6 +150,7 @@ cmd_exec() {
   --uid N      容器内初始 uid（默认 CAPBOX_EXEC_UID / 0）；与 --daemon 组合时在命令前降权
   --gid N      容器内初始 gid
   --user NAME  从 guest /etc/passwd 解析 uid:gid（可与数字 uid 二选一）
+  --profile P  覆盖 CAPBOX_SECURITY_PROFILE（仅本次 oneshot）
 
 stdout 只包含容器内命令的输出，可直接被管道消费。
 退出码透传容器内退出码；超时为 124；需要 daemon 但未运行为 3。
@@ -169,6 +179,13 @@ EOF
     if [[ "$net_override" == "restricted" ]] && [[ -z "${CAPBOX_NET_ALLOW:-}" ]]; then
       die 2 "exec: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）"
     fi
+  fi
+
+  if [[ -n "$profile_override" ]]; then
+    case "$profile_override" in
+      compat | untrusted | strict) CAPBOX_SECURITY_PROFILE="$profile_override" ;;
+      *) die 2 "exec: --profile 必须是 compat|untrusted|strict（当前: $profile_override）" ;;
+    esac
   fi
 
   # --user / --uid / --gid
@@ -232,10 +249,23 @@ EOF
   fi
 
   require_rootfs
-  local rc=0
+  local rc=0 t0 t1 ms
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
   exec_in_guest "$cmdstr" "$cwd" "$timeout_s"
   rc=$?
+  t1=$(date +%s%3N 2>/dev/null || date +%s)
+  ms=$((t1 - t0))
   unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
+  if declare -F audit_event >/dev/null 2>&1; then
+    if (( rc == 0 )); then
+      audit_event exec ok "cmd=$cmdstr" "exit=$rc" "ms=$ms" "profile=${CAPBOX_SECURITY_PROFILE:-compat}" "net=${CAPBOX_NET:-open}"
+    else
+      audit_event exec fail "cmd=$cmdstr" "exit=$rc" "ms=$ms" "profile=${CAPBOX_SECURITY_PROFILE:-compat}" "net=${CAPBOX_NET:-open}"
+    fi
+  fi
+  if declare -F _security_close_fd >/dev/null 2>&1; then
+    _security_close_fd
+  fi
   if (( rc == 124 )) && (( timeout_s > 0 )); then
     log_warn "容器内命令超时（${timeout_s}s），已终止"
   fi

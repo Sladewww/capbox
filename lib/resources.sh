@@ -1,16 +1,20 @@
 # shellcheck shell=bash
 # =============================================================================
 # CapBox - resources.sh
-# CPU / 内存 / PIDs 限额：优先 cgroup v2；不可用时诚实告警，绝不谎称已生效。
+# CPU / 内存 / PIDs /（诚实声明的）磁盘限额。
 #
 # CAPBOX_MEMORY_MAX  例: 512M 512Mi 1G 268435456
 # CAPBOX_PIDS_MAX    例: 256
 # CAPBOX_CPU_MAX     例: 50%  或 cgroup 原样 "50000 100000"
+# CAPBOX_DISK_MAX    例: 1G — **仅当**能创建私有 sparse loop+挂载时才兑现；否则明确 unavailable
+# CAPBOX_RESOURCES_MODE=warn|require
+#   warn    （默认）cgroup 不可用时 WARN；MEMORY 可降级 prlimit RLIMIT_AS（近似，非 memory.max）
+#   require （fail-closed）任一已配置限额无法按 cgroup（或声明的精确机制）兑现则硬失败
 #
 # 注意：
-#   * RLIMIT_NPROC 是按 UID 全局计数，不能用于沙箱 PIDs，故绝不滥用。
-#   * 无 cgroup 时 MEMORY 可降级为 RLIMIT_AS（虚拟地址空间近似），并 WARN。
-#   * CPU 配额无 cgroup 时无法兑现 → WARN，不应用。
+#   * RLIMIT_NPROC 按 UID 全局计数，绝不冒充 PIDs。
+#   * 绝不把 prlimit 宣传成精确 cgroup memory.max。
+#   * 本环境若无法写宿主 cgroup，doctor/status 会给出证据路径与权限错误。
 # =============================================================================
 
 _resources_parse_bytes() {
@@ -53,8 +57,47 @@ _resources_parse_cpu_max() {
   return 1
 }
 
+_resources_mode() {
+  case "${CAPBOX_RESOURCES_MODE:-warn}" in
+    require|strict|fail-closed|fail_closed) printf 'require' ;;
+    *) printf 'warn' ;;
+  esac
+}
+
 _resources_any_configured() {
-  [[ -n "${CAPBOX_MEMORY_MAX:-}" || -n "${CAPBOX_PIDS_MAX:-}" || -n "${CAPBOX_CPU_MAX:-}" ]]
+  [[ -n "${CAPBOX_MEMORY_MAX:-}" || -n "${CAPBOX_PIDS_MAX:-}" || -n "${CAPBOX_CPU_MAX:-}" || -n "${CAPBOX_DISK_MAX:-}" ]]
+}
+
+_resources_probe_cgroup() {
+  CAPBOX_CGROUP_STATUS=missing
+  CAPBOX_CGROUP_DETAIL=""
+  CAPBOX_CGROUP_ROOT=""
+
+  if [[ ! -d /sys/fs/cgroup ]]; then
+    CAPBOX_CGROUP_DETAIL="无 /sys/fs/cgroup"
+    return 1
+  fi
+  if [[ ! -f /sys/fs/cgroup/cgroup.controllers ]]; then
+    CAPBOX_CGROUP_DETAIL="非 cgroup v2 统一层级（缺 cgroup.controllers）"
+    return 1
+  fi
+
+  local root=""
+  if root="$(_resources_find_cgroup_root 2>/dev/null)"; then
+    CAPBOX_CGROUP_ROOT="$root"
+    CAPBOX_CGROUP_STATUS=ready
+    CAPBOX_CGROUP_DETAIL="可写 cgroup 根: $root"
+    return 0
+  fi
+
+  local self cgpath err
+  self="$(awk -F: '{print $NF; exit}' /proc/self/cgroup 2>/dev/null || true)"
+  cgpath="/sys/fs/cgroup${self}"
+  err="$(mkdir -p "${cgpath}/.capbox-probe-$$" 2>&1 || true)"
+  rmdir "${cgpath}/.capbox-probe-$$" 2>/dev/null || true
+  CAPBOX_CGROUP_STATUS=denied
+  CAPBOX_CGROUP_DETAIL="无法在 cgroup 下建子目录（self=${self:-/}）；mkdir 证据: ${err:-permission denied}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?') 但当前用户无委派。"
+  return 1
 }
 
 _resources_find_cgroup_root() {
@@ -86,12 +129,17 @@ _resources_setup_cgroup() {
   mkdir -p "$leaf" 2>/dev/null || return 1
 
   if [[ -w "$root/cgroup.subtree_control" ]]; then
-    for ctrl in memory pids cpu; do
+    for ctrl in memory pids cpu io; do
       echo "+$ctrl" >"$root/cgroup.subtree_control" 2>/dev/null || true
     done
   fi
 
   local applied=0
+  CAPBOX_RESOURCES_APPLIED_MEMORY=""
+  CAPBOX_RESOURCES_APPLIED_PIDS=""
+  CAPBOX_RESOURCES_APPLIED_CPU=""
+  CAPBOX_RESOURCES_APPLIED_IO=""
+
   if [[ -n "${CAPBOX_MEMORY_MAX:-}" ]]; then
     local bytes
     if bytes="$(_resources_parse_bytes "$CAPBOX_MEMORY_MAX")"; then
@@ -130,15 +178,70 @@ _resources_setup_cgroup() {
       log_warn "CPU_MAX 无法解析: $CAPBOX_CPU_MAX（支持 50% 或 'quota period'）"
     fi
   fi
+  if [[ -n "${CAPBOX_IO_MAX:-}" && -w "$leaf/io.max" ]]; then
+    if echo "$CAPBOX_IO_MAX" >"$leaf/io.max" 2>/dev/null; then
+      applied=1
+      CAPBOX_RESOURCES_APPLIED_IO="cgroup:$CAPBOX_IO_MAX"
+    fi
+  fi
+
   (( applied == 1 )) || {
     rmdir "$leaf" 2>/dev/null || true
     return 1
   }
+  CAPBOX_RESOURCES_CGROUP_LEAF="$leaf"
   printf '%s' "$leaf"
   return 0
 }
 
-# 用法: local -a cmd=(bwrap ...); _resources_wrap_argv cmd
+_resources_probe_disk() {
+  CAPBOX_DISK_STATUS=unavailable
+  CAPBOX_DISK_DETAIL=""
+  if [[ -z "${CAPBOX_DISK_MAX:-}" ]]; then
+    CAPBOX_DISK_STATUS=unset
+    CAPBOX_DISK_DETAIL="未配置 CAPBOX_DISK_MAX"
+    return 1
+  fi
+  if [[ ! -e /dev/loop-control ]]; then
+    CAPBOX_DISK_DETAIL="无 /dev/loop-control"
+    return 1
+  fi
+  if [[ ! -w /dev/loop-control ]]; then
+    local lsout
+    lsout="$(ls -l /dev/loop-control 2>&1 || true)"
+    CAPBOX_DISK_DETAIL="无写权限: $lsout（通常需 disk 组或 root；拒绝假装已限额）"
+    return 1
+  fi
+  CAPBOX_DISK_STATUS=capable
+  CAPBOX_DISK_DETAIL="loop-control 可写；完整磁盘限额需 losetup+mkfs+mount（尚未默认自动挂到 guest）"
+  return 0
+}
+
+_resources_fail_closed_check() {
+  [[ "$(_resources_mode)" == "require" ]] || return 0
+  local missing=()
+  if [[ -n "${CAPBOX_MEMORY_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_MEMORY:-}" != cgroup:* ]]; then
+    missing+=("MEMORY_MAX(need cgroup memory.max, not prlimit)")
+  fi
+  if [[ -n "${CAPBOX_PIDS_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_PIDS:-}" != cgroup:* ]]; then
+    missing+=("PIDS_MAX(need cgroup pids.max)")
+  fi
+  if [[ -n "${CAPBOX_CPU_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_CPU:-}" != cgroup:* ]]; then
+    missing+=("CPU_MAX(need cgroup cpu.max)")
+  fi
+  if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
+    _resources_probe_disk || true
+    if [[ "${CAPBOX_DISK_STATUS}" != "capable" ]]; then
+      missing+=("DISK_MAX(${CAPBOX_DISK_DETAIL})")
+    fi
+  fi
+  if (( ${#missing[@]} > 0 )); then
+    log_err "CAPBOX_RESOURCES_MODE=require：以下限额无法精确兑现: ${missing[*]}"
+    return 1
+  fi
+  return 0
+}
+
 _resources_wrap_argv() {
   local -n _rw_cmd="$1"
   CAPBOX_RESOURCES_APPLIED_MEMORY="${CAPBOX_RESOURCES_APPLIED_MEMORY:-}"
@@ -158,19 +261,35 @@ _resources_wrap_argv() {
       "${inner[@]}"
     )
     log_debug "资源限额经 cgroup 应用: $cg"
+    _resources_fail_closed_check || return 1
+    if declare -F audit_event >/dev/null 2>&1; then
+      audit_event resources ok "detail=cgroup:$cg"
+    fi
     return 0
   fi
 
+  _resources_probe_cgroup || true
+
   if [[ -n "${CAPBOX_CPU_MAX:-}" ]]; then
-    log_warn "CPU_MAX=$CAPBOX_CPU_MAX 未应用：当前环境无可用 cgroup v2 委派"
+    log_warn "CPU_MAX=$CAPBOX_CPU_MAX 未应用：${CAPBOX_CGROUP_DETAIL:-无 cgroup 委派}"
   fi
   if [[ -n "${CAPBOX_PIDS_MAX:-}" ]]; then
-    log_warn "PIDS_MAX=$CAPBOX_PIDS_MAX 未应用：需要 cgroup pids（拒绝使用 RLIMIT_NPROC，因其按 UID 全局生效）"
+    log_warn "PIDS_MAX=$CAPBOX_PIDS_MAX 未应用：需要 cgroup pids（拒绝使用 RLIMIT_NPROC）"
   fi
+  if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
+    _resources_probe_disk || true
+    log_warn "DISK_MAX=$CAPBOX_DISK_MAX 未应用：${CAPBOX_DISK_DETAIL}"
+  fi
+
   if [[ -n "${CAPBOX_MEMORY_MAX:-}" ]]; then
     local bytes
+    if [[ "$(_resources_mode)" == "require" ]]; then
+      log_err "MEMORY_MAX=$CAPBOX_MEMORY_MAX：require 模式拒绝 prlimit 降级（不是 cgroup memory.max）"
+      _resources_fail_closed_check
+      return 1
+    fi
     if bytes="$(_resources_parse_bytes "$CAPBOX_MEMORY_MAX")" && have_cmd prlimit; then
-      log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 降级为 prlimit RLIMIT_AS=${bytes}（虚拟地址空间近似，不是 cgroup memory.max）"
+      log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 降级为 prlimit RLIMIT_AS=${bytes}（虚拟地址空间近似，**不是** cgroup memory.max）"
       local -a inner2=("${_rw_cmd[@]}")
       _rw_cmd=(prlimit "--as=$bytes" -- "${inner2[@]}")
       CAPBOX_RESOURCES_APPLIED_MEMORY="prlimit-as:$bytes"
@@ -178,20 +297,48 @@ _resources_wrap_argv() {
       log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 未应用：无 cgroup 且无 prlimit/无法解析"
     fi
   fi
+
+  if [[ "$(_resources_mode)" == "require" ]]; then
+    _resources_fail_closed_check || return 1
+  fi
   return 0
 }
 
+_resources_metrics_json() {
+  _resources_probe_cgroup || true
+  _resources_probe_disk || true
+  printf '{'
+  printf '"cgroup_status":"%s",' "${CAPBOX_CGROUP_STATUS:-unknown}"
+  printf '"cgroup_detail":"%s",' "${CAPBOX_CGROUP_DETAIL//\"/\\\"}"
+  printf '"disk_status":"%s",' "${CAPBOX_DISK_STATUS:-unset}"
+  printf '"disk_detail":"%s",' "${CAPBOX_DISK_DETAIL//\"/\\\"}"
+  printf '"memory_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_MEMORY:-}"
+  printf '"cpu_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_CPU:-}"
+  printf '"pids_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_PIDS:-}"
+  printf '"mode":"%s"' "$(_resources_mode)"
+  printf '}\n'
+}
+
 _resources_doctor_report() {
+  _resources_probe_cgroup || true
+  case "${CAPBOX_CGROUP_STATUS}" in
+    ready) _doctor_pass "cgroup v2 可写（${CAPBOX_CGROUP_DETAIL}）" ;;
+    denied) _doctor_warn "cgroup v2 存在但不可委派：${CAPBOX_CGROUP_DETAIL}" ;;
+    *) _doctor_warn "cgroup 不可用：${CAPBOX_CGROUP_DETAIL:-unknown}" ;;
+  esac
+  if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
+    _resources_probe_disk || true
+    if [[ "${CAPBOX_DISK_STATUS}" == "capable" ]]; then
+      _doctor_pass "DISK_MAX 探测：loop 可用（${CAPBOX_DISK_DETAIL}）"
+    else
+      _doctor_warn "DISK_MAX 无法兑现：${CAPBOX_DISK_DETAIL}"
+    fi
+  fi
   if ! _resources_any_configured; then
-    _doctor_pass "资源限额未配置（CAPBOX_MEMORY_MAX / CPU_MAX / PIDS_MAX 为空）"
+    _doctor_pass "资源限额未配置（MEMORY/CPU/PIDS/DISK 为空）"
     return 0
   fi
-  local root
-  if root="$(_resources_find_cgroup_root 2>/dev/null)"; then
-    _doctor_pass "检测到可写 cgroup 根 ($root)；配置的限额将尝试经 cgroup 应用"
-  else
-    _doctor_warn "资源限额已配置但无可用 cgroup v2 委派：CPU/PIDS 无法强制；MEMORY 可能降级为 RLIMIT_AS"
-  fi
+  _doctor_pass "RESOURCES_MODE=$(_resources_mode)"
   [[ -n "${CAPBOX_MEMORY_MAX:-}" ]] && _doctor_pass "已配置 MEMORY_MAX=$CAPBOX_MEMORY_MAX"
   [[ -n "${CAPBOX_CPU_MAX:-}" ]] && _doctor_pass "已配置 CPU_MAX=$CAPBOX_CPU_MAX"
   [[ -n "${CAPBOX_PIDS_MAX:-}" ]] && _doctor_pass "已配置 PIDS_MAX=$CAPBOX_PIDS_MAX"

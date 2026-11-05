@@ -20,11 +20,22 @@ if [[ -z "${CAPBOX_DIR:-}" ]]; then
   unset _capbox_self_file
 fi
 export CAPBOX_DIR
-CAPBOX_WORKSPACE="$(dirname "$CAPBOX_DIR")"
+# 工作区推导（不得把「仓库即 CAPBOX_DIR」误判成父目录 /workspace）：
+#   * 若调用方（bin/capbox）已设 CAPBOX_WORKSPACE，一律保留
+#   * CAPBOX_DIR 以 /.capbox 结尾 → 工作区=其父目录（标准项目布局）
+#   * 否则 CAPBOX_DIR 本身就是工作区（仓库即状态 / 开发树），禁止 dirname 落到 /
+#     或 /workspace 这类宽绑定
+if [[ -z "${CAPBOX_WORKSPACE:-}" ]]; then
+  if [[ "$(basename -- "$CAPBOX_DIR")" == ".capbox" ]]; then
+    CAPBOX_WORKSPACE="$(cd -- "$(dirname -- "$CAPBOX_DIR")" && pwd)"
+  else
+    CAPBOX_WORKSPACE="$CAPBOX_DIR"
+  fi
+fi
 export CAPBOX_WORKSPACE
 
-readonly CAPBOX_VERSION="0.1.0"
-readonly CAPBOX_SCHEMA_VERSION="0.1.0"
+readonly CAPBOX_VERSION="0.3.0"
+readonly CAPBOX_SCHEMA_VERSION="0.3.0"
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
 readonly CAPBOX_CFG_KEYS=(
@@ -40,6 +51,8 @@ readonly CAPBOX_CFG_KEYS=(
   MEMORY_MAX
   CPU_MAX
   PIDS_MAX
+  DISK_MAX
+  RESOURCES_MODE
   BWRAP
   IDMAP
   UID_MAP
@@ -47,6 +60,13 @@ readonly CAPBOX_CFG_KEYS=(
   SETGROUPS
   EXEC_UID
   EXEC_GID
+  SECURITY_PROFILE
+  ROOTFS_RO
+  FS_HIDE
+  FS_BINDS
+  OVERLAY
+  AUDIT
+  AUDIT_CMD
 )
 
 # 支持的发行版
@@ -271,6 +291,69 @@ _cfg_validate() {
         return 2
       }
       ;;
+    DISK_MAX)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[0-9]+([KkMmGg]i?[Bb]?)?$ ]] || {
+          log_err "CAPBOX_DISK_MAX 格式无效（例 1G；当前: '$v'）"
+          return 2
+        }
+      fi
+      ;;
+    RESOURCES_MODE)
+      [[ "$v" == "warn" || "$v" == "require" || "$v" == "strict" || "$v" == "fail-closed" || "$v" == "fail_closed" || -z "$v" ]] || {
+        log_err "CAPBOX_RESOURCES_MODE 只能是 warn|require（当前: '$v'）"
+        return 2
+      }
+      ;;
+    SECURITY_PROFILE)
+      [[ "$v" == "compat" || "$v" == "untrusted" || "$v" == "strict" || "$v" == "default" || -z "$v" ]] || {
+        log_err "CAPBOX_SECURITY_PROFILE 只能是 compat|untrusted|strict（当前: '$v'）"
+        return 2
+      }
+      ;;
+    ROOTFS_RO)
+      [[ "$v" == "0" || "$v" == "1" || "$v" == "true" || "$v" == "false" || "$v" == "yes" || "$v" == "no" || -z "$v" ]] || {
+        log_err "CAPBOX_ROOTFS_RO 只能是 0/1（当前: '$v'）"
+        return 2
+      }
+      ;;
+    FS_HIDE)
+      if [[ -n "$v" ]]; then
+        [[ "$v" =~ ^[A-Za-z0-9._@+=,/-]+$ ]] || {
+          log_err "CAPBOX_FS_HIDE 含非法字符（当前: '$v'）"
+          return 2
+        }
+        [[ "$v" != *..* ]] || { log_err "CAPBOX_FS_HIDE 禁止 .."; return 2; }
+      fi
+      ;;
+    FS_BINDS)
+      if [[ -n "$v" ]]; then
+        # 粗校验；细校验在 fsguard
+        [[ "$v" =~ ^[A-Za-z0-9._@+=,:/-]+$ ]] || {
+          log_err "CAPBOX_FS_BINDS 含非法字符（当前: '$v'）"
+          return 2
+        }
+        [[ "$v" != *..* ]] || { log_err "CAPBOX_FS_BINDS 禁止 .."; return 2; }
+      fi
+      ;;
+    OVERLAY)
+      [[ "$v" == "0" || "$v" == "1" || "$v" == "auto" || "$v" == "on" || "$v" == "off" || -z "$v" ]] || {
+        log_err "CAPBOX_OVERLAY 只能是 auto|0|1（当前: '$v'）"
+        return 2
+      }
+      ;;
+    AUDIT)
+      [[ "$v" == "off" || "$v" == "summary" || "$v" == "full" || "$v" == "0" || "$v" == "1" || -z "$v" ]] || {
+        log_err "CAPBOX_AUDIT 只能是 off|summary|full（当前: '$v'）"
+        return 2
+      }
+      ;;
+    AUDIT_CMD)
+      [[ "$v" == "off" || "$v" == "summary" || "$v" == "full" || -z "$v" ]] || {
+        log_err "CAPBOX_AUDIT_CMD 只能是 off|summary|full（当前: '$v'）"
+        return 2
+      }
+      ;;
     *)
       log_err "未知配置项: CAPBOX_${k}"
       return 2
@@ -459,6 +542,15 @@ load_config() {
   : "${CAPBOX_SETGROUPS=}"
   : "${CAPBOX_EXEC_UID=0}"
   : "${CAPBOX_EXEC_GID=0}"
+  : "${CAPBOX_DISK_MAX=}"
+  : "${CAPBOX_RESOURCES_MODE=warn}"
+  : "${CAPBOX_SECURITY_PROFILE=compat}"
+  : "${CAPBOX_ROOTFS_RO=0}"
+  : "${CAPBOX_FS_HIDE=}"
+  : "${CAPBOX_FS_BINDS=}"
+  : "${CAPBOX_OVERLAY=auto}"
+  : "${CAPBOX_AUDIT=summary}"
+  : "${CAPBOX_AUDIT_CMD=}"
 
   # 空值兜底（配置文件写坏了也不至于炸）
   [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; log_warn "CAPBOX_DISTRO 为空，回退 alpine"; }
@@ -889,7 +981,11 @@ build_bwrap_args() {
   [[ -n "${CAPBOX_ROOTFS:-}" && -d "$CAPBOX_ROOTFS" ]] || return 4
 
   # ---- 文件系统 ----
-  a+=(--bind "$CAPBOX_ROOTFS" /)
+  if declare -F _fsguard_apply_rootfs_mount >/dev/null 2>&1; then
+    _fsguard_apply_rootfs_mount a
+  else
+    a+=(--bind "$CAPBOX_ROOTFS" /)
+  fi
   a+=(--proc /proc)
   a+=(--dev /dev)
   if [[ "$mode" == "daemon" ]]; then
@@ -903,6 +999,10 @@ build_bwrap_args() {
   a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
   # 覆盖式只读挂载：防止 guest 改写宿主侧 CLI / 配置（下次执行 = RCE）
   _capbox_append_ro_cli_binds a
+  # FS hide / 额外 binds（拒绝工作区外任意 bind）
+  if declare -F _fsguard_append_bwrap_args >/dev/null 2>&1; then
+    _fsguard_append_bwrap_args a || return $?
+  fi
 
   # resolv.conf：必须是普通文件（宿主上是符号链接）
   refresh_resolv >/dev/null 2>&1 || true
@@ -940,6 +1040,10 @@ build_bwrap_args() {
   a+=(--chdir "$cwd")
   if [[ "${CAPBOX_BWRAP_NO_DIE_WITH_PARENT:-0}" != "1" ]]; then
     a+=(--die-with-parent)
+  fi
+  # 安全档（compat 为 no-op；untrusted/strict 追加 drop/seccomp 标记/hide）
+  if declare -F _security_append_bwrap_args >/dev/null 2>&1; then
+    _security_append_bwrap_args a || return $?
   fi
 
   # ---- 环境 ----
@@ -989,7 +1093,16 @@ run_bwrap_oneshot() {
 
   local -a args=()
   local -a full=()
-  mapfile -t args < <(build_bwrap_args oneshot "$cwd")
+  local _bbrc=0
+  mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  # 从末尾取构造结果码，避免 mapfile 吞掉 build_bwrap_args 的退出码
+  if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
+    _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
+    unset 'args[-1]'
+  fi
+  if (( _bbrc != 0 )); then
+    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：FS_BINDS 越界、安全档/seccomp 失败）"
+  fi
   if [[ ${#args[@]} -eq 0 ]]; then
     die 4 "rootfs 不存在: $CAPBOX_ROOTFS（请先运行 capbox init）"
   fi
@@ -1007,7 +1120,10 @@ run_bwrap_oneshot() {
 
   full=("$CAPBOX_BWRAP" "${args[@]}" -- "$@")
   if declare -F _resources_wrap_argv >/dev/null 2>&1; then
-    _resources_wrap_argv full || true
+    _resources_wrap_argv full || return $?
+  fi
+  if declare -F _security_wrap_argv >/dev/null 2>&1; then
+    _security_wrap_argv full || return $?
   fi
 
   local rc=0 use_idmap=0
@@ -1543,6 +1659,15 @@ cmd_doctor() {
   fi
   if declare -F _resources_doctor_report >/dev/null 2>&1; then
     _resources_doctor_report
+  fi
+  if declare -F _security_doctor_report >/dev/null 2>&1; then
+    _security_doctor_report
+  fi
+  if declare -F _fsguard_doctor_report >/dev/null 2>&1; then
+    _fsguard_doctor_report
+  fi
+  if declare -F _image_doctor_report >/dev/null 2>&1; then
+    _image_doctor_report
   fi
 
   # 9) daemon
