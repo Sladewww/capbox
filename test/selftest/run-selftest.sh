@@ -101,7 +101,7 @@ console_of() { # console_of WS CASEID
 
 run_suite() { # run_suite WS [args...]  → 输出到 $WS/last.log，返回套件退出码
   local ws="$1"; shift
-  ( cd "$ws" && "$ws/.capbox/test/run.sh" "$@" ) >"$ws/last.log" 2>&1
+  ( cd "$ws" && bash "$ws/.capbox/test/run.sh" "$@" ) >"$ws/last.log" 2>&1
   return $?
 }
 
@@ -207,7 +207,7 @@ chk "SKIP 明细里给出 SLOW 指引" grep -qiE 'CAPBOX_TEST_SLOW' "$WS/last.lo
 # CAPBOX_TEST_DAEMON=1 但没有 daemon → 仍然 SKIP（不是 FAIL）
 WS=$(build_sandbox gates-nodaemon)
 r=0
-( cd "$WS" && CAPBOX_TEST_DAEMON=1 "$WS/.capbox/test/run.sh" T16 ) >"$WS/last.log" 2>&1 || r=$?
+( cd "$WS" && CAPBOX_TEST_DAEMON=1 bash "$WS/.capbox/test/run.sh" T16 ) >"$WS/last.log" 2>&1 || r=$?
 chk "CAPBOX_TEST_DAEMON=1 但无 daemon：exit 0" [ "$r" = "0" ]
 st=$(status_of "$WS" T16)
 chk "CAPBOX_TEST_DAEMON=1 但无 daemon：T16 仍 SKIP（$st）" [ "$st" = "SKIP" ]
@@ -220,7 +220,7 @@ WS=$(build_sandbox gates-daemon)
 DPID=$!
 sleep 1.5
 r=0
-( cd "$WS" && CAPBOX_TEST_DAEMON=1 "$WS/.capbox/test/run.sh" T16 ) >"$WS/last.log" 2>&1 || r=$?
+( cd "$WS" && CAPBOX_TEST_DAEMON=1 bash "$WS/.capbox/test/run.sh" T16 ) >"$WS/last.log" 2>&1 || r=$?
 kill "$DPID" 2>/dev/null
 wait "$DPID" 2>/dev/null
 st=$(status_of "$WS" T16)
@@ -241,7 +241,7 @@ printf '\n%s[D] CLI 行为：--list、选择性执行、未知用例%s\n' "$YEL"
 WS=$(build_sandbox cli)
 
 r=0
-out=$( cd "$WS" && "$WS/.capbox/test/run.sh" --list 2>&1 ) || r=$?
+out=$( cd "$WS" && bash "$WS/.capbox/test/run.sh" --list 2>&1 ) || r=$?
 chk "--list exit 0" [ "$r" = "0" ]
 chk "--list 列出 T01" grep -q 'T01' <<<"$out"
 chk "--list 列出 T20" grep -q 'T20' <<<"$out"
@@ -251,16 +251,16 @@ chk "--list 列出 22 个用例" grep -q '共 22 个用例' <<<"$out"
 chk "--list 不执行任何用例（无 PASS/FAIL 汇总）" bash -c '! grep -q "汇总：" <<<"$1"' _ "$out"
 
 r=0
-out=$( cd "$WS" && "$WS/.capbox/test/run.sh" T05 T06 2>&1 ) || r=$?
+out=$( cd "$WS" && bash "$WS/.capbox/test/run.sh" T05 T06 2>&1 ) || r=$?
 chk "选择性执行 T05 T06：只跑这两个" bash -c '[ "$(printf "%s" "$1" | grep -cE "\] T0[0-9]")" = "2" ]' _ "$out"
 chk "选择性执行：汇总总数为 2" grep -qE '共 2' <<<"$out"
 
 r=0
-out=$( cd "$WS" && "$WS/.capbox/test/run.sh" t01 2>&1 ) || r=$?
+out=$( cd "$WS" && bash "$WS/.capbox/test/run.sh" t01 2>&1 ) || r=$?
 chk "小写用例名 t01 也能选中" grep -qE 'T01' <<<"$out"
 
 r=0
-out=$( cd "$WS" && "$WS/.capbox/test/run.sh" T99 2>&1 ) || r=$?
+out=$( cd "$WS" && bash "$WS/.capbox/test/run.sh" T99 2>&1 ) || r=$?
 chk "未知用例 T99：exit 2（用法错误）" [ "$r" = "2" ]
 chk "未知用例 T99：提示没有这个用例" grep -q '没有这个用例' <<<"$out"
 
@@ -296,7 +296,7 @@ case_begin "$1" "$CASE_TITLE" "$2"
 sleep 600
 EOF
 r=0
-( cd "$WS" && CAPBOX_TEST_TIMEOUT=3 "$WS/.capbox/test/run.sh" T90 T91 T06 ) >"$WS/last.log" 2>&1 || r=$?
+( cd "$WS" && CAPBOX_TEST_TIMEOUT=3 bash "$WS/.capbox/test/run.sh" T90 T91 T06 ) >"$WS/last.log" 2>&1 || r=$?
 chk "崩溃/卡死场景：套件 exit 1（有 FAIL）" [ "$r" = "1" ]
 chk "崩溃用例记为 FAIL" grep -qE 'T90' "$WS/last.log"
 chk "卡死用例被超时杀掉并记为 FAIL" bash -c 'grep -qE "T91.*异常终止|异常终止.*rc=124|\[3/3\] T06" <<<"$1"' _ "$(cat "$WS/last.log")"

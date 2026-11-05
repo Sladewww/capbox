@@ -65,9 +65,8 @@ jobs:
           CAPBOX_TEST_SLOW: "0"
           CAPBOX_TEST_DAEMON: "0"
         run: |
-          chmod +x test/run.sh test/cases/*.sh
           # Explicitly select non-slow, non-daemon cases
-          ./test/run.sh T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 \
+          bash test/run.sh T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 \
                        T11 T12 T13 T14 T17 T18 T20 T21 T22
 
       - name: Upload test tmp on failure
