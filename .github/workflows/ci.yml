@@ -51,7 +51,7 @@ jobs:
       - name: Install bubblewrap
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap curl tar
+          sudo apt-get install -y -qq bubblewrap curl tar uidmap
 
       - name: Enable unprivileged userns (best effort)
         run: |
