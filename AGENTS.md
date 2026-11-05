@@ -60,6 +60,12 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 - `capbox recipe apply`：KEY=value only，never source.
 - Resource limits prefer cgroup v2; otherwise WARN (no fake enforcement).
 
+## UID map / services
+
+- `CAPBOX_IDMAP=auto|on|off`；doctor 会报告 multi/single/blocked。blocked+on = 硬失败。
+- `capbox exec --uid/--gid/--user`；`capbox service start|stop|status|logs`.
+- 慢测：`./test/slow/run-slow.sh`（勿删 mssql 数据目录）。
+
 ## Residual risk
 
 - Project workspace is RW at `/workspace` by design — treat its contents as trusted.

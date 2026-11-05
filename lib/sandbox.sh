@@ -64,6 +64,7 @@ cmd_exec() {
   local cwd="/workspace"
   local root_mode=0
   local net_override=""
+  local uid_override="" gid_override="" user_override=""
   local -a cmd=()
 
   while [[ $# -gt 0 ]]; do
@@ -93,6 +94,30 @@ cmd_exec() {
         net_override="${1#*=}"
         shift
         ;;
+      --uid)
+        uid_override="${2:-}"
+        shift 2 || shift
+        ;;
+      --uid=*)
+        uid_override="${1#*=}"
+        shift
+        ;;
+      --gid)
+        gid_override="${2:-}"
+        shift 2 || shift
+        ;;
+      --gid=*)
+        gid_override="${1#*=}"
+        shift
+        ;;
+      --user)
+        user_override="${2:-}"
+        shift 2 || shift
+        ;;
+      --user=*)
+        user_override="${1#*=}"
+        shift
+        ;;
       --root)
         root_mode=1
         cwd="/"
@@ -105,13 +130,17 @@ cmd_exec() {
         ;;
       -h | --help)
         cat <<'EOF'
-用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE] [--] CMD...
+用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE]
+                  [--uid N] [--gid N] [--user NAME] [--] CMD...
 
   --daemon     在常驻容器内执行（需先启动 capbox up）
   --timeout N  一次性执行超时秒数，0=不限，默认取 CAPBOX_EXEC_TIMEOUT
   --cwd DIR    容器内工作目录（默认 /workspace，相对路径按 /workspace 解释）
-  --root       在容器根目录 / 下执行（等价于 --cwd /；与权限无关，容器内恒为 uid 0）
+  --root       在容器根目录 / 下执行（等价于 --cwd /）
   --net MODE   覆盖 CAPBOX_NET：none|restricted|open（host=open 别名）；仅本次 oneshot
+  --uid N      容器内初始 uid（默认 CAPBOX_EXEC_UID / 0）；与 --daemon 组合时在命令前降权
+  --gid N      容器内初始 gid
+  --user NAME  从 guest /etc/passwd 解析 uid:gid（可与数字 uid 二选一）
 
 stdout 只包含容器内命令的输出，可直接被管道消费。
 退出码透传容器内退出码；超时为 124；需要 daemon 但未运行为 3。
@@ -142,6 +171,33 @@ EOF
     fi
   fi
 
+  # --user / --uid / --gid
+  if [[ -n "$user_override" ]]; then
+    local resolved=""
+    if declare -F _idmap_resolve_user >/dev/null 2>&1; then
+      resolved="$(_idmap_resolve_user "$user_override")" || resolved=""
+    fi
+    if [[ -z "$resolved" ]]; then
+      die 2 "exec: 无法解析 --user $user_override（检查 rootfs /etc/passwd）"
+    fi
+    if [[ "$resolved" == *:* ]]; then
+      uid_override="${resolved%%:*}"
+      [[ -n "$gid_override" ]] || gid_override="${resolved#*:}"
+    else
+      uid_override="$resolved"
+    fi
+  fi
+  if [[ -n "$uid_override" ]]; then
+    [[ "$uid_override" =~ ^[0-9]+$ ]] || die 2 "exec: --uid 必须是非负整数（当前: $uid_override）"
+    export CAPBOX_EXEC_UID_OVERRIDE="$uid_override"
+  fi
+  if [[ -n "$gid_override" ]]; then
+    [[ "$gid_override" =~ ^[0-9]+$ ]] || die 2 "exec: --gid 必须是非负整数（当前: $gid_override）"
+    export CAPBOX_EXEC_GID_OVERRIDE="$gid_override"
+  elif [[ -n "$uid_override" ]]; then
+    export CAPBOX_EXEC_GID_OVERRIDE="$uid_override"
+  fi
+
   # --cwd 校验必须在父 shell 里做（不能用 $( ) 包住 die，否则 exit 只退子 shell，
   # 用户会看到错误信息却拿到 rc=0 并在错误的目录里执行）。
   local want_cwd="$cwd"
@@ -158,15 +214,28 @@ EOF
   local cmdstr
   cmdstr="$(join_cmd_str "${cmd[@]}")"
 
+  # daemon 模式无法改 bwrap --uid（容器已启动）；在命令前用 python 降权
+  if (( use_daemon == 1 )) && [[ -n "${CAPBOX_EXEC_UID_OVERRIDE:-}" ]]; then
+    local _du="${CAPBOX_EXEC_UID_OVERRIDE}" _dg="${CAPBOX_EXEC_GID_OVERRIDE:-$_du}"
+    local _qcmd _py
+    _qcmd="$(_shq "$cmdstr")"
+    _py=$(printf 'import os,sys\nos.setgid(%s)\ntry:\n os.setgroups([%s])\nexcept Exception:\n pass\nos.setuid(%s)\nos.execvp("/bin/sh",["sh","-c",sys.argv[1]])' "$_du" "$_dg" "$_du")
+    cmdstr="python3 -c $(_shq "$_py") ${_qcmd}"
+  fi
+
   if (( use_daemon == 1 )); then
+    local rc_d=0
     _exec_via_daemon "$cmdstr" "$cwd" "$timeout_s"
-    return $?
+    rc_d=$?
+    unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
+    return "$rc_d"
   fi
 
   require_rootfs
   local rc=0
   exec_in_guest "$cmdstr" "$cwd" "$timeout_s"
   rc=$?
+  unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
   if (( rc == 124 )) && (( timeout_s > 0 )); then
     log_warn "容器内命令超时（${timeout_s}s），已终止"
   fi
@@ -453,7 +522,8 @@ cmd_pkg() {
 
 按发行版自动分派到 apk（alpine）或 apt-get（ubuntu），
 ubuntu 自动附加 APT::Sandbox::User=root（本环境必需）。
-chown 相关告警属于 userns 正常现象，以退出码与实际可执行文件为准。
+安装后会跑 dpkg --audit / 扫描 iU·iF 状态；有残留配置会明确报告（不掩盖）。
+启用 CAPBOX_IDMAP=auto/on 且多映射可用时，apt postinst 的 chown 更可能成功。
 EOF
       return 0
       ;;
@@ -514,10 +584,40 @@ EOF
 
   exec_in_guest "$cmdstr" /workspace "$timeout_s"
   rc=$?
+
+  if [[ "$sub" == "install" || "$sub" == "update" ]]; then
+    _pkg_report_dpkg_audit || true
+  fi
+
   if (( rc != 0 )); then
-    log_warn "pkg $sub 返回 $rc（userns 下 chown 告警正常；请以实际可执行文件/退出码判断）"
+    if [[ "${CAPBOX_IDMAP_STATUS:-}" == "multi" ]]; then
+      log_warn "pkg $sub 返回 $rc（请结合上方 dpkg audit / 日志判断）"
+    else
+      log_warn "pkg $sub 返回 $rc（单 UID 下 chown 告警常见；请看 dpkg audit 与可执行文件）"
+    fi
   fi
   return "$rc"
+}
+
+# 明确报告 dpkg 未完成配置（iU/iF 等）；有问题返回 1
+_pkg_report_dpkg_audit() {
+  [[ "${CAPBOX_DISTRO:-}" == "ubuntu" || "${CAPBOX_DISTRO:-}" == "debian" ]] || return 0
+  local out
+  out="$(exec_in_guest 'dpkg --audit 2>/dev/null; echo ----; dpkg -l 2>/dev/null | awk '\''$1 ~ /[UF]/ {print}'\'' || true' /workspace 120)" || true
+  if printf '%s\n' "$out" | grep -qE '^[hiurpn]*[UF]'; then
+    log_err "dpkg 存在未完成配置的包（状态含 U/F，例如 iU/iF）："
+    printf '%s\n' "$out" | head -n 40 >&2 || true
+    log_err "这不是被掩盖的成功：请检查 CAPBOX_IDMAP 与 postinst 日志"
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -qi 'unpacked but not yet configured'; then
+    log_err "dpkg --audit 报告有未配置的包"
+    printf '%s\n' "$out" | head -n 40 >&2
+    return 1
+  fi
+  log_info "dpkg audit：无 iU/iF 残留"
+  return 0
+
 }
 
 # 把参数安全拼成一行（每项单独 %q）
