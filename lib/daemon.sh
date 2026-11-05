@@ -98,7 +98,7 @@ fi
 if ! declare -F ensure_dirs >/dev/null 2>&1; then
   ensure_dirs() {
     local d
-    for d in bin lib lib/guest cache logs os run run/daemon run/tmp state test; do
+    for d in bin lib lib/guest cache logs os run run/daemon run/tmp state test services; do
       mkdir -p "$CAPBOX_DIR/$d" 2>/dev/null || true
     done
   }
@@ -126,8 +126,8 @@ _daemon_bwrap_args() {
   if declare -F _capbox_append_ro_cli_binds >/dev/null 2>&1; then
     _capbox_append_ro_cli_binds a
   else
-    # 兜底：common.sh 未加载时手工 ro-bind
-    local _gp
+    # 兜底：common.sh 未加载时手工 ro-bind（含缺失 config.env / services 预占）
+    local _gp _cfg _svc
     if [[ -d "${CAPBOX_BIN_DIR:-}" ]]; then
       _gp="$(_daemon_guest_path "$CAPBOX_BIN_DIR")"
       [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_BIN_DIR" "$_gp")
@@ -136,9 +136,23 @@ _daemon_bwrap_args() {
       _gp="$(_daemon_guest_path "$CAPBOX_LIB_DIR")"
       [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_LIB_DIR" "$_gp")
     fi
-    if [[ -e "${CAPBOX_DIR:-}/config.env" ]]; then
-      _gp="$(_daemon_guest_path "$CAPBOX_DIR/config.env")"
-      [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_DIR/config.env" "$_gp")
+    _cfg="${CAPBOX_DIR:-}/config.env"
+    _gp="$(_daemon_guest_path "$_cfg")"
+    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
+      if [[ ! -e "$_cfg" && ! -L "$_cfg" ]]; then
+        ( umask 077; : >"$_cfg" ) 2>/dev/null || true
+      fi
+      if [[ -f "$_cfg" && ! -L "$_cfg" ]]; then
+        a+=(--ro-bind /dev/null "$_gp")
+      fi
+    fi
+    _svc="${CAPBOX_DIR:-}/services"
+    _gp="$(_daemon_guest_path "$_svc")"
+    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
+      [[ -d "$_svc" ]] || mkdir -p "$_svc" 2>/dev/null || true
+      if [[ -d "$_svc" && ! -L "$_svc" ]]; then
+        a+=(--ro-bind "$_svc" "$_gp")
+      fi
     fi
   fi
 

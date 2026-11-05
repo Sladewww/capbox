@@ -400,7 +400,15 @@ config_save() {
       printf 'CAPBOX_%s=%s\n' "$k" "$(_shq "$v")"
     done
   } >"$tmp" || die 1 "无法写入配置文件: $f"
-  mv -f "$tmp" "$f" || die 1 "无法写入配置文件: $f"
+  # 若目标已是普通文件则就地覆盖，保留 inode。
+  # daemon 长寿场景下 bwrap 对 config.env 的 /dev/null 挂载钉在该 inode/路径上；
+  # 若用 mv 替换，宿主命名空间外的 rename 会让 guest 重新看到可写的新文件（RW 工作区 bind）。
+  if [[ -f "$f" && ! -L "$f" ]]; then
+    cat "$tmp" >"$f" || { rm -f "$tmp"; die 1 "无法写入配置文件: $f"; }
+    rm -f "$tmp"
+  else
+    mv -f "$tmp" "$f" || die 1 "无法写入配置文件: $f"
+  fi
   log_debug "配置已写回: $f"
 }
 
@@ -671,7 +679,7 @@ config_set() {
 
 ensure_dirs() {
   local d
-  for d in bin lib lib/guest cache logs os run run/daemon run/tmp state test; do
+  for d in bin lib lib/guest cache logs os run run/daemon run/tmp state test services; do
     mkdir -p "$CAPBOX_DIR/$d" 2>/dev/null || true
   done
 }
@@ -728,23 +736,168 @@ _capbox_guest_path_in_rootfs() {
   return 1
 }
 
-# 向 bwrap 参数数组追加：对工作区内的 bin/ lib/ config.env 做 --ro-bind，防止 guest 改写 CLI
+# 向 bwrap 参数数组追加：对工作区内的 bin/ lib/ config.env / services 做 --ro-bind，
+# 防止 guest 改写 CLI 或注入宿主下次会读取的配置（含「启动时缺失」路径，见 CVE-2026-25725 同类）。
 # 用法：_capbox_append_ro_cli_binds <array_name>
+#
+# 缺失路径策略（bwrap 只能通过挂载拒绝写入）：
+#   * 文件：若受保护文件不存在，先在宿主创建空的普通文件作为挂载点，再 --ro-bind；
+#     对「本函数刚创建的空挂载点」优先 --ro-bind /dev/null，避免 guest 读到/改到宿主内容。
+#   * 目录：若 services/ 不存在则 mkdir，再整目录 --ro-bind（只读），阻止创建 *.env。
+# 不持久化攻击者内容；空挂载点由 CapBox 自己创建。符号链接无法作为挂载目标（doctor 会警告）。
+
+_capbox_note_fs_placeholder() {
+  local p="${1:-}" kind="${2:-file}"
+  local dir marker
+  [[ -n "$p" && -n "${CAPBOX_RUN_DIR:-}" ]] || return 0
+  dir="$CAPBOX_RUN_DIR/fs-placeholders"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  marker="$dir/$(printf '%s' "$p" | sha256sum | awk '{print $1}')"
+  printf '%s\t%s\n' "$kind" "$p" >"$marker" 2>/dev/null || true
+}
+
+# 清理本进程创建的空挂载点（oneshot 结束后调用；不删非空/已有真实配置）
+_capbox_cleanup_fs_placeholders() {
+  local dir marker kind path
+  dir="${CAPBOX_RUN_DIR:-}/fs-placeholders"
+  [[ -d "$dir" ]] || return 0
+  for marker in "$dir"/*; do
+    [[ -f "$marker" ]] || continue
+    kind="$(cut -f1 "$marker" 2>/dev/null || true)"
+    path="$(cut -f2- "$marker" 2>/dev/null || true)"
+    rm -f -- "$marker" 2>/dev/null || true
+    [[ -n "$path" ]] || continue
+    case "$kind" in
+      file)
+        if [[ -f "$path" && ! -L "$path" && ! -s "$path" ]]; then
+          rm -f -- "$path" 2>/dev/null || true
+        fi
+        ;;
+      dir)
+        if [[ -d "$path" && ! -L "$path" ]]; then
+          rmdir -- "$path" 2>/dev/null || true
+        fi
+        ;;
+    esac
+  done
+  rmdir -- "$dir" 2>/dev/null || true
+}
+
+# 保护单个宿主文件：已存在则 RO；缺失则预占挂载点（空文件）再 RO /dev/null
+_capbox_ro_protect_host_file() {
+  local host_file="${1:-}"
+  local -n _pf_arr="$2"
+  local guest_path parent created=0
+
+  [[ -n "$host_file" ]] || return 0
+  guest_path="$(_guest_workspace_path "$host_file")"
+  [[ -n "$guest_path" && "$guest_path" == /workspace/* ]] || return 0
+
+  parent="$(dirname -- "$host_file")"
+  if [[ ! -d "$parent" ]]; then
+    case "$parent" in
+      "${CAPBOX_DIR}" | "${CAPBOX_DIR}"/*)
+        mkdir -p "$parent" 2>/dev/null || return 0
+        ;;
+      *) return 0 ;;
+    esac
+  fi
+
+  if [[ -L "$host_file" ]]; then
+    log_warn "受保护配置路径是符号链接，无法预占只读挂载: $host_file"
+    return 0
+  fi
+  if [[ -d "$host_file" ]]; then
+    log_warn "受保护配置路径是目录，跳过文件预占: $host_file"
+    return 0
+  fi
+
+  if [[ ! -e "$host_file" ]]; then
+    if ! ( umask 077; : >"$host_file" ) 2>/dev/null; then
+      log_warn "无法为缺失配置创建挂载点: $host_file"
+      return 0
+    fi
+    created=1
+    _capbox_note_fs_placeholder "$host_file" file
+  fi
+
+  # 始终用 /dev/null 覆盖目标路径，而不是 --ro-bind 真实文件：
+  # 宿主 config_save 会用 mv 替换 inode；若 bind 的是旧 inode，daemon 长寿挂载下
+  # 新文件会重新暴露在 RW 的 /workspace 视图里（可被 guest 写入）。
+  # /dev/null 挂载钉在路径上，不受宿主侧替换影响；guest 也不需要读 config.env。
+  _pf_arr+=(--ro-bind /dev/null "$guest_path")
+}
+
+# 保护宿主目录（整树只读）：缺失则创建空目录再 RO bind
+_capbox_ro_protect_host_dir() {
+  local host_dir="${1:-}"
+  local -n _pd_arr="$2"
+  local guest_path parent
+
+  [[ -n "$host_dir" ]] || return 0
+  guest_path="$(_guest_workspace_path "$host_dir")"
+  [[ -n "$guest_path" && "$guest_path" == /workspace/* ]] || return 0
+
+  if [[ -L "$host_dir" ]]; then
+    log_warn "受保护目录是符号链接，无法只读挂载: $host_dir"
+    return 0
+  fi
+  if [[ -f "$host_dir" ]]; then
+    log_warn "受保护目录路径上存在普通文件，跳过: $host_dir"
+    return 0
+  fi
+
+  if [[ ! -d "$host_dir" ]]; then
+    parent="$(dirname -- "$host_dir")"
+    if [[ ! -d "$parent" ]]; then
+      case "$parent" in
+        "${CAPBOX_DIR}" | "${CAPBOX_DIR}"/*)
+          mkdir -p "$parent" 2>/dev/null || return 0
+          ;;
+        *) return 0 ;;
+      esac
+    fi
+    mkdir -p "$host_dir" 2>/dev/null || return 0
+    _capbox_note_fs_placeholder "$host_dir" dir
+  fi
+
+  _pd_arr+=(--ro-bind "$host_dir" "$guest_path")
+}
+
 _capbox_append_ro_cli_binds() {
   local -n _ro_arr="$1"
-  local host_path guest_path
+  local host_path guest_path cap_guest sub sub_host sub_guest
+
+  # 标准布局（…/.capbox）：整树只读，再把运行时目录 RW 挂回。
+  # 这样即使宿主在 daemon 生命周期内 rm+重建 config.env，guest 也无法在只读树上创建。
+  # CI/开发「仓库即 CAPBOX_DIR」布局不能整树只读（那会锁死整个 /workspace）。
+  if [[ -n "${CAPBOX_DIR:-}" && -d "$CAPBOX_DIR" && "$(basename -- "$CAPBOX_DIR")" == ".capbox" ]]; then
+    cap_guest="$(_guest_workspace_path "$CAPBOX_DIR")"
+    if [[ -n "$cap_guest" && "$cap_guest" == /workspace/* ]]; then
+      _ro_arr+=(--ro-bind "$CAPBOX_DIR" "$cap_guest")
+      for sub in run cache; do
+        sub_host="$CAPBOX_DIR/$sub"
+        mkdir -p "$sub_host" 2>/dev/null || true
+        [[ -d "$sub_host" ]] || continue
+        sub_guest="$(_guest_workspace_path "$sub_host")"
+        [[ -n "$sub_guest" && "$sub_guest" == /workspace/* ]] || continue
+        _ro_arr+=(--bind "$sub_host" "$sub_guest")
+      done
+      # 仍对 config.env 钉 /dev/null，避免通过已存在挂载点做内容注入的歧义
+      _capbox_ro_protect_host_file "$CAPBOX_DIR/config.env" _ro_arr
+      return 0
+    fi
+  fi
+
+  # 回退：逐项保护 bin/ lib/ config.env / services
   for host_path in "${CAPBOX_BIN_DIR:-}" "${CAPBOX_LIB_DIR:-}"; do
     [[ -n "$host_path" && -d "$host_path" ]] || continue
     guest_path="$(_guest_workspace_path "$host_path")"
     [[ -n "$guest_path" ]] || continue
     _ro_arr+=(--ro-bind "$host_path" "$guest_path")
   done
-  if [[ -e "${CAPBOX_DIR:-}/config.env" ]]; then
-    guest_path="$(_guest_workspace_path "$CAPBOX_DIR/config.env")"
-    if [[ -n "$guest_path" ]]; then
-      _ro_arr+=(--ro-bind "$CAPBOX_DIR/config.env" "$guest_path")
-    fi
-  fi
+  _capbox_ro_protect_host_file "${CAPBOX_DIR:-}/config.env" _ro_arr
+  _capbox_ro_protect_host_dir "${CAPBOX_DIR:-}/services" _ro_arr
 }
 
 json_escape() {
@@ -1699,7 +1852,47 @@ cmd_doctor() {
     _doctor_warn "跳过环境清空探测（rootfs 或 bwrap 不可用）"
   fi
 
-  # 10) daemon
+  # 10) 缺失配置路径预占（CVE-2026-25725 同类：guest 不得创建宿主会读的 config/services）
+  if rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+    local _cfg_g _svc_g _probe_out _probe_rc=0 _host_cfg _host_svc_probe
+    _cfg_g="$(_guest_workspace_path "$CAPBOX_DIR/config.env")"
+    _svc_g="$(_guest_workspace_path "$CAPBOX_DIR/services")"
+    _host_cfg="$CAPBOX_DIR/config.env"
+    _host_svc_probe="$CAPBOX_DIR/services/_doctor_probe.env"
+    if [[ -n "$_cfg_g" && "$_cfg_g" == /workspace/* && -n "$_svc_g" && "$_svc_g" == /workspace/* ]]; then
+      rm -f -- "${_host_svc_probe}.attempt" 2>/dev/null || true
+      _probe_out="$(
+        run_bwrap_oneshot /workspace 30 /bin/sh -c "
+          echo DOCTOR_INJECT > \"$_cfg_g\" 2>/tmp/cfg.err || true
+          mkdir -p \"$_svc_g\" 2>/dev/null || true
+          echo CMD=true > \"$_svc_g/_doctor_probe.env\" 2>/tmp/svc.err || true
+          if [ -f /tmp/cfg.err ]; then cat /tmp/cfg.err; fi
+          if [ -f /tmp/svc.err ]; then cat /tmp/svc.err; fi
+          # 能写通则打印 VULN
+          if [ -w \"$_cfg_g\" ] 2>/dev/null; then echo CFG_WRITABLE; fi
+          if echo x > \"$_cfg_g\" 2>/dev/null; then echo CFG_WRITE_OK; fi
+          if echo CMD=true > \"$_svc_g/_doctor_probe.env\" 2>/dev/null; then echo SVC_WRITE_OK; fi
+          echo PROBE_DONE
+        "
+      )" || _probe_rc=$?
+      if [[ -f "$_host_cfg" ]] && grep -q 'DOCTOR_INJECT' "$_host_cfg" 2>/dev/null; then
+        _doctor_fail "guest 写入了宿主 config.env（缺失/已存在路径未只读保护）"
+      elif [[ -f "$_host_svc_probe" ]]; then
+        _doctor_fail "guest 创建了宿主 services/_doctor_probe.env（services 目录未只读保护）"
+        rm -f -- "$_host_svc_probe" 2>/dev/null || true
+      elif [[ "$_probe_out" == *CFG_WRITE_OK* || "$_probe_out" == *SVC_WRITE_OK* ]]; then
+        _doctor_fail "guest 可写受保护配置路径（probe out=${_probe_out:-<empty>}）"
+      else
+        _doctor_pass "配置路径预占生效（缺失/已存在的 config.env 与 services/ 均不可被 guest 写入）"
+      fi
+    else
+      _doctor_warn "跳过配置预占探测（CAPBOX_DIR 不在工作区视图内）"
+    fi
+  else
+    _doctor_warn "跳过配置预占探测（rootfs 或 bwrap 不可用）"
+  fi
+
+  # 11) daemon
   if _probe_daemon; then
     _doctor_pass "守护容器运行中 (pid $(_daemon_json_field pid))"
   else
