@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T36-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T37-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -258,7 +258,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh
 bash test/selftest/run-selftest.sh
 
 # 验收用例（需 bubblewrap；首次会 init alpine）
-./test/run.sh                  # T01–T36
+./test/run.sh                  # T01–T37
 ./test/run.sh T21 T22            # 安全边界 + 自动脚手架
 CAPBOX_TEST_SLOW=1 ./test/run.sh T19   # ubuntu 慢测
 CAPBOX_TEST_DAEMON=1 ./test/run.sh T15 T16  # 需先后台 capbox up
