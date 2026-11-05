@@ -1,0 +1,17 @@
+# 运行时产物 —— 首次 `capbox init` 生成，不进仓库
+/os/
+/cache/
+/run/
+/state/
+/logs/
+/config.env
+
+# 内部团队文档（不公开）
+/CONTRACT.md
+
+# 测试临时区
+/test/tmp/
+
+# 编辑器 / 系统
+.DS_Store
+*.swp
