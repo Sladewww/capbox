@@ -54,6 +54,12 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 - Contributing / pitfalls: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 
+## Network / recipe / resources
+
+- `CAPBOX_NET=none|restricted|open`（`host`=`open`）。`restricted` 需 `CAPBOX_NET_ALLOW` + python3/nsenter；原始网络被 unshare，仅代理出站。
+- `capbox recipe apply`：KEY=value only，never source.
+- Resource limits prefer cgroup v2; otherwise WARN (no fake enforcement).
+
 ## Residual risk
 
 - Project workspace is RW at `/workspace` by design — treat its contents as trusted.

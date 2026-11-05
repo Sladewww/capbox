@@ -10,7 +10,7 @@ assert_rc 0 "--help 退出码"
 assert_out_contains "capbox" "--help 提到 capbox"
 
 # 契约 §3.1 命令表里的命令应全部出现在帮助里
-for c in bootstrap init status exec shell cp pkg up down ls ps logs doctor distros config clean; do
+for c in bootstrap init status exec shell cp pkg up down ls ps logs doctor distros config recipe clean; do
   assert_out_contains "$c" "--help 列出命令"
 done
 

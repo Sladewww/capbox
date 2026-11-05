@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T22-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T25-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -17,6 +17,48 @@ AI agent 经常需要「只有 root 才能做」的事：装系统包、改 `/et
 
 CapBox 用 `bwrap`（bubblewrap）+ user namespace：把 `os/<distro>/` bind 成容器的 `/`，
 容器内 `id -u` 为 0 且 capability 全量；工作区挂到 `/workspace`。适合已经跑在外层沙箱里的 coding agent。
+
+## 网络三档（CAPBOX_NET）
+
+| 模式 | 行为 | 说明 |
+|------|------|------|
+| `open`（别名 `host`） | 共享宿主网络 | **默认**；与历史行为一致 |
+| `none` | `bwrap --unshare-net` | 容器内无网络 |
+| `restricted` | `--unshare-net` + 域名 allowlist HTTP 代理 | **不假装** bwrap 能过滤域名。原始 TCP/UDP 无路由；仅尊重 `http(s)_proxy` 的客户端可出站 |
+
+`restricted` 前置：`python3`、`nsenter`（util-linux）、非空 `CAPBOX_NET_ALLOW`（逗号分隔域名/IP）。
+
+```sh
+capbox config set CAPBOX_NET restricted
+capbox config set CAPBOX_NET_ALLOW 'pypi.org,files.pythonhosted.org,mirrors.aliyun.com'
+capbox exec -- curl -I https://pypi.org/
+capbox exec --net none -- curl -I https://example.com/   # 仅本次覆盖为无网
+```
+
+## 声明式配方（recipe）
+
+项目根目录放 `capbox.recipe`（纯 `KEY=value`，**不会被 source**）：
+
+```sh
+DISTRO=alpine
+NET=restricted
+NET_ALLOW=mirrors.aliyun.com,pypi.org
+MEMORY_MAX=512M
+PIDS_MAX=256
+CPU_MAX=50%
+PACKAGES=curl,git
+```
+
+```sh
+capbox recipe apply              # 写 config → 按需 init → pkg install
+capbox recipe show
+```
+
+## 资源限额
+
+`CAPBOX_MEMORY_MAX` / `CAPBOX_CPU_MAX` / `CAPBOX_PIDS_MAX`：优先 cgroup v2。
+若环境无 cgroup 委派，**会明确 WARN**，不会谎称已限制；内存可降级为 `prlimit` 的 `RLIMIT_AS`（近似）。**不会**用按 UID 全局生效的 `RLIMIT_NPROC` 冒充 PIDs 限额。
+
 
 ## 安装
 
