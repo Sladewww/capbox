@@ -14,11 +14,14 @@ assert_file_absent /tmp/.capbox-idmap-probe "探测前无固定 /tmp/.capbox-idm
 run_cmd "$CAPBOX_BIN" doctor
 assert_rc 0 "doctor 退出码"
 assert_file_absent /tmp/.capbox-idmap-probe "doctor 后无固定 probe 文件残留"
-assert_out_not_matches 'PermissionError' "doctor 无 PermissionError"
+# 单 UID 回退 WARN 的详情里会合法出现 PermissionError 字样；只禁止未捕获回溯/sticky probe
+assert_out_not_matches 'Traceback \(most recent call last\)' "doctor 无 Python Traceback"
+assert_out_not_matches 'PermissionError.*/tmp/\.capbox-idmap-probe' "doctor 无 sticky probe PermissionError"
 run_cmd "$CAPBOX_BIN" doctor
 assert_rc 0 "doctor 第二次仍成功（无私有 tmp 冲突）"
 assert_file_absent /tmp/.capbox-idmap-probe "第二次 doctor 后仍无固定 probe 文件"
-assert_out_not_matches 'PermissionError' "第二次 doctor 无 PermissionError"
+assert_out_not_matches 'Traceback \(most recent call last\)' "第二次 doctor 无 Python Traceback"
+assert_out_not_matches 'PermissionError.*/tmp/\.capbox-idmap-probe' "第二次 doctor 无 sticky probe PermissionError"
 if printf '%s' "${RUN_STDOUT}${RUN_STDERR}" | grep -q 'UID 映射 multi'; then
   _ok "doctor 报告 multi"
 elif printf '%s' "${RUN_STDOUT}${RUN_STDERR}" | grep -qE 'UID 映射 (single|不可用|被阻塞)|UID 映射不可用'; then

@@ -89,7 +89,11 @@ jobs:
 
       - name: Make failure logs readable
         if: failure()
-        run: sudo find test/tmp -type d -exec chmod u+rwx {} + -o -type f -exec chmod u+rw {} +
+        run: |
+          # rootfs 暂存目录里会有 chrony 等 0700 目录；放宽后才能上传 cases 日志
+          sudo chmod -R a+rX test/tmp 2>/dev/null || true
+          sudo find test/tmp -type d -exec chmod a+rwx {} + 2>/dev/null || true
+          sudo find test/tmp -type f -exec chmod a+rw {} + 2>/dev/null || true
 
       - name: Upload test tmp on failure
         if: failure()

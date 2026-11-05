@@ -27,18 +27,23 @@ CAPBOX_TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 仓库布局兼容：
 #   A) 测试在 .capbox/test/ → CAPBOX_DIR=.capbox，工作区=其父目录
 #   B) 测试在 repo/test/ 且存在 repo/.capbox → CAPBOX_DIR=repo/.capbox，工作区=repo
-#   C) 旧式「仓库即状态」→ CAPBOX_DIR=repo
+#   C) 旧式「仓库即状态」→ CAPBOX_DIR=repo，工作区=repo
+#      （与 bin/capbox、lib/common.sh 一致；禁止 dirname 成父目录，
+#       否则 T09/T30/T32 会把文件写到未 bind 进容器的宿主路径。）
 _capbox_test_repo="$(cd "$CAPBOX_TEST_DIR/.." && pwd)"
 if [ "$(basename "$CAPBOX_TEST_DIR")" = "test" ] && [ "$(basename "$_capbox_test_repo")" = ".capbox" ]; then
   CAPBOX_DIR="$_capbox_test_repo"
-  CAPBOX_TEST_WS="$(dirname "$CAPBOX_DIR")"
+  _capbox_default_ws="$(dirname "$CAPBOX_DIR")"
 elif [ -d "$_capbox_test_repo/.capbox/lib" ] || [ -e "$_capbox_test_repo/.capbox/bin/capbox" ]; then
   CAPBOX_DIR="$_capbox_test_repo/.capbox"
-  CAPBOX_TEST_WS="$_capbox_test_repo"
+  _capbox_default_ws="$_capbox_test_repo"
 else
   CAPBOX_DIR="$_capbox_test_repo"
-  CAPBOX_TEST_WS="$(dirname "$CAPBOX_DIR")"
+  _capbox_default_ws="$CAPBOX_DIR"
 fi
+# 允许 CI/调用方预先 export CAPBOX_TEST_WS；未设置时用布局默认值
+: "${CAPBOX_TEST_WS:=$_capbox_default_ws}"
+unset _capbox_default_ws
 # 优先用仓库根/模板上的 bin（开发树）；否则用状态树内 bin
 if [ -z "${CAPBOX_TEST_BIN:-}" ]; then
   if [ -x "$_capbox_test_repo/bin/capbox" ]; then
