@@ -168,20 +168,6 @@ CAPBOX_TEST_DAEMON=1 ./test/run.sh T15 T16  # 需先后台 capbox up
 
 GitHub Actions：见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。推送后可在仓库 Actions 页查看运行结果。
 
-## 演示 GIF
-
-演示源文件在 [`docs/assets/`](docs/assets/) 和 [`docs/tapes/`](docs/tapes/)；生成脚本会产出两个 GIF。当前仓库未附带二进制 GIF，可用下面命令本地生成。有 [vhs](https://github.com/charmbracelet/vhs) 时：
-
-```sh
-vhs docs/tapes/quickstart.tape
-```
-
-否则：
-
-```sh
-bash docs/assets/render-demo-gifs.sh   # 需要 Pillow + ffmpeg
-```
-
 ## 常见问题
 
 **装包时一堆 `chown ... Invalid argument`？**  
