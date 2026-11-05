@@ -62,7 +62,11 @@ capbox recipe show
 - `warn`（默认）：无 cgroup 委派时 **WARN**；内存可降级为 `prlimit` 的 `RLIMIT_AS`（**近似，不是** `memory.max`）。
 - `require`（fail-closed）：任一已配置限额无法按 cgroup/精确机制兑现则 **硬失败**。
 
-**不会**用 `RLIMIT_NPROC` 冒充 PIDs。`DISK_MAX` 需要可写 `/dev/loop-control`；否则 `metrics`/`doctor` 明确 `unavailable`，绝不假装已限额。
+`CAPBOX_CGROUP_ROOT`（可选）：显式指定已委派的 cgroup v2 **空父目录**（子 cgroup 须能出现 `memory.max`/`cpu.max`/`pids.max`）。指定后严格使用该路径，不会回退其它候选；不可写或缺控制器时明确失败。`require` 下 fail-closed；即使 `warn` 也不会在该覆盖失败时悄悄降级 `prlimit`。不要用 `CAPBOX_RUN_DIR` 指定 cgroup（会被运行时覆盖）。WSL 上可在用户切片下预建例如 `.../user@UID.service/capbox-parent`，先 `echo +cpu +memory +pids > cgroup.subtree_control`，再导出 `CAPBOX_CGROUP_ROOT` 指向它。
+
+**不会**用 `RLIMIT_NPROC` 冒充 PIDs。
+
+`CAPBOX_DISK_MAX`（例 `64M`）：在能 `losetup` + `mkfs.ext4` + `mount` 时兑现——把稀疏镜像挂成 ext4，经 `mount --bind -o rw` 的私有 rootfs 树挂到 guest **`/var/lib/capbox-data`**（可用 `CAPBOX_DISK_GUEST_PATH` 覆盖），再 `bwrap --bind` 该树。**不**把宿主块设备当配额盘塞进 guest；限额**只**覆盖该路径，不含整个 rootfs 或 `/workspace`。需要宿主授权（root，或 `sudo -n` / 等价 mount 能力），**不是** rootless。否则 `metrics`/`doctor` 明确 `unavailable`，`require` 模式硬失败，绝不假装已限额。
 
 ## 安全档（CAPBOX_SECURITY_PROFILE）
 

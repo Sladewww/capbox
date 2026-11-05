@@ -582,6 +582,11 @@ _init_finalize() {
 
   run_bootstrap "$distro" || true
 
+  # 预构建数字 uid 降权 helper（BusyBox alpine 无 GNU setpriv/python 时必需）
+  if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1; then
+    _idmap_ensure_drop_priv_helper || log_warn "drop-priv helper 未就绪（${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-unknown}）；exec --uid 可能失败"
+  fi
+
   local bytes
   bytes="$(dir_bytes "$rootfs")"
   log_info "完成: $rootfs（$(human_bytes "$bytes")）"

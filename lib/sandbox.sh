@@ -231,13 +231,21 @@ EOF
   local cmdstr
   cmdstr="$(join_cmd_str "${cmd[@]}")"
 
-  # daemon 模式无法改 bwrap --uid（容器已启动）；在命令前用 python 降权
+  # daemon 模式无法改 bwrap --uid（容器已启动）；优先静态 drop helper，再 python
   if (( use_daemon == 1 )) && [[ -n "${CAPBOX_EXEC_UID_OVERRIDE:-}" ]]; then
     local _du="${CAPBOX_EXEC_UID_OVERRIDE}" _dg="${CAPBOX_EXEC_GID_OVERRIDE:-$_du}"
-    local _qcmd _py
+    local _qcmd _py _helper
     _qcmd="$(_shq "$cmdstr")"
-    _py=$(printf 'import os,sys\nos.setgid(%s)\ntry:\n os.setgroups([%s])\nexcept Exception:\n pass\nos.setuid(%s)\nos.execvp("/bin/sh",["sh","-c",sys.argv[1]])' "$_du" "$_dg" "$_du")
-    cmdstr="python3 -c $(_shq "$_py") ${_qcmd}"
+    if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1; then
+      _idmap_ensure_drop_priv_helper || true
+    fi
+    _helper="/usr/libexec/capbox-drop-priv"
+    if [[ -n "${CAPBOX_ROOTFS:-}" && -x "${CAPBOX_ROOTFS}${_helper}" ]]; then
+      cmdstr="$(_shq "$_helper") ${_du} ${_dg} /bin/sh -c ${_qcmd}"
+    else
+      _py=$(printf 'import os,sys\nos.setgid(%s)\ntry:\n os.setgroups([%s])\nexcept Exception:\n pass\nos.setuid(%s)\nos.execvp("/bin/sh",["sh","-c",sys.argv[1]])' "$_du" "$_dg" "$_du")
+      cmdstr="python3 -c $(_shq "$_py") ${_qcmd}"
+    fi
   fi
 
   if (( use_daemon == 1 )); then
