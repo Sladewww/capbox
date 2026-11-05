@@ -42,6 +42,12 @@ bash test/run.sh                     # real CLI (needs bwrap)
 bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 ```
 
+## Release safety
+
+- `bin/capbox`, `test/run.sh`, `test/selftest/run-selftest.sh`, and `test/selftest/fake-cli/capbox` must be committed as Git mode `100755`.
+- Content-only file upload APIs create `100644` entries and are unsafe for these scripts. Verify `git ls-files -s` and a fresh clone before release.
+- CI deliberately invokes entry points directly; do not replace that with `bash <script>` or add a checkout `chmod` workaround.
+
 ## Docs
 
 - Agent handbook: [`skill/SKILL.md`](skill/SKILL.md)
