@@ -68,7 +68,13 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 
 ## Residual risk
 
-- Project workspace is RW at `/workspace` by design — treat its contents as trusted.
+- Project workspace is RW at `/workspace` by design — treat its contents as trusted (use `FS_HIDE` / untrusted profile for sensitive subpaths).
 - `bin/` / `lib/` / `config.env` are `--ro-bind`; other project files the host may execute later are not.
-- No seccomp; guest has full capabilities inside the user namespace.
+- Default profile is `compat` (full caps, no seccomp). Use `CAPBOX_SECURITY_PROFILE=untrusted|strict` for explicit hardening; multi-UID idmap skips `--disable-userns` (bwrap incompatibility).
+- cgroup/disk limits need host delegation/loop privileges; otherwise CapBox WARNs or fail-closes — it does not fake enforcement.
 - Mirror reachability depends on the network (`doctor` reports it; override with `CAPBOX_MIRROR_*`).
+
+## Hardening / observability / reproducibility
+
+- Security profiles, FS hide/bind, snapshots, image export/import, audit JSONL, metrics: see README.
+- Service `.env` may include `READY_*`, `HEALTH_*`, `RESTART*`, `DEPENDS_ON`, `STOP_TIMEOUT`, `PUBLISH`.

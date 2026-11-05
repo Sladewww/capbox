@@ -18,3 +18,6 @@
 
 __pycache__/
 *.pyc
+
+# 项目状态树（bootstrap/init 生成）
+.capbox/

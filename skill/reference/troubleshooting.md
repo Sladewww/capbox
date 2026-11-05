@@ -178,3 +178,39 @@ rootfs 是工作区里的真实目录，会占工作区空间。
 ```
 
 `clean --all` 不可逆，删之前确认没有还需要的东西放在 rootfs 里 —— 产物应该在 `/workspace`。
+
+---
+
+## 安全档 untrusted/strict 启动失败
+
+1. 看是否缺 `python3` / `libseccomp`（`seccomp-gen.py` 必须能导出真实 BPF；**不会**伪实现）。
+2. 多 UID（`CAPBOX_IDMAP=auto/on` 且 multi）时，bwrap **不能**同时用 `--disable-userns` 与 `--userns-block-fd`。CapBox 会跳过 `disable-userns` 并在 doctor 标明该 Linux 边界。
+3. `strict` 默认倾向 rootfs 只读；若 overlay 探测失败，写入 `/` 会失败，可改 `CAPBOX_ROOTFS_RO=0` 或回到 `untrusted`/`compat`。
+
+验证：
+
+```sh
+capbox exec --profile untrusted -- sh -c 'mount -t tmpfs none /mnt; echo RC=$?'
+# 期望 permission denied / RC=32
+```
+
+---
+
+## 资源限额 WARN / require 失败
+
+`capbox metrics` 查看 `cgroup_status`：
+
+- `denied`：有 cgroup v2 但当前用户不能建子目录（无委派）。`warn` 模式 MEMORY 可能降级 prlimit（近似）；`require` 模式硬失败。
+- `DISK_MAX` 需要可写 `/dev/loop-control`；否则明确 `unavailable`，不会假装限额。
+
+---
+
+## FS_BINDS 被拒绝
+
+只允许把 **工作区内部** 路径 bind 进容器。`host:/guest:ro|rw` 中 host 经解析后必须落在 `CAPBOX_WORKSPACE` 下，禁止 `..` 与工作区外路径（例如 `/etc/passwd`）。
+
+---
+
+## 审计里看不到完整命令
+
+默认 `CAPBOX_AUDIT=summary` 只记 argv0 + 参数个数，并脱敏 `password=` / Bearer。需要排障可设 `CAPBOX_AUDIT=full` 与 `CAPBOX_AUDIT_CMD=full`（仍会做基础脱敏）。

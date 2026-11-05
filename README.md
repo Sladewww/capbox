@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T29-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T36-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -56,8 +56,35 @@ capbox recipe show
 
 ## 资源限额
 
-`CAPBOX_MEMORY_MAX` / `CAPBOX_CPU_MAX` / `CAPBOX_PIDS_MAX`：优先 cgroup v2。
-若环境无 cgroup 委派，**会明确 WARN**，不会谎称已限制；内存可降级为 `prlimit` 的 `RLIMIT_AS`（近似）。**不会**用按 UID 全局生效的 `RLIMIT_NPROC` 冒充 PIDs 限额。
+`CAPBOX_MEMORY_MAX` / `CAPBOX_CPU_MAX` / `CAPBOX_PIDS_MAX` / `CAPBOX_DISK_MAX`：优先 cgroup v2（`memory.max` / `cpu.max` / `pids.max` / `io.max`）。
+`CAPBOX_RESOURCES_MODE=warn|require`：
+
+- `warn`（默认）：无 cgroup 委派时 **WARN**；内存可降级为 `prlimit` 的 `RLIMIT_AS`（**近似，不是** `memory.max`）。
+- `require`（fail-closed）：任一已配置限额无法按 cgroup/精确机制兑现则 **硬失败**。
+
+**不会**用 `RLIMIT_NPROC` 冒充 PIDs。`DISK_MAX` 需要可写 `/dev/loop-control`；否则 `metrics`/`doctor` 明确 `unavailable`，绝不假装已限额。
+
+## 安全档（CAPBOX_SECURITY_PROFILE）
+
+| 档 | 行为 |
+|----|------|
+| `compat`（默认） | 不削弱现有兼容：全量 capability、无 seccomp |
+| `untrusted` | capability drop + **真实** seccomp BPF（libseccomp）+ 遮盖 `.ssh` 等；多 UID idmap 时跳过 `--disable-userns`（与 `userns-block-fd` 不兼容，属 Linux/bwrap 边界） |
+| `strict` | 更严 seccomp；默认倾向 `ROOTFS_RO=1`（overlay 可用时写 upper） |
+
+`capbox exec --profile untrusted -- …` 可单次覆盖。负向测试见 T30。
+
+## 文件系统与快照
+
+- `CAPBOX_FS_HIDE=rel,…`：相对 `/workspace` 的路径用 tmpfs 遮盖
+- `CAPBOX_FS_BINDS=host:/guest:ro|rw`：**仅允许工作区内** host 路径，拒绝任意宿主 bind / `..` 逃逸
+- `CAPBOX_ROOTFS_RO=1`：只读根；overlay 实测通过才启用可写层
+- `capbox snapshot create|restore` / `capbox image export|import`：tar `--numeric-owner` + SHA256；import 默认旁路不破坏现有 rootfs
+
+## 可观测性
+
+- `CAPBOX_AUDIT=off|summary|full`：JSONL 写入 `.capbox/logs/audit.jsonl`（命令默认可摘要，脱敏 password/token）
+- `capbox audit tail|path|clear`、`capbox metrics [--json]`：真实 cgroup/disk/服务状态，无假数据
 
 
 ## 安装
@@ -227,7 +254,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh
 bash test/selftest/run-selftest.sh
 
 # 验收用例（需 bubblewrap；首次会 init alpine）
-./test/run.sh                  # T01–T29
+./test/run.sh                  # T01–T36
 ./test/run.sh T21 T22            # 安全边界 + 自动脚手架
 CAPBOX_TEST_SLOW=1 ./test/run.sh T19   # ubuntu 慢测
 CAPBOX_TEST_DAEMON=1 ./test/run.sh T15 T16  # 需先后台 capbox up

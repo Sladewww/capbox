@@ -62,6 +62,9 @@ def host_allowed(host: str, allow: Iterable[str]) -> bool:
             continue
         except ValueError:
             pass
+        # 域名规则至少含一个点，避免把 "com" 当成后缀放行 evil.com
+        if "." not in a:
+            continue
         if host == a or host.endswith("." + a):
             return True
     return False
