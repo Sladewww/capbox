@@ -546,6 +546,13 @@ _init_finalize() {
     die 1 "rootfs 不完整（缺可执行 /bin/sh）: $rootfs"
   fi
 
+  # 幂等 init 也必须补齐 config.env（之前只有 distro 变化时才写文件）。
+  # 已有文件保持用户配置；缺失时按当前生效值落盘。
+  if [[ ! -f "$CAPBOX_DIR/config.env" ]]; then
+    CAPBOX_DISTRO="$distro"
+    config_save || return 1
+  fi
+
   # 切换配置里的 distro：幂等路径与解包路径都必须经过这里，
   # 否则 `init --distro ubuntu` 会退出 0 但 config 仍停在旧发行版。
   if [[ "$(config_get DISTRO 2>/dev/null | tr -d '\n')" != "$distro" ]]; then
