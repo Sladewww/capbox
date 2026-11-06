@@ -7,11 +7,30 @@ SKILL.md 只留了指针。这里是"要做一个具体东西"的成套步骤。
 
 ## 起一个长期服务（nginx / python / 任意 daemon）
 
-这是唯一需要常驻容器的场景。核心问题不是"怎么起服务"，是"进程的父进程必须活过单次工具调用"。
+首选 `capbox service`。它是独立的 bwrap，不依赖 `capbox up`，工具调用结束也不会把它杀掉。
 
-### 首选：daemon 容器 + 容器内后台化
+```sh
+mkdir -p .capbox/services
+.capbox/bin/capbox pkg install nginx
+cat > .capbox/services/nginx.env <<'ENV'
+CMD='nginx -g "daemon off;"'
+CWD=/
+READY_TCP=127.0.0.1:80
+READY_TIMEOUT=15
+RESTART=on-failure
+ENV
+.capbox/bin/capbox service start nginx
+.capbox/bin/capbox service status nginx
+.capbox/bin/capbox service logs nginx -n 30
+```
 
-服务挂在**守护容器**的进程树上。守护容器由 DSH background job 托管，所以客户端 `exec` 调用结束、后续多次独立工具调用，都不影响它。
+**完成判据**：`service status` 显示 running，日志里没有立刻退出。停这一个用 `service stop nginx`。`capbox down` 停的是守护容器，不停这个服务。
+
+网络跟全局 `CAPBOX_NET` 走。`init --agent` 之后全局是 `restricted`，宿主 `curl 127.0.0.1` 连不上这个服务自己的网络命名空间。要给宿主回环访问，只在这份 `.env` 里写 `NET=open`，或写 `PUBLISH=18080:80` 再 curl 宿主端口。不要为了这一个服务把全局 `CAPBOX_NET` 改成 `open`。
+
+### 多次 `exec --daemon` 要共享同一台机时
+
+这时才先起守护容器。服务挂在守护容器的进程树上，所以客户端 `exec` 结束不影响它。
 
 完整序列，四步都要走：
 
@@ -51,9 +70,9 @@ sleep 1
 - **必须先 `up` 且确认 running**，否则 `exec --daemon` 返回 3，服务根本没起。
 - **`capbox down` 会连服务一起杀**（服务就在守护容器的进程树里）。`down` 不是"关个 shell"，是"停整台机"。只想停单个服务用 `pkill`。
 
-**端口可达性**：先用容器内自测（`exec --daemon -- curl localhost:PORT`）——这条永远成立。
-`CAPBOX_NET=host`（默认）时容器不隔离网络命名空间，宿主 `127.0.0.1:PORT` 通常也能直连；
-`CAPBOX_NET=none` 时 `--unshare-net` 生效，**两边都不通**，此时任何 curl 失败都不是服务的问题，先去 `capbox config list` 看网络模式。
+**端口可达性**：先用容器内自测（`exec --daemon -- curl localhost:PORT`）。
+`CAPBOX_NET=open`/`host` 时宿主 `127.0.0.1:PORT` 通常也能直连。
+`none` 和 `restricted` 都做了 `--unshare-net`，宿主 curl 失败先看 `capbox config list`，不要把全局网络改成 `open` 来“修好”。
 
 ### 备选：background job 前台跑服务
 
@@ -68,19 +87,40 @@ service 进程就是这个 job 的前台进程。验证方式同上。代价：�
 
 ### 停服务
 
+`capbox service` 起的，用 `service stop NAME`。挂在守护容器里的进程才用下面两条：
+
 ```sh
-.capbox/bin/capbox exec --daemon -- sh -c 'pkill nginx'   # 只停这一个服务
+.capbox/bin/capbox exec --daemon -- sh -c 'pkill nginx'   # 只停守护容器里的这一个
 .capbox/bin/capbox down                                    # 停整台机，容器内所有进程一起没
 ```
 
-**`down` 会杀掉容器内全部进程，包括你起的服务**。这是最常见的误判：以为 `down` 只是关掉一个壳。
-只想停单个服务用 `pkill`；确认整台机不再需要，再 `down`。
+**`down` 会杀掉守护容器内全部进程**。它不停 `capbox service` 起的独立进程。确认整台机不再需要，再 `down`。
 
 **完成判据**：容器内 `curl localhost:PORT` 失败、`ps` 对应进程归零。
 
 ---
 
 ## Python HTTP 服务（最常用的临时服务）
+
+和上面一样，优先 `service`，不先 `up`。`NET=open` 只写在这个服务上，方便宿主 curl；全局网络保持 `init --agent` 的 `restricted`。
+
+```sh
+.capbox/bin/capbox pkg install python3
+mkdir -p .capbox/services
+cat > .capbox/services/http.env <<'ENV'
+CMD='python3 -m http.server 8000 --bind 127.0.0.1'
+CWD=/workspace
+READY_TCP=127.0.0.1:8000
+NET=open
+ENV
+.capbox/bin/capbox service start http
+curl -fsS --max-time 5 http://127.0.0.1:8000/ | head -3
+.capbox/bin/capbox service stop http
+```
+
+**完成判据**：宿主 `curl` 返回 HTML。`CWD=/workspace` 让列出的文件就是工作区。
+
+要和别的 `exec --daemon` 共享同一台机时，再用守护容器：
 
 ```sh
 .capbox/bin/capbox up                                  # ① background job，仅此一条

@@ -18,8 +18,10 @@ _image_sha256_file() {
   sha256sum "$1" | awk '{print $1}'
 }
 
-# 解包到 dest。用 Python data filter 拒绝绝对路径、.. 和指向包外的链接。
-# 保留数字属主（非 root 时内核仍会忽略 chown）。
+# 解包到 dest。以 data filter 为底：拒绝绝对成员名、..、特殊文件、
+# 以及解析后落到目标目录外的链接。rootfs 里常见的绝对符号链接
+# （例如 usr/sbin/add-shell → /bin/busybox）只保存链接文本，允许留下；
+# 带 .. 的绝对目标、绝对硬链接仍然拒绝。没有 data filter 的 Python 直接失败。
 _image_extract_archive() {
   local arch="${1:-}" dest="${2:-}" tarpath="$1" tmp="" rc=0
   [[ -n "$arch" && -n "$dest" && -d "$dest" && ! -L "$dest" ]] || return 1
@@ -37,14 +39,56 @@ _image_extract_archive() {
   fi
   rc=0
   python3 - "$tarpath" "$dest" <<'PY' || rc=$?
-import inspect, sys, tarfile
+import inspect, os, sys, tarfile
 src, dest = sys.argv[1], sys.argv[2]
 sig = inspect.signature(tarfile.TarFile.extractall)
-if "filter" not in sig.parameters:
+if "filter" not in sig.parameters or not hasattr(tarfile, "data_filter"):
     sys.stderr.write("python tarfile has no data filter; refusing extract\n")
     sys.exit(1)
+
+def _guest_absolute_symlink(link):
+    if not link or "\0" in link or "\\" in link or not link.startswith("/"):
+        return False
+    return ".." not in link.split("/")
+
+# 绝对符号链接若在 extractall 中途落盘，后面的相对链接会被 realpath 跟出 dest。
+# 先跳过，等其余成员都通过 data filter 后再按原链接文本创建。
+deferred = []
+
+def capbox_filter(member, dest_path):
+    if member.issym() and _guest_absolute_symlink(member.linkname):
+        shadow = member.replace(linkname=".", deep=False)
+        filtered = tarfile.data_filter(shadow, dest_path)
+        deferred.append((filtered.name, member.linkname))
+        return None
+    return tarfile.data_filter(member, dest_path)
+
+def _inside(path, root):
+    path = os.path.realpath(path, strict=os.path.ALLOW_MISSING)
+    root = os.path.realpath(root, strict=os.path.ALLOW_MISSING)
+    return path == root or path.startswith(root + os.sep)
+
 with tarfile.open(src, "r:*") as tf:
-    tf.extractall(dest, numeric_owner=True, filter="data")
+    tf.extractall(dest, numeric_owner=True, filter=capbox_filter)
+for name, link in deferred:
+    parent = os.path.dirname(name)
+    cur = dest
+    if parent:
+        for part in parent.split("/"):
+            if part in ("", ".", ".."):
+                sys.stderr.write("refusing symlink path %s\n" % name)
+                sys.exit(1)
+            cur = os.path.join(cur, part)
+            if os.path.islink(cur) or not _inside(cur, dest):
+                sys.stderr.write("refusing symlink path %s\n" % name)
+                sys.exit(1)
+            if not os.path.isdir(cur):
+                os.mkdir(cur)
+    path = os.path.join(dest, name)
+    if os.path.lexists(path) or not _inside(path, dest):
+        sys.stderr.write("refusing symlink path %s\n" % name)
+        sys.exit(1)
+    os.symlink(link, path)
 PY
   [[ -n "$tmp" ]] && rm -f -- "$tmp"
   return "$rc"

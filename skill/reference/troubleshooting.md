@@ -136,7 +136,7 @@ ls .capbox/run/daemon/               # daemon.json / req/ / out/ 是否在
 .capbox/bin/capbox config list          # CAPBOX_NET 是否为 none
 ```
 
-`CAPBOX_NET=none` 时容器被 `--unshare-net`，**没有网络是预期行为**。需要网络就设回 `host`。
+`CAPBOX_NET=none` 时容器被 `--unshare-net`，没有网络是预期。`restricted`（`init --agent` 的档）同样没有原始路由：先看 `CAPBOX_NET_ALLOW` 是否盖住目标主机和端口（没写端口只有 80/443；非 global 地址，含 CGNAT `100.64.0.0/10` 和 IPv4-mapped，默认拒绝）。不要为了排障把 `CAPBOX_NET` 改成 `open`。只有这次任务就是要共享宿主网络时，才改。
 
 ---
 
@@ -185,7 +185,7 @@ rootfs 是工作区里的真实目录，会占工作区空间。
 
 1. 看是否缺 `python3` / `libseccomp`（`seccomp-gen.py` 必须能导出真实 BPF；**不会**伪实现）。
 2. 多 UID（`CAPBOX_IDMAP=auto/on` 且 multi）时，bwrap **不能**同时用 `--disable-userns` 与 `--userns-block-fd`。CapBox 会跳过 `disable-userns` 并在 doctor 标明该 Linux 边界。
-3. `strict` 默认倾向 rootfs 只读；若 overlay 探测失败，写入 `/` 会失败，可改 `CAPBOX_ROOTFS_RO=0` 或回到 `untrusted`/`compat`。
+3. 用户没有显式写过 `ROOTFS_RO` 时，`strict` 默认 `ROOTFS_RO=1`。overlay 探测失败则写入 `/` 失败，可 `capbox config set CAPBOX_ROOTFS_RO 0`，或回到 `untrusted`/`compat`。
 
 验证：
 
@@ -202,7 +202,7 @@ capbox exec --profile untrusted -- sh -c 'mount -t tmpfs none /mnt; echo RC=$?'
 
 - `denied`：有 cgroup v2 但当前用户不能建子目录，或子 cgroup 无控制器接口（例如进程所在 scope 上写 `subtree_control` 得到 EBUSY）。`warn` 模式 MEMORY 可能降级 prlimit（近似）；`require` 模式硬失败。
 - 可设 `CAPBOX_CGROUP_ROOT` 指向已启用 cpu/memory/pids 的空父 cgroup；该覆盖失败时不 silently 降级 prlimit。
-- `DISK_MAX` 需要能建立 loop+ext4 并 `mount`（通常 root 或 `sudo -n`；可写 `/dev/loop-control` 不够时仍要 mount 能力）。成功时配额盘在 guest `/var/lib/capbox-data`。否则明确 `unavailable`，`require` 硬失败，不会假装限额。这不是无特权方案。
+- `DISK_MAX` 需要能建立 loop+ext4 并 `mount`（root 或 `sudo -n`；可写 `/dev/loop-control` 不够）。镜像在 `.capbox/state/disk/`，只把 `mnt` bind 到 guest `/var/lib/capbox-data`，不改 rootfs 挂载。否则明确 `unavailable`，`require` 硬失败。卸载失败会留下该目录，不要对仍挂着的 `mnt` 做 `rm`。
 
 ---
 
