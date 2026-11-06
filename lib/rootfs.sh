@@ -280,6 +280,74 @@ extract_rootfs() {
 
 # ---------- 3. 镜像源注入 -----------------------------------------------------
 
+# 逐级创建目录，遇到符号链接就停。不使用 mkdir -p（它会跟着链接走）。
+_rootfs_prepare_parent() {
+  local parent="${1:-}"
+  [[ "$parent" == /* ]] || return 1
+  local IFS=/
+  local -a parts=()
+  read -r -a parts <<< "${parent#/}"
+  local cur="" p
+  for p in "${parts[@]}"; do
+    [[ -n "$p" && "$p" != "." && "$p" != ".." ]] || {
+      log_err "拒绝 rootfs 路径中的 . 或 ..: $parent"
+      return 1
+    }
+    cur="${cur}/${p}"
+    if [[ -L "$cur" ]]; then
+      log_err "拒绝跟随符号链接: $cur"
+      return 1
+    fi
+    if [[ -d "$cur" ]]; then
+      continue
+    fi
+    if [[ -e "$cur" ]]; then
+      log_err "路径组件不是目录: $cur"
+      return 1
+    fi
+    mkdir -- "$cur" || return 1
+    if [[ -L "$cur" || ! -d "$cur" ]]; then
+      log_err "拒绝跟随符号链接: $cur"
+      return 1
+    fi
+  done
+  [[ -d "$parent" && ! -L "$parent" ]] || return 1
+}
+
+# 从 stdin 写文件。祖先里的符号链接直接失败。
+# mv -T 替换最后一级符号链接，不会把内容写进链接目标。
+_rootfs_write_file() {
+  local dest="${1:-}"
+  [[ "$dest" == /* ]] || {
+    log_err "拒绝相对 rootfs 路径: ${dest:-<empty>}"
+    return 1
+  }
+  local parent base tmp
+  parent="$(dirname -- "$dest")"
+  base="$(basename -- "$dest")"
+  [[ -n "$base" && "$base" != "." && "$base" != ".." ]] || return 1
+  _rootfs_prepare_parent "$parent" || return 1
+  if [[ -d "$dest" && ! -L "$dest" ]]; then
+    log_err "拒绝把文件写入目录: $dest"
+    return 1
+  fi
+  tmp="$(mktemp "$parent/.capbox-write.XXXXXX")" || return 1
+  if ! cat >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  if [[ -L "$tmp" || ! -f "$tmp" ]]; then
+    rm -f -- "$tmp"
+    log_err "拒绝跟随符号链接写入: $dest"
+    return 1
+  fi
+  if ! mv -T -f -- "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  return 0
+}
+
 # inject_mirrors [DISTRO]
 # 按契约 §6 写入 apk/apt 源与 apt 修正项；CAPBOX_MIRROR=none 直接返回。
 inject_mirrors() {
@@ -304,23 +372,20 @@ inject_mirrors() {
 
   case "$distro" in
     alpine)
-      mkdir -p "$rootfs/etc/apk" || return 1
       {
         printf '%s/v3.20/main\n' "$url"
         printf '%s/v3.20/community\n' "$url"
-      } >"$rootfs/etc/apk/repositories" || return 1
+      } | _rootfs_write_file "$rootfs/etc/apk/repositories" || return 1
       log_info "已写入 apk 镜像源: $url/v3.20/{main,community}"
       ;;
     ubuntu)
       local suite="noble"
-      mkdir -p "$rootfs/etc/apt/apt.conf.d" || return 1
 
       # Ubuntu 24.04 起默认用 deb822 格式的 sources.list.d/ubuntu.sources，
       # 它与 sources.list 同时生效（会重复请求且官方地址优先级更高）。
       # 策略：若存在 deb822 文件则直接改写它并删除 sources.list；否则写 sources.list。
       local deb822="$rootfs/etc/apt/sources.list.d/ubuntu.sources"
-      if [[ -f "$deb822" ]]; then
-        mkdir -p "$rootfs/etc/apt/sources.list.d" || return 1
+      if [[ -f "$deb822" || -L "$deb822" ]]; then
         {
           printf '# CapBox 生成，请勿手工修改（用 capbox config set CAPBOX_MIRROR_UBUNTU 覆盖）\n'
           printf 'Types: deb\n'
@@ -334,9 +399,11 @@ inject_mirrors() {
           printf 'Suites: %s-security\n' "$suite"
           printf 'Components: main restricted universe multiverse\n'
           printf 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n'
-        } >"$deb822" || return 1
+        } | _rootfs_write_file "$deb822" || return 1
         # 避免 sources.list 与 deb822 重复
-        [[ -f "$rootfs/etc/apt/sources.list" ]] && rm -f "$rootfs/etc/apt/sources.list" 2>/dev/null || true
+        if [[ -e "$rootfs/etc/apt/sources.list" || -L "$rootfs/etc/apt/sources.list" ]]; then
+          rm -f -- "$rootfs/etc/apt/sources.list" 2>/dev/null || true
+        fi
       else
         {
           printf '# CapBox 生成，请勿手工修改（用 capbox config set CAPBOX_MIRROR_UBUNTU 覆盖）\n'
@@ -344,7 +411,7 @@ inject_mirrors() {
           printf 'deb %s %s-updates main restricted universe multiverse\n' "$url" "$suite"
           printf 'deb %s %s-backports main restricted universe multiverse\n' "$url" "$suite"
           printf 'deb %s %s-security main restricted universe multiverse\n' "$url" "$suite"
-        } >"$rootfs/etc/apt/sources.list" || return 1
+        } | _rootfs_write_file "$rootfs/etc/apt/sources.list" || return 1
       fi
 
       {
@@ -359,10 +426,10 @@ inject_mirrors() {
               ;;
           esac
         fi
-      } >"$rootfs/etc/apt/apt.conf.d/99capbox" || return 1
+      } | _rootfs_write_file "$rootfs/etc/apt/apt.conf.d/99capbox" || return 1
 
       # 精简镜像没有 apt 用的 keyring 目录时补上，否则 apt update 会抱怨
-      mkdir -p "$rootfs/etc/apt/trusted.gpg.d" 2>/dev/null || true
+      _rootfs_prepare_parent "$rootfs/etc/apt/trusted.gpg.d" 2>/dev/null || true
       log_info "已写入 apt 镜像源: $url（suite=$suite）"
       ;;
     *)
@@ -382,10 +449,11 @@ inject_proxy_files() {
   [[ -d "$rootfs" ]] || return 0
 
   local prof="$rootfs/etc/profile.d/capbox-proxy.sh"
-  mkdir -p "$rootfs/etc/profile.d" 2>/dev/null || true
 
   if [[ -z "${CAPBOX_PROXY:-}" ]]; then
-    [[ -e "$prof" ]] && rm -f -- "$prof" 2>/dev/null || true
+    if [[ -e "$prof" || -L "$prof" ]]; then
+      rm -f -- "$prof" 2>/dev/null || true
+    fi
     return 0
   fi
 
@@ -401,22 +469,21 @@ inject_proxy_files() {
     printf 'export HTTPS_PROXY=%s\n' "$(_shq "$p")"
     printf 'export ALL_PROXY=%s\n' "$(_shq "$p")"
     printf 'export NO_PROXY=%s\n' "$(_shq "$np")"
-  } >"$prof" 2>/dev/null || true
+  } | _rootfs_write_file "$prof" || return 1
 
   # npm（root 用户）
   local npmrc="$rootfs/root/.npmrc"
-  mkdir -p "$rootfs/root" 2>/dev/null || true
   {
     printf 'proxy=%s\n' "$p"
     printf 'https-proxy=%s\n' "$p"
-  } >"$npmrc" 2>/dev/null || true
+  } | _rootfs_write_file "$npmrc" || return 1
 
   # pip
   local pipconf="$rootfs/etc/pip.conf"
   {
     printf '[global]\n'
     printf 'proxy = %s\n' "$p"
-  } >"$pipconf" 2>/dev/null || true
+  } | _rootfs_write_file "$pipconf" || return 1
 
   log_debug "已注入代理文件: $prof"
   return 0
@@ -684,16 +751,15 @@ _init_finalize() {
   ensure_rootfs_dirs "$rootfs"
   refresh_resolv || true
   inject_mirrors "$distro" || log_warn "镜像源注入失败（可稍后重跑 capbox init）"
-  inject_proxy_files "$distro" || true
+  inject_proxy_files "$distro" || log_warn "代理文件注入失败（未跟随符号链接写入）"
 
   # rootfs 内写一份内置版本标记，便于排查
-  mkdir -p "$rootfs/etc" 2>/dev/null || true
   {
     printf 'CAPBOX_VERSION=%s\n' "$CAPBOX_VERSION"
     printf 'CAPBOX_DISTRO=%s\n' "$distro"
     printf 'CAPBOX_MIRROR=%s\n' "${CAPBOX_MIRROR:-cn}"
     printf 'INIT_AT=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  } >"$rootfs/etc/capbox-release" 2>/dev/null || true
+  } | _rootfs_write_file "$rootfs/etc/capbox-release" || log_warn "无法写入 capbox-release"
 
   run_bootstrap "$distro" || true
 

@@ -25,8 +25,7 @@ _fsguard_host_in_workspace() {
   local host="${1:-}" ws="${CAPBOX_WORKSPACE%/}"
   [[ -n "$host" && -n "$ws" ]] || return 1
   local abs
-  abs="$(resolve_path "$host" 2>/dev/null || true)"
-  [[ -n "$abs" ]] || abs="$host"
+  abs="$(resolve_path "$host" 2>/dev/null)" || return 1
   case "$abs" in
     "$ws" | "$ws"/*) return 0 ;;
     *) return 1 ;;
@@ -102,7 +101,9 @@ _fsguard_probe_overlay() {
   w="$(_fsguard_overlay_dir)/probe-w-$$"
   mkdir -p "$u" "$w" 2>/dev/null || return 1
   local out rc=0
-  out="$("$CAPBOX_BWRAP" --unshare-user --uid 0 --gid 0 --cap-add ALL --proc /proc --dev /dev --tmpfs /tmp \
+  out="$("$CAPBOX_BWRAP" --clearenv --unshare-net --unshare-user --uid 0 --gid 0 --cap-add ALL \
+    --setenv PATH /usr/bin:/bin \
+    --proc /proc --dev /dev --tmpfs /tmp \
     --overlay-src "$rf" --overlay "$u" "$w" / --die-with-parent -- \
     /bin/sh -c 'echo probe > /capbox-overlay-probe; cat /capbox-overlay-probe' 2>&1)" || rc=$?
   rm -rf "$u" "$w" 2>/dev/null || true
@@ -186,7 +187,7 @@ _fsguard_append_binds() {
     [[ -n "$part" ]] || continue
     _fsguard_parse_bind_spec "$part" || die 2 "FS_BINDS 非法: $part"
     local abs
-    abs="$(resolve_path "$_fs_bind_host")"
+    abs="$(resolve_path "$_fs_bind_host")" || die 2 "无法规范化 FS_BINDS 宿主路径: $_fs_bind_host"
     if [[ "$_fs_bind_mode" == "ro" ]]; then
       _fb_arr+=(--ro-bind "$abs" "$_fs_bind_guest")
     else

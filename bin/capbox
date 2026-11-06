@@ -345,7 +345,7 @@ capbox_main() {
 
   # 危险操作：禁止把 $HOME 或 / 当成工作区 RW bind 进容器
   case "$cmd" in
-    bootstrap | init | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics)
+    bootstrap | init | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
       if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
         _capbox_require_safe_workspace || return 1
       fi

@@ -68,13 +68,13 @@ assert_out_matches 'No space left on device' "输出含 ENOSPC 证据"
 # 宿主不应残留任何本次测试 loop 或 run/disk 挂载
 loops_after=$(sudo -n losetup -a 2>/dev/null || losetup -a 2>/dev/null || true)
 assert_out_not_matches 'SHOULD_NOT_REACH' "超限后停止后续命令"
-if printf '%s' "$loops_after" | grep -q "$CAPBOX_DIR/run/disk"; then
+if printf '%s' "$loops_after" | grep -E -q "$CAPBOX_DIR/(run|state)/disk"; then
   _fail "宿主仍残留测试 loop: $loops_after"
 else
   _ok "宿主无残留测试 loop"
 fi
-if findmnt -rn -o TARGET | grep -q "^$CAPBOX_DIR/run/disk/"; then
-  _fail "宿主仍挂着 $CAPBOX_DIR/run/disk 下的目录"
+if findmnt -rn -o TARGET | grep -E -q "^$CAPBOX_DIR/(run|state)/disk/"; then
+  _fail "宿主仍挂着 disk 目录"
 else
   _ok "宿主无残留 disk 挂载"
 fi
@@ -87,7 +87,7 @@ assert_eq 42 "$RUN_RC" "保留 guest 异常退出码"
 assert_out_matches 'uid=33' "UID 33 在配额盘可写"
 assert_out_not_matches 'Permission denied|cannot drop privileges' "降权及写入无权限错误"
 loops_after=$(sudo -n losetup -a 2>/dev/null || losetup -a 2>/dev/null || true)
-if printf '%s' "$loops_after" | grep -q "$CAPBOX_DIR/run/disk"; then
+if printf '%s' "$loops_after" | grep -E -q "$CAPBOX_DIR/(run|state)/disk"; then
   _fail "异常退出后残留 loop: $loops_after"
 else
   _ok "异常退出后无残留 loop"

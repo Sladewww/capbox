@@ -80,15 +80,18 @@ def _host_pattern_match(host: str, pattern: str) -> bool:
     return host == pattern
 
 
+def _ip_for_policy(ip: "ipaddress._BaseAddress") -> "ipaddress._BaseAddress":
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped
+    return ip
+
+
 def _ip_forbidden(ip: "ipaddress._BaseAddress") -> bool:
-    return bool(
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    # is_global is false for RFC1918, loopback, link-local, multicast,
+    # reserved, unspecified, and 100.64.0.0/10 (CGNAT / cloud metadata).
+    # is_private alone does not cover that CGNAT range on Python 3.13+.
+    return not bool(_ip_for_policy(ip).is_global)
 
 
 def _explicit_ip_allowed(ip: "ipaddress._BaseAddress", allow: Iterable[str]) -> bool:
@@ -178,7 +181,7 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
             ip = ipaddress.ip_address(ip_s)
         except ValueError:
             continue
-        if _ip_forbidden(ip) and not _explicit_ip_allowed(ip, allow):
+        if _ip_forbidden(ip) and not host_allowed(ip_s, allow, port):
             last = f"blocked resolved {ip_s}"
             continue
         try:

@@ -189,10 +189,15 @@ def generate(profile: str, out_path: str) -> int:
     size = os.path.getsize(out_path)
     if size < 8:
         raise SystemExit(f"BPF too small ({size}); libseccomp export failed")
-    sys.stderr.write(f"seccomp-gen profile={profile} arch={arch} rules={added} bytes={size}")
     if missing:
-        sys.stderr.write(f" skipped={','.join(missing)}")
-    sys.stderr.write("\n")
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        raise SystemExit(
+            f"seccomp-gen profile={profile} unresolved syscalls: {','.join(missing)}"
+        )
+    sys.stderr.write(f"seccomp-gen profile={profile} arch={arch} rules={added} bytes={size}\n")
     return 0
 
 

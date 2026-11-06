@@ -81,7 +81,7 @@ capbox recipe show
 
 **不会**用 `RLIMIT_NPROC` 冒充 PIDs。
 
-`CAPBOX_DISK_MAX`（例 `64M`）：在能 `losetup` + `mkfs.ext4` + `mount` 时兑现——把稀疏镜像挂成 ext4，经 `mount --bind -o rw` 的私有 rootfs 树挂到 guest **`/var/lib/capbox-data`**（可用 `CAPBOX_DISK_GUEST_PATH` 覆盖），再 `bwrap --bind` 该树。**不**把宿主块设备当配额盘塞进 guest；限额**只**覆盖该路径，不含整个 rootfs 或 `/workspace`。需要宿主授权（root，或 `sudo -n` / 等价 mount 能力），**不是** rootless。否则 `metrics`/`doctor` 明确 `unavailable`，`require` 模式硬失败，绝不假装已限额。
+`CAPBOX_DISK_MAX`（例 `64M`）：在能 `losetup` + `mkfs.ext4` + `mount` 时兑现——稀疏镜像放在 `state/disk`，格式化成 ext4 后挂到该目录的 `mnt`（`nosuid,nodev`），再 `bwrap --bind` 到 guest **`/var/lib/capbox-data`**（可用 `CAPBOX_DISK_GUEST_PATH` 覆盖）。不改 rootfs 原本的只读/可写挂载，也不把整棵 rootfs 绑进配额目录。**不**把宿主块设备当配额盘塞进 guest；限额**只**覆盖该路径，不含整个 rootfs 或 `/workspace`。需要宿主授权（root，或 `sudo -n` / 等价 mount 能力），**不是** rootless。否则 `metrics`/`doctor` 明确 `unavailable`，`require` 模式硬失败，绝不假装已限额。卸载失败会留下目录，不会删除仍挂着的文件系统。
 
 ## 安全档（CAPBOX_SECURITY_PROFILE）
 

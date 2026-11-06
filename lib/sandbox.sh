@@ -331,19 +331,15 @@ cmd_shell() {
   require_rootfs
   [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
 
-  local -a args=()
-  mapfile -t args < <(build_bwrap_args oneshot /workspace)
-  (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数"
-
   local shbin="/bin/sh"
   local -a shargs=()
   if [[ -t 0 && -t 1 ]]; then
     shargs=(-i)
   fi
 
-  # 交互 shell：不用 timeout（否则会被杀死），stdio 直接继承
-  CAPBOX_BWRAP_NO_PIDNS="${CAPBOX_BWRAP_NO_PIDNS:-0}" \
-    "$CAPBOX_BWRAP" "${args[@]}" -- "$shbin" "${shargs[@]}"
+  # 与 exec 同一条启动路径：restricted 挂 allowlist 桥，hardened 挂 seccomp。
+  # timeout 0 = 不包 timeout，stdio 直接继承。
+  run_bwrap_oneshot /workspace 0 "$shbin" "${shargs[@]}"
   return $?
 }
 

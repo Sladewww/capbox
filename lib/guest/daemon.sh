@@ -104,7 +104,6 @@ on_term() {
 }
 
 trap on_term TERM INT
-trap cleanup_state EXIT
 
 # ---------- 3. 启动：建目录、防重入、写 daemon.json ----------------------------
 
@@ -127,6 +126,9 @@ if ! mkdir "$LOCKD" 2>/dev/null; then
     exit 1
   }
 fi
+
+# 只有拿到锁的进程才能清状态。失败者退出不得删掉活着的那一份。
+trap cleanup_state EXIT
 
 STARTED="$(_now)"
 PIDNS="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'unknown')"
@@ -324,6 +326,11 @@ while :; do
       _w=0
       while [ "$(_jobs_count)" -ge "$MAXJOBS" ] && [ "$_w" -lt 200 ]; do
         _prune
+        beat
+        if [ -f "$CTL/stop" ]; then
+          STOPPING=1
+          break
+        fi
         [ "$(_jobs_count)" -lt "$MAXJOBS" ] && break
         _w=$((_w + 1))
         sleep 0.05
@@ -332,6 +339,10 @@ while :; do
         _paused=1
         break
       fi
+    fi
+    if [ -f "$CTL/stop" ] || [ "$STOPPING" -eq 1 ]; then
+      STOPPING=1
+      break
     fi
 
     # 原子认领：mv 走请求文件，避免同一请求被派发两次

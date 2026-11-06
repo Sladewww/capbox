@@ -177,6 +177,78 @@ _service_start_deps() {
   return 0
 }
 
+_service_check_id() {
+  local v="${1:-}" label="${2:-id}" who="${3:-}" n
+  [[ "$v" =~ ^[0-9]+$ ]] || {
+    log_err "服务 ${who}: ${label} 不是十进制数字: ${v:-<empty>}"
+    return 2
+  }
+  n="$v"
+  while [[ "$n" == 0* && ${#n} -gt 1 ]]; do
+    n="${n#0}"
+  done
+  if (( ${#n} > 10 )) || { (( ${#n} == 10 )) && [[ "$n" > "4294967295" ]]; }; then
+    log_err "服务 ${who}: ${label} 超出 32 位范围: $v"
+    return 2
+  fi
+  printf '%s' "$n"
+}
+
+_service_net_tag() {
+  local safe="${1//[^A-Za-z0-9_-]/-}"
+  printf 'svc-%s' "$safe"
+}
+
+# 启动失败时收掉本次 restricted 代理。动态作用域能看见调用方的 name / _svc_restricted。
+_service_abort() {
+  local rc="${1:-1}"
+  shift || true
+  unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
+  if [[ "${_svc_restricted:-0}" == 1 ]]; then
+    if [[ -z "${CAPBOX_NET_SESSION:-}" ]]; then
+      export CAPBOX_NET_SESSION="$(_service_net_tag "${name:-svc}")"
+    fi
+    if declare -F _net_cleanup_restricted_session >/dev/null 2>&1; then
+      _net_cleanup_restricted_session || true
+    fi
+    unset CAPBOX_NET_SESSION
+    _svc_restricted=0
+  fi
+  if [[ $# -gt 0 && -n "${name:-}" ]]; then
+    _service_diagnose "$name" "$*"
+  elif [[ $# -gt 0 ]]; then
+    log_err "$*"
+  fi
+  return "$rc"
+}
+
+_service_release_net() {
+  local who="${1:-}" rd meta net="" sess="" line saved=""
+  rd="$(_service_run_dir "$who")"
+  meta="$rd/meta.env"
+  if [[ -f "$meta" ]]; then
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^NET=\'([A-Za-z0-9_-]+)\'$ ]]; then
+        net="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^NET_SESSION=\'(svc-[A-Za-z0-9_-]+)\'$ ]]; then
+        sess="${BASH_REMATCH[1]}"
+      fi
+    done <"$meta"
+  fi
+  [[ "$net" == "restricted" ]] || return 0
+  [[ -n "$sess" ]] || sess="$(_service_net_tag "$who")"
+  if declare -F _net_cleanup_restricted_session >/dev/null 2>&1; then
+    saved="${CAPBOX_NET_SESSION:-}"
+    export CAPBOX_NET_SESSION="$sess"
+    _net_cleanup_restricted_session || true
+    if [[ -n "$saved" ]]; then
+      export CAPBOX_NET_SESSION="$saved"
+    else
+      unset CAPBOX_NET_SESSION
+    fi
+  fi
+}
+
 _service_start() {
   local name="${1:-}"
   [[ -n "$name" ]] || die 2 "用法: capbox service start NAME"
@@ -230,6 +302,8 @@ _service_start() {
   fi
   : "${uid:=${CAPBOX_EXEC_UID:-0}}"
   : "${gid:=${CAPBOX_EXEC_GID:-0}}"
+  uid="$(_service_check_id "$uid" UID "$name")" || return 2
+  gid="$(_service_check_id "$gid" GID "$name")" || return 2
 
   if [[ "$require_idmap" == "1" ]]; then
     if ! declare -F _idmap_probe >/dev/null 2>&1 || ! _idmap_probe; then
@@ -249,22 +323,64 @@ _service_start() {
     esac
   fi
 
+  local effective_net="" _svc_restricted=0 ready_guest=""
+  if declare -F _net_mode >/dev/null 2>&1; then
+    effective_net="$(_net_mode)" || return $?
+  else
+    effective_net="${CAPBOX_NET:-open}"
+    [[ "$effective_net" == "host" ]] && effective_net="open"
+  fi
+  if [[ "$effective_net" == "restricted" ]]; then
+    _svc_restricted=1
+    export CAPBOX_NET_SESSION="$(_service_net_tag "$name")"
+    if declare -F _net_restricted_prereqs >/dev/null 2>&1; then
+      _net_restricted_prereqs >/dev/null || {
+        _service_abort $? "restricted 前置不满足" || return $?
+      }
+    fi
+    if declare -F _net_start_host_proxy >/dev/null 2>&1; then
+      _net_start_host_proxy || {
+        _service_abort 1 "restricted 代理启动失败" || return $?
+      }
+    fi
+    if declare -F _guest_workspace_path >/dev/null 2>&1 && declare -F _net_bridge_ready >/dev/null 2>&1; then
+      ready_guest="$(_guest_workspace_path "$(_net_bridge_ready)")"
+    fi
+    [[ -n "$ready_guest" ]] || {
+      _service_abort 1 "guest 看不到 bridge ready 路径" || return $?
+    }
+  else
+    unset CAPBOX_NET_SESSION
+  fi
+
   local rd
   rd="$(_service_run_dir "$name")"
-  mkdir -p "$rd" || die 1 "无法创建 $rd"
+  mkdir -p "$rd" || {
+    _service_abort 1 "无法创建 $rd" || return $?
+  }
+  [[ ! -L "$rd" && -d "$rd" ]] || {
+    _service_abort 1 "服务运行目录是符号链接" || return $?
+  }
 
   export CAPBOX_EXEC_UID_OVERRIDE="$uid"
   export CAPBOX_EXEC_GID_OVERRIDE="$gid"
 
   local cmd="${svc[CMD]}"
-  local wrap
-  wrap="mkdir -p /run/capbox-svc 2>/dev/null || true; echo \$\$ > /run/capbox-svc/${name}.pid; cd $(printf %q "$cwd") || exit 1; exec /bin/sh -c $(printf %q "$cmd")"
+  local wrap pidpath
+  pidpath="/run/capbox-svc/${name}.pid"
+  if [[ -n "$ready_guest" ]]; then
+    wrap="mkdir -p /run/capbox-svc 2>/dev/null || true; echo \$\$ > $(printf %q "$pidpath"); cd $(printf %q "$cwd") || exit 1; f=$(printf %q "$ready_guest"); i=0; while [ ! -f \"\$f\" ]; do i=\$((i+1)); [ \"\$i\" -gt 400 ] && exit 1; sleep 0.05; done; exec /bin/sh -c $(printf %q "$cmd")"
+  else
+    wrap="mkdir -p /run/capbox-svc 2>/dev/null || true; echo \$\$ > $(printf %q "$pidpath"); cd $(printf %q "$cwd") || exit 1; exec /bin/sh -c $(printf %q "$cmd")"
+  fi
 
   local -a args=() full=()
   CAPBOX_BWRAP_NO_DIE_WITH_PARENT=1
   export CAPBOX_BWRAP_NO_DIE_WITH_PARENT
   mapfile -t args < <(build_bwrap_args oneshot "$cwd")
-  ((${#args[@]} > 0)) || die 4 "无法构造 bwrap 参数"
+  if ((${#args[@]} == 0)); then
+    _service_abort 4 "无法构造 bwrap 参数" || return $?
+  fi
   local -a filtered=()
   local a
   for a in "${args[@]}"; do
@@ -277,14 +393,33 @@ _service_start() {
   full=("$CAPBOX_BWRAP" "${args[@]}" -- /bin/sh -c "$wrap")
 
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
-    _security_wrap_argv full || true
+    _security_wrap_argv full || {
+      _service_abort $? "安全档无法应用" || return $?
+    }
   fi
   if declare -F _resources_wrap_argv >/dev/null 2>&1; then
     _resources_wrap_argv full || {
-      unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
-      _service_diagnose "$name" "资源限额无法应用"
-      return 1
+      _service_abort 1 "资源限额无法应用" || return $?
     }
+  fi
+
+  local idmap_rc=1
+  if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
+    idmap_rc=0
+    _capbox_idmap_decision || idmap_rc=$?
+  elif declare -F _idmap_enabled >/dev/null 2>&1; then
+    idmap_rc=0
+    _idmap_enabled || idmap_rc=$?
+  fi
+  if (( idmap_rc == 2 )); then
+    _service_abort 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用" || return $?
+  fi
+  if (( _svc_restricted == 1 && idmap_rc != 0 )); then
+    if declare -F _net_inject_bwrap_info_fd >/dev/null 2>&1; then
+      _net_inject_bwrap_info_fd full 3 || {
+        _service_abort 1 "无法注入 --info-fd" || return $?
+      }
+    fi
   fi
 
   {
@@ -293,6 +428,8 @@ _service_start() {
     printf 'GID=%s\n' "$(_shq "$gid")"
     printf 'CWD=%s\n' "$(_shq "$cwd")"
     printf 'CMD=%s\n' "$(_shq "$cmd")"
+    printf 'NET=%s\n' "$(_shq "$effective_net")"
+    printf 'NET_SESSION=%s\n' "$(_shq "${CAPBOX_NET_SESSION:-}")"
     printf 'RESTART=%s\n' "$(_shq "$restart")"
     printf 'STOP_TIMEOUT=%s\n' "$(_shq "$stop_timeout")"
     printf 'STARTED_AT=%s\n' "$(_shq "$(date -Iseconds 2>/dev/null || date)")"
@@ -308,18 +445,74 @@ _service_start() {
     for x in "${full[@]}"; do
       printf '%s\0' "$x" >>"$rd/child.argv"
     done
-    if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+    if (( idmap_rc == 0 )); then
       cat >"$rd/run-child.sh" <<EOS
 #!/usr/bin/env bash
 set -euo pipefail
-CAPBOX_DIR=$(printf %q "$CAPBOX_DIR")
+export CAPBOX_DIR=$(printf %q "$CAPBOX_DIR")
+export CAPBOX_NET=$(printf %q "$effective_net")
+export CAPBOX_NET_SESSION=$(printf %q "${CAPBOX_NET_SESSION:-}")
 # shellcheck source=/dev/null
 source "\$CAPBOX_DIR/lib/common.sh"
 # shellcheck source=/dev/null
 source "\$CAPBOX_DIR/lib/idmap.sh"
-ARGV_FILE="$(printf %q "$rd")/child.argv"
+# shellcheck source=/dev/null
+source "\$CAPBOX_DIR/lib/net.sh"
+export CAPBOX_NET=$(printf %q "$effective_net")
+export CAPBOX_NET_SESSION=$(printf %q "${CAPBOX_NET_SESSION:-}")
+ARGV_FILE=$(printf %q "$rd")/child.argv
 mapfile -d '' -t args <"\$ARGV_FILE"
+if [[ "\${CAPBOX_NET_SESSION:-}" == svc-* ]]; then
+  rm -f -- "\$(_net_bridge_ready)"
+  _idmap_after_map_hook() {
+    printf '%s\n' "\$1" >$(printf %q "$rd")/sandbox.pid
+    _net_stop_bridge || true
+    _net_start_bridge_for_child "\$1"
+  }
+fi
 _idmap_run_bwrap_argv "\${args[@]}"
+EOS
+    elif (( _svc_restricted == 1 )); then
+      cat >"$rd/run-child.sh" <<EOS
+#!/usr/bin/env bash
+set -euo pipefail
+export CAPBOX_DIR=$(printf %q "$CAPBOX_DIR")
+export CAPBOX_NET=$(printf %q "$effective_net")
+export CAPBOX_NET_SESSION=$(printf %q "${CAPBOX_NET_SESSION:-}")
+# shellcheck source=/dev/null
+source "\$CAPBOX_DIR/lib/common.sh"
+# shellcheck source=/dev/null
+source "\$CAPBOX_DIR/lib/net.sh"
+export CAPBOX_NET=$(printf %q "$effective_net")
+export CAPBOX_NET_SESSION=$(printf %q "${CAPBOX_NET_SESSION:-}")
+cd $(printf %q "$rd")
+ARGV_FILE="\$PWD/child.argv"
+INFO="\$PWD/bwrap-info.json"
+rm -f -- "\$INFO" "\$(_net_bridge_ready)"
+mapfile -d '' -t args <"\$ARGV_FILE"
+"\${args[@]}" 3>"\$INFO" &
+bp=\$!
+child=""
+for _i in \$(seq 1 100); do
+  if [[ -s "\$INFO" ]]; then
+    child="\$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("child-pid") or "")
+except Exception:
+    print("")' "\$INFO" 2>/dev/null || true)"
+    [[ -n "\$child" ]] && break
+  fi
+  kill -0 "\$bp" 2>/dev/null || break
+  sleep 0.05
+done
+if [[ -z "\$child" ]] || ! _net_start_bridge_for_child "\$child"; then
+  kill "\$bp" 2>/dev/null || true
+  wait "\$bp" 2>/dev/null || true
+  exit 1
+fi
+printf '%s\n' "\$child" >"\$PWD/sandbox.pid"
+wait "\$bp"
+exit \$?
 EOS
     else
       cat >"$rd/run-child.sh" <<'EOS'
@@ -358,14 +551,34 @@ EOS
     setsid "${sup_cmd[@]}" -- "$rd/run-child.sh" >>"$rd/service.log" 2>&1 &
     bp=$!
   else
-    # 无 supervisor：回退旧行为
-    if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+    # 无 supervisor：同一进程里挂桥。idmap 的 hook 在放行 guest 之前运行。
+    if (( idmap_rc == 0 )); then
+      if (( _svc_restricted == 1 )); then
+        rm -f -- "$(_net_bridge_ready)" 2>/dev/null || true
+        _idmap_after_map_hook() {
+          printf '%s\n' "$1" >"$rd/sandbox.pid"
+          _net_stop_bridge || true
+          _net_start_bridge_for_child "$1"
+        }
+      fi
       CAPBOX_IDMAP_SPAWN_LOG="$rd/service.log"
       bp="$(_idmap_spawn_bwrap_argv "${full[@]}")" || {
-        unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
-        _service_diagnose "$name" "idmap 启动失败"
-        return 1
+        unset -f _idmap_after_map_hook
+        _service_abort 1 "idmap 启动失败" || return $?
       }
+      unset -f _idmap_after_map_hook
+    elif (( _svc_restricted == 1 )); then
+      local info="$rd/bwrap-info.json" sandboxed=""
+      rm -f -- "$info" "$(_net_bridge_ready)" 2>/dev/null || true
+      setsid "${full[@]}" 3>"$info" >>"$rd/service.log" 2>&1 &
+      bp=$!
+      sandboxed="$(_net_wait_info_child "$info" "$bp" || true)"
+      if [[ -z "$sandboxed" ]] || ! _net_start_bridge_for_child "$sandboxed"; then
+        kill "$bp" 2>/dev/null || true
+        wait "$bp" 2>/dev/null || true
+        _service_abort 1 "restricted 服务网络桥未就绪" || return $?
+      fi
+      printf '%s\n' "$sandboxed" >"$rd/sandbox.pid"
     else
       setsid "${full[@]}" >>"$rd/service.log" 2>&1 &
       bp=$!
@@ -381,13 +594,14 @@ EOS
     sleep 0.1
   done
   if [[ ! -f "$rd/supervisor.pid" ]] || ! kill -0 "$(cat "$rd/supervisor.pid")" 2>/dev/null; then
-    _service_diagnose "$name" "进程启动后立即退出"
-    return 1
+    _service_abort 1 "进程启动后立即退出" || return $?
   fi
   # ready 等待（supervisor 内部也会等；这里再给一点时间）
   if [[ -n "${svc[READY_CMD]:-}${svc[READY_TCP]:-}${svc[READY_HTTP]:-}" ]]; then
     sleep 0.3
   fi
+  unset CAPBOX_NET_SESSION
+  _svc_restricted=0
   log_info "服务 $name 已启动（supervisor pid $(cat "$rd/supervisor.pid"), uid=$uid gid=$gid）"
   if declare -F audit_event >/dev/null 2>&1; then
     audit_event service start "object=$name" "uid=$uid" "detail=restart=$restart"
@@ -411,12 +625,20 @@ _service_stop() {
   if ! _service_is_running "$name"; then
     log_info "服务 $name 未在运行"
     rm -f "$rd/supervisor.pid" 2>/dev/null || true
+    _service_release_net "$name"
     if declare -F _net_publish_stop >/dev/null 2>&1; then
       _net_publish_stop "$name" 2>/dev/null || true
     fi
     return 0
   fi
   pid="$(cat "$rd/supervisor.pid")"
+  if [[ -f "$rd/sandbox.pid" ]]; then
+    local sp
+    sp="$(tr -d '[:space:]' <"$rd/sandbox.pid" || true)"
+    if [[ "$sp" =~ ^[0-9]+$ ]]; then
+      kill -TERM "$sp" 2>/dev/null || true
+    fi
+  fi
   kill -TERM "$pid" 2>/dev/null || true
   local i max
   # 秒 → 100ms 轮询次数
@@ -436,7 +658,8 @@ _service_stop() {
   fi
   pkill -KILL -f "$rd/guest-run" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  rm -f "$rd/supervisor.pid" "$rd/supervisor.pid.child"
+  rm -f "$rd/supervisor.pid" "$rd/supervisor.pid.child" "$rd/sandbox.pid"
+  _service_release_net "$name"
   if declare -F _net_publish_stop >/dev/null 2>&1; then
     _net_publish_stop "$name" 2>/dev/null || true
   fi

@@ -694,14 +694,15 @@ ensure_dirs() {
 resolve_path() {
   local p="${1:-}"
   [[ -n "$p" ]] || return 1
+  local out=""
   if have_cmd realpath; then
-    realpath -m -- "$p" 2>/dev/null || printf '%s\n' "$p"
-  else
-    case "$p" in
-      /*) printf '%s\n' "$p" ;;
-      *) printf '%s/%s\n' "$PWD" "$p" ;;
-    esac
+    out="$(realpath -m -- "$p" 2>/dev/null)" || out=""
   fi
+  if [[ -z "$out" ]]; then
+    log_err "无法规范化路径（需要可用的 realpath -m）: $p"
+    return 1
+  fi
+  printf '%s\n' "$out"
 }
 
 # 工作区是否危险（等于 $HOME 或 /）——会把整棵家目录 RW bind 进容器
@@ -730,10 +731,16 @@ _capbox_guest_path_in_rootfs() {
   local guest_path="${1:-}" root resolved
   [[ -n "$guest_path" ]] || return 1
   [[ -n "${CAPBOX_ROOTFS:-}" ]] || return 1
-  root="$(resolve_path "$CAPBOX_ROOTFS")"
+  root="$(resolve_path "$CAPBOX_ROOTFS")" || return 1
   case "$guest_path" in
-    /*) resolved="$(resolve_path "$CAPBOX_ROOTFS$guest_path")" ;;
-    *) resolved="$(resolve_path "$CAPBOX_ROOTFS/$guest_path")" ;;
+    *..*)
+      log_err "guest 路径禁止 ..: $guest_path"
+      return 1
+      ;;
+  esac
+  case "$guest_path" in
+    /*) resolved="$(resolve_path "$CAPBOX_ROOTFS$guest_path")" || return 1 ;;
+    *) resolved="$(resolve_path "$CAPBOX_ROOTFS/$guest_path")" || return 1 ;;
   esac
   if [[ "$resolved" == "$root" || "$resolved" == "$root"/* ]]; then
     printf '%s\n' "$resolved"
@@ -810,8 +817,8 @@ _capbox_ro_protect_host_file() {
   fi
 
   if [[ -L "$host_file" ]]; then
-    log_warn "受保护配置路径是符号链接，无法预占只读挂载: $host_file"
-    return 0
+    log_err "受保护配置路径是符号链接，拒绝启动: $host_file"
+    return 1
   fi
   if [[ -d "$host_file" ]]; then
     log_warn "受保护配置路径是目录，跳过文件预占: $host_file"
@@ -845,8 +852,8 @@ _capbox_ro_protect_host_dir() {
   [[ -n "$guest_path" && "$guest_path" == /workspace/* ]] || return 0
 
   if [[ -L "$host_dir" ]]; then
-    log_warn "受保护目录是符号链接，无法只读挂载: $host_dir"
-    return 0
+    log_err "受保护目录是符号链接，拒绝启动: $host_dir"
+    return 1
   fi
   if [[ -f "$host_dir" ]]; then
     log_warn "受保护目录路径上存在普通文件，跳过: $host_dir"
@@ -877,6 +884,10 @@ _capbox_append_ro_cli_binds() {
   # 标准布局（…/.capbox）：整树只读，再把运行时目录 RW 挂回。
   # 这样即使宿主在 daemon 生命周期内 rm+重建 config.env，guest 也无法在只读树上创建。
   # CI/开发「仓库即 CAPBOX_DIR」布局不能整树只读（那会锁死整个 /workspace）。
+  if [[ -L "${CAPBOX_DIR:-}" ]]; then
+    log_err "CAPBOX_DIR 是符号链接，拒绝启动: $CAPBOX_DIR"
+    return 1
+  fi
   if [[ -n "${CAPBOX_DIR:-}" && -d "$CAPBOX_DIR" && "$(basename -- "$CAPBOX_DIR")" == ".capbox" ]]; then
     cap_guest="$(_guest_workspace_path "$CAPBOX_DIR")"
     if [[ -n "$cap_guest" && "$cap_guest" == /workspace/* ]]; then
@@ -890,20 +901,25 @@ _capbox_append_ro_cli_binds() {
         _ro_arr+=(--bind "$sub_host" "$sub_guest")
       done
       # 仍对 config.env 钉 /dev/null，避免通过已存在挂载点做内容注入的歧义
-      _capbox_ro_protect_host_file "$CAPBOX_DIR/config.env" _ro_arr
+      _capbox_ro_protect_host_file "$CAPBOX_DIR/config.env" _ro_arr || return $?
       return 0
     fi
   fi
 
   # 回退：逐项保护 bin/ lib/ config.env / services
   for host_path in "${CAPBOX_BIN_DIR:-}" "${CAPBOX_LIB_DIR:-}"; do
-    [[ -n "$host_path" && -d "$host_path" ]] || continue
+    [[ -n "$host_path" ]] || continue
+    if [[ -L "$host_path" ]]; then
+      log_err "受保护目录是符号链接，拒绝启动: $host_path"
+      return 1
+    fi
+    [[ -d "$host_path" ]] || continue
     guest_path="$(_guest_workspace_path "$host_path")"
     [[ -n "$guest_path" ]] || continue
     _ro_arr+=(--ro-bind "$host_path" "$guest_path")
   done
-  _capbox_ro_protect_host_file "${CAPBOX_DIR:-}/config.env" _ro_arr
-  _capbox_ro_protect_host_dir "${CAPBOX_DIR:-}/services" _ro_arr
+  _capbox_ro_protect_host_file "${CAPBOX_DIR:-}/config.env" _ro_arr || return $?
+  _capbox_ro_protect_host_dir "${CAPBOX_DIR:-}/services" _ro_arr || return $?
 }
 
 json_escape() {
@@ -1129,6 +1145,20 @@ ensure_rootfs_dirs() {
   mkdir -p "$CAPBOX_TMP_DIR" 2>/dev/null || true
 }
 
+# strict 且用户没有写过 ROOTFS_RO 时，在选择挂载方式之前打开只读 rootfs。
+# load_config 会把缺省值写成 0，所以不能靠「变量为空」判断。
+_capbox_apply_profile_rootfs_default() {
+  local profile=""
+  if ! declare -F _security_profile >/dev/null 2>&1; then
+    return 0
+  fi
+  profile="$(_security_profile)" || return $?
+  if [[ "$profile" == "strict" && -z "${CAPBOX_CFG_EXPLICIT[ROOTFS_RO]:-}" ]]; then
+    CAPBOX_ROOTFS_RO=1
+  fi
+  return 0
+}
+
 # build_bwrap_args MODE [CWD]
 #   MODE = oneshot | daemon
 # 打印 bwrap 参数，一行一个（数组语义），不含最终的 `-- 命令` 部分。
@@ -1138,6 +1168,10 @@ build_bwrap_args() {
   local -a a=()
 
   [[ -n "${CAPBOX_ROOTFS:-}" && -d "$CAPBOX_ROOTFS" ]] || return 4
+  if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
+    _capbox_require_safe_workspace || return $?
+  fi
+  _capbox_apply_profile_rootfs_default || return $?
 
   # ---- 文件系统 ----
   if declare -F _fsguard_apply_rootfs_mount >/dev/null 2>&1; then
@@ -1157,7 +1191,7 @@ build_bwrap_args() {
   a+=(--tmpfs /run)
   a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
   # 覆盖式只读挂载：防止 guest 改写宿主侧 CLI / 配置（下次执行 = RCE）
-  _capbox_append_ro_cli_binds a
+  _capbox_append_ro_cli_binds a || return $?
   # FS hide / 额外 binds（拒绝工作区外任意 bind）
   if declare -F _fsguard_append_bwrap_args >/dev/null 2>&1; then
     _fsguard_append_bwrap_args a || return $?
@@ -1202,8 +1236,10 @@ build_bwrap_args() {
   local _eu _eg
   _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
   _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
-  [[ "$_eu" =~ ^[0-9]+$ ]] || _eu=0
-  [[ "$_eg" =~ ^[0-9]+$ ]] || _eg=0
+  if [[ ! "$_eu" =~ ^[0-9]+$ || ! "$_eg" =~ ^[0-9]+$ ]] || (( _eu > 4294967295 || _eg > 4294967295 )); then
+    log_err "EXEC_UID/EXEC_GID 必须是 0..4294967295 的数字（当前 uid=${_eu} gid=${_eg}）"
+    return 2
+  fi
   a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)
   a+=(--hostname "${CAPBOX_HOSTNAME:-capbox}")
   a+=(--chdir "$cwd")
@@ -1296,17 +1332,19 @@ run_bwrap_oneshot() {
     _security_wrap_argv full || return $?
   fi
 
-  local rc=0 use_idmap=0
-  if declare -F _idmap_enabled >/dev/null 2>&1; then
-    if _idmap_enabled; then
-      use_idmap=1
-    else
-      local _irc=$?
-      # _idmap_enabled 返回 2 = 强制 on 但不可用
-      if (( _irc == 2 )) || [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS}" == "blocked" ]]; then
-        die 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
-      fi
-    fi
+  local rc=0 use_idmap=0 idmap_rc=1
+  if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
+    idmap_rc=0
+    _capbox_idmap_decision || idmap_rc=$?
+  elif declare -F _idmap_enabled >/dev/null 2>&1; then
+    idmap_rc=0
+    _idmap_enabled || idmap_rc=$?
+  fi
+  if (( idmap_rc == 2 )); then
+    die 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+  fi
+  if (( idmap_rc == 0 )); then
+    use_idmap=1
   fi
 
   if (( use_idmap == 1 )); then
@@ -1666,8 +1704,9 @@ _doctor_probe_userns() {
   local bwrap="${CAPBOX_BWRAP:-}"
   [[ -x "$bwrap" ]] || return 5
   local out uid capeff
-  out="$("$bwrap" --unshare-user --unshare-uts --unshare-ipc \
+  out="$("$bwrap" --clearenv --unshare-net --unshare-user --unshare-uts --unshare-ipc \
     --uid 0 --gid 0 --cap-add ALL \
+    --setenv PATH /usr/bin:/bin \
     --ro-bind / / --proc /proc --dev /dev \
     -- /bin/sh -c 'id -u; sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status' 2>/dev/null)" || return 1
   uid="$(printf '%s\n' "$out" | sed -n '1p')"
@@ -1689,6 +1728,7 @@ cmd_doctor() {
   # 0) 工作区安全（禁止 $HOME 或 / 作为 RW workspace）
   if _capbox_workspace_is_dangerous; then
     _doctor_fail "工作区为 $HOME 或 / ($CAPBOX_WORKSPACE)；会把整棵目录 RW bind 进容器。请用项目内 .capbox/ 或 CAPBOX_ROOT=/path/to/project"
+    return 1
   else
     _doctor_pass "工作区安全 ($CAPBOX_WORKSPACE)"
   fi

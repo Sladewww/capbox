@@ -184,14 +184,16 @@ _daemon_bwrap_args() {
   a+=(--unshare-user --unshare-uts --unshare-ipc --unshare-pid)
   local _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
   local _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
-  [[ "$_eu" =~ ^[0-9]+$ ]] || _eu=0
-  [[ "$_eg" =~ ^[0-9]+$ ]] || _eg=0
+  if [[ ! "$_eu" =~ ^[0-9]+$ || ! "$_eg" =~ ^[0-9]+$ ]] || (( _eu > 4294967295 || _eg > 4294967295 )); then
+    log_err "EXEC_UID/EXEC_GID 必须是 0..4294967295 的数字（当前 uid=${_eu} gid=${_eg}）"
+    return 2
+  fi
   a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)
   a+=(--hostname "$CAPBOX_HOSTNAME")
   a+=(--chdir /workspace)
   a+=(--die-with-parent)
   if declare -F _security_append_bwrap_args >/dev/null 2>&1; then
-    _security_append_bwrap_args a || true
+    _security_append_bwrap_args a || return $?
   fi
   a+=(--setenv HOME /root)
   a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
@@ -309,8 +311,12 @@ _daemon_alive() {
   # 情况 A：与守护进程处于同一 pid namespace —— kill -0 才是可信判据
   if [[ -n "$dns" && "$dns" == "$myns" ]]; then
     kill -0 "$pid" 2>/dev/null || return 1
-    # 同 ns 时仍要求心跳不太陈旧（防进程僵死但未退出的边界情况）
-    (( $(_daemon_hb_age) <= $(( $(_daemon_hb_ttl) * 2 )) )) 2>/dev/null || return 0
+    # 同 ns 时仍要求心跳不太陈旧。比较失败（非数字、过期）都算死。
+    local age ttl
+    age="$(_daemon_hb_age)"
+    ttl="$(_daemon_hb_ttl)"
+    [[ "$age" =~ ^[0-9]+$ && "$ttl" =~ ^[0-9]+$ ]] || return 1
+    (( age <= ttl * 2 )) || return 1
     return 0
   fi
 
@@ -586,15 +592,28 @@ _daemon_build_up_argv() {
 
   local -a base=()
   if declare -F sandbox_bwrap_cmd >/dev/null 2>&1; then
-    local x
+    local x errf outf
+    errf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-bwrap.XXXXXX")" || return 1
+    outf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-argv.XXXXXX")" || { rm -f "$errf"; return 1; }
+    if ! sandbox_bwrap_cmd daemon "" "/workspace" >"$outf" 2>"$errf"; then
+      local brc=$?
+      log_err "无法构造守护容器 bwrap 参数（rc=$brc）"
+      [[ -s "$errf" ]] && cat "$errf" >&2
+      rm -f "$errf" "$outf"
+      return "$brc"
+    fi
     while IFS= read -r -d '' x; do
       base+=("$x")
-    done < <(sandbox_bwrap_cmd daemon "" "/workspace" 2>/dev/null)
-  fi
-  if (( ${#base[@]} == 0 )); then
-    # 兜底：自己构造（契约 §3.4）
+    done <"$outf"
+    rm -f "$errf" "$outf"
+    (( ${#base[@]} > 0 )) || {
+      log_err "守护容器 bwrap 参数为空"
+      return 1
+    }
+  else
     local -a args=()
     mapfile -t args < <(_daemon_bwrap_args daemon)
+    (( ${#args[@]} > 0 )) || return 1
     base=("$CAPBOX_BWRAP" "${args[@]}")
   fi
 
@@ -635,16 +654,25 @@ _daemon_build_up_argv() {
   else
     _out+=(-- /bin/sh "$guest_guest_script")
   fi
+
+  if declare -F _security_wrap_argv >/dev/null 2>&1; then
+    _security_wrap_argv _out || return $?
+  fi
 }
 
 _daemon_systemd_unit_name() {
-  local base
+  local base sum
   base="$(basename "${CAPBOX_WORKSPACE:-workspace}")"
   base="$(printf '%s' "$base" | tr -c 'A-Za-z0-9' '-')"
   base="${base#-}"
   base="${base%-}"
   [[ -n "$base" ]] || base="workspace"
-  printf 'capbox-%s' "${base:0:48}"
+  if have_cmd sha256sum; then
+    sum="$(printf '%s' "${CAPBOX_WORKSPACE:-}" | sha256sum | awk '{print $1}')"
+  else
+    sum="$(printf '%s' "${CAPBOX_WORKSPACE:-}" | cksum | awk '{print $1}')"
+  fi
+  printf 'capbox-%s-%s' "${base:0:32}" "${sum:0:12}"
 }
 
 # 把 capbox up 交给 systemd --user。调用方（常被外层 bwrap --die-with-parent 包住）可以马上返回。
@@ -657,6 +685,11 @@ _daemon_up_via_systemd() {
   local unit cli
   unit="$(_daemon_systemd_unit_name)"
   if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    local wd
+    wd="$(systemctl --user show -p WorkingDirectory --value "$unit" 2>/dev/null || true)"
+    if [[ -n "$wd" && "$wd" != "${CAPBOX_WORKSPACE}" ]]; then
+      die 1 "systemd 单元 ${unit}.service 已在运行，但 WorkingDirectory=${wd}，不是本工作区 ${CAPBOX_WORKSPACE}"
+    fi
     log_info "systemd 单元 ${unit}.service 已在运行"
     mkdir -p "$CAPBOX_RUN_DIR"
     printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
@@ -815,12 +848,20 @@ EOF
   _daemon_build_up_argv argv
   (( ${#argv[@]} > 0 )) || die 1 "无法构造 bwrap 命令"
 
-  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
-    use_idmap=1
-  elif [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
-    log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+  local idmap_rc=1
+  if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
+    idmap_rc=0
+    _capbox_idmap_decision || idmap_rc=$?
+  elif declare -F _idmap_enabled >/dev/null 2>&1; then
+    idmap_rc=0
+    _idmap_enabled || idmap_rc=$?
+  fi
+  if (( idmap_rc == 2 )); then
     (( restricted_daemon == 1 )) && _net_cleanup_restricted_session
     return 1
+  fi
+  if (( idmap_rc == 0 )); then
+    use_idmap=1
   fi
 
   local info=""
