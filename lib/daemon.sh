@@ -172,10 +172,15 @@ _daemon_bwrap_args() {
   else
     case "${CAPBOX_NET:-open}" in
       none | restricted) a+=(--unshare-net) ;;
+      open | host | "") ;;
+      *)
+        log_err "CAPBOX_NET 非法（${CAPBOX_NET}），拒绝当作 open"
+        return 2
+        ;;
     esac
   fi
-  # 注意：restricted 的代理桥目前主要覆盖 oneshot exec；daemon 仅保证 unshare-net。
-  # 若 CAPBOX_NET=restricted，daemon 内原始网络不可用，需走一次性 exec 或后续增强。
+  # restricted：代理桥由 cmd_up 在拿到 child pid 后挂上（与 oneshot 同一套 net.sh）。
+  # 这里只保证 --unshare-net + http(s)_proxy 环境变量（由 _net_append_bwrap_args 注入）。
   a+=(--unshare-user --unshare-uts --unshare-ipc --unshare-pid)
   local _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
   local _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
@@ -617,30 +622,108 @@ _daemon_build_up_argv() {
   _out+=(--setenv CAPBOX_DAEMON_HB_TTL "${CAPBOX_DAEMON_HB_TTL:-6}")
   _out+=(--setenv CAPBOX_DAEMON_STOP_WAIT "${CAPBOX_DAEMON_STOP_WAIT:-30}")
 
-  _out+=(-- /bin/sh "$guest_guest_script")
+  # restricted 常驻容器：先等桥的 ready 文件再跑服务端，避免桥还没听就去访问网络。
+  if [[ "${CAPBOX_NET_SESSION:-}" == "daemon" ]] && declare -F _net_bridge_ready >/dev/null 2>&1; then
+    local ready_guest
+    ready_guest="$(_daemon_guest_path "$(_net_bridge_ready)")"
+    [[ -n "$ready_guest" ]] || ready_guest="/workspace/.capbox/run/net/daemon-bridge.ready"
+    _out+=(
+      -- /bin/sh -c
+      'f=$1; i=0; while [ ! -f "$f" ]; do i=$((i+1)); [ "$i" -gt 400 ] && exit 1; sleep 0.05; done; shift; exec /bin/sh "$1"'
+      sh "$ready_guest" "$guest_guest_script"
+    )
+  else
+    _out+=(-- /bin/sh "$guest_guest_script")
+  fi
+}
+
+_daemon_systemd_unit_name() {
+  local base
+  base="$(basename "${CAPBOX_WORKSPACE:-workspace}")"
+  base="$(printf '%s' "$base" | tr -c 'A-Za-z0-9' '-')"
+  base="${base#-}"
+  base="${base%-}"
+  [[ -n "$base" ]] || base="workspace"
+  printf 'capbox-%s' "${base:0:48}"
+}
+
+# 把 capbox up 交给 systemd --user。调用方（常被外层 bwrap --die-with-parent 包住）可以马上返回。
+_daemon_up_via_systemd() {
+  command -v systemd-run >/dev/null 2>&1 || die 5 "capbox up --systemd 需要 systemd-run"
+  command -v systemctl >/dev/null 2>&1 || die 5 "capbox up --systemd 需要 systemctl"
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    die 5 "用户 systemd 不可用（systemctl --user 没有 bus）。改用活得更久的任务跑 capbox up，或在登录会话里启用 lingering"
+  fi
+  local unit cli
+  unit="$(_daemon_systemd_unit_name)"
+  if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+    log_info "systemd 单元 ${unit}.service 已在运行"
+    mkdir -p "$CAPBOX_RUN_DIR"
+    printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
+    return 0
+  fi
+  cli="${_CAPBOX_CLI_BIN_DIR:-}/capbox"
+  [[ -x "$cli" ]] || cli="$(command -v capbox 2>/dev/null || true)"
+  [[ -n "$cli" && -x "$cli" ]] || die 1 "找不到 capbox 可执行文件，无法交给 systemd"
+  mkdir -p "$CAPBOX_RUN_DIR"
+  printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
+  local -a envargs=()
+  local k
+  for k in CAPBOX_NET CAPBOX_NET_ALLOW CAPBOX_SECURITY_PROFILE CAPBOX_DISTRO CAPBOX_PROXY CAPBOX_IDMAP CAPBOX_MIRROR CAPBOX_DEBUG; do
+    if [[ -n "${!k+x}" ]]; then
+      envargs+=(--setenv="${k}=${!k}")
+    fi
+  done
+  envargs+=(--setenv="CAPBOX_ROOT=${CAPBOX_WORKSPACE}")
+  envargs+=(--setenv="CAPBOX_UP_SYSTEMD_CHILD=1")
+  log_info "交给 systemd --user 单元 ${unit}.service（脱离当前进程树）"
+  if ! systemd-run --user --collect --unit="$unit" \
+    -p "WorkingDirectory=${CAPBOX_WORKSPACE}" \
+    "${envargs[@]}" \
+    -- "$cli" up; then
+    log_err "systemd-run 失败"
+    return 1
+  fi
+  log_info "单元已提交。查看: systemctl --user status ${unit}.service"
+  log_info "停止: capbox down"
+  return 0
 }
 
 cmd_up() {
+  local use_systemd=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
         cat <<'EOF'
-用法: capbox up
+用法: capbox up [--systemd]
 
-启动常驻守护容器（**前台阻塞**，必须用 DSH 后台任务运行）。
+启动常驻守护容器。
 
-  bash 工具: run_in_background=true 执行 `.capbox/bin/capbox up`
+默认前台阻塞。调用方的 shell 如果包了 bwrap --die-with-parent
+（DSH / 部分 coding agent 的 bash 工具），这次调用结束会杀掉整棵进程树，
+nohup/setsid 也救不了。两种活法：
 
-绝对不能写成 `nohup capbox up &`：DSH 的 bash 工具用 bwrap --die-with-parent
-包裹每次调用，调用结束就杀掉整棵进程树。只有后台任务能让它跨调用存活。
+  1) capbox up --systemd
+     交给 systemd --user 的 transient service，进程不属于这次工具调用。
+     需要用户会话的 systemd（systemctl --user 可用）。之后 capbox down 会停这个单元。
+  2) 把 capbox up 放进活得比工具调用更久的任务（例如 bash 工具 run_in_background）。
 
-停止: capbox down（或结束该后台任务）
+停止: capbox down
 EOF
         return 0
+        ;;
+      --systemd)
+        use_systemd=1
+        shift
         ;;
       *) die 2 "up: 未知选项 $1" ;;
     esac
   done
+
+  if (( use_systemd == 1 )) && [[ "${CAPBOX_UP_SYSTEMD_CHILD:-}" != "1" ]]; then
+    _daemon_up_via_systemd || return $?
+    return 0
+  fi
 
   [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}（apt install bubblewrap）"
   # rootfs 判据必须按**容器语义**解析符号链接：rootfs 里 /bin/sh -> /bin/busybox 是
@@ -710,9 +793,45 @@ EOF
     mv -f "$logf" "$logf.1" 2>/dev/null || true
   fi
 
+  local restricted_daemon=0 use_idmap=0
+  if declare -F _net_mode >/dev/null 2>&1; then
+    local _nm
+    _nm="$(_net_mode)" || return $?
+    if [[ "$_nm" == "restricted" ]]; then
+      restricted_daemon=1
+      export CAPBOX_NET_SESSION=daemon
+      _net_restricted_prereqs >/dev/null || return $?
+      _net_start_host_proxy || return 1
+      mkdir -p "$(_net_dir)"
+      rm -f "$(_net_dir)/daemon-child.pid" 2>/dev/null || true
+      # idmap 在放行 guest 之前把 sandbox pid 写到这个文件；cmd_up 再去挂桥。
+      _idmap_after_map_hook() {
+        printf '%s\n' "$1" >"$(_net_dir)/daemon-child.pid"
+      }
+    fi
+  fi
+
   local -a argv=()
   _daemon_build_up_argv argv
   (( ${#argv[@]} > 0 )) || die 1 "无法构造 bwrap 命令"
+
+  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+    use_idmap=1
+  elif [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
+    log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+    (( restricted_daemon == 1 )) && _net_cleanup_restricted_session
+    return 1
+  fi
+
+  local info=""
+  if (( restricted_daemon == 1 && use_idmap == 0 )); then
+    _net_inject_bwrap_info_fd argv 3 || {
+      _net_cleanup_restricted_session
+      return 1
+    }
+    info="$(_net_dir)/daemon-info.json"
+    rm -f "$info"
+  fi
 
   log_info "启动守护容器（rootfs=$CAPBOX_ROOTFS）"
 
@@ -725,19 +844,38 @@ EOF
   }
   trap _daemon_up_on_signal TERM INT
 
-  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
+  if (( use_idmap == 1 )); then
     CAPBOX_IDMAP_SPAWN_LOG="$logf"
     child="$(_idmap_spawn_bwrap_argv "${argv[@]}")" || {
       log_err "idmap 启动守护容器失败：${CAPBOX_IDMAP_DETAIL:-unknown}"
+      (( restricted_daemon == 1 )) && _net_cleanup_restricted_session
+      trap - TERM INT
       return 1
     }
+  elif (( restricted_daemon == 1 )); then
+    "${argv[@]}" 3>"$info" >>"$logf" 2>&1 &
+    child=$!
   else
-    if [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
-      log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
-      return 1
-    fi
     "${argv[@]}" >>"$logf" 2>&1 &
     child=$!
+  fi
+
+  if (( restricted_daemon == 1 )); then
+    local sandboxed=""
+    if [[ -s "$(_net_dir)/daemon-child.pid" ]]; then
+      sandboxed="$(tr -d '[:space:]' <"$(_net_dir)/daemon-child.pid")"
+    elif [[ -n "$info" ]]; then
+      sandboxed="$(_net_wait_info_child "$info" "$child" || true)"
+    fi
+    if [[ -z "$sandboxed" ]] || ! _net_start_bridge_for_child "$sandboxed"; then
+      log_err "restricted：守护容器网络桥未就绪（见 $(_net_dir)）"
+      kill "$child" 2>/dev/null || true
+      wait "$child" 2>/dev/null || true
+      _net_cleanup_restricted_session
+      trap - TERM INT
+      return 1
+    fi
+    log_info "restricted：守护容器 allowlist 代理桥已就绪"
   fi
 
   # 等待容器就绪（最多 20s），期间保持对信号的响应。
@@ -781,6 +919,9 @@ EOF
     _daemon_clear_state
     _daemon_release_up_lock
     trap - TERM INT
+    if [[ "${CAPBOX_NET_SESSION:-}" == "daemon" ]] && declare -F _net_cleanup_restricted_session >/dev/null 2>&1; then
+      _net_cleanup_restricted_session
+    fi
     return 1
   else
     # 既没就绪、进程也还在（20s 超时）：不当成失败，继续前台托管，
@@ -827,6 +968,9 @@ EOF
   rm -rf "$CAPBOX_DAEMON_DIR/ctl/kill" 2>/dev/null || true
 
   log_info "守护容器已停止（退出码 $rc）"
+  if [[ "${CAPBOX_NET_SESSION:-}" == "daemon" ]] && declare -F _net_cleanup_restricted_session >/dev/null 2>&1; then
+    _net_cleanup_restricted_session
+  fi
   return "$rc"
 }
 
@@ -852,6 +996,17 @@ cmd_down() {
       *) die 2 "down: 未知选项 $1" ;;
     esac
   done
+
+  if [[ -f "${CAPBOX_RUN_DIR:-}/systemd.unit" ]] && command -v systemctl >/dev/null 2>&1; then
+    local unit
+    unit="$(tr -d '[:space:]' <"$CAPBOX_RUN_DIR/systemd.unit" 2>/dev/null || true)"
+    if [[ -n "$unit" ]] && systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+      log_info "停止 systemd 单元 ${unit}.service"
+      systemctl --user stop "$unit" || return 1
+      rm -f "$CAPBOX_RUN_DIR/systemd.unit"
+      return 0
+    fi
+  fi
 
   if ! daemon_running; then
     # 未运行。这里要非常小心：**不要把别人/别的实例正在写的状态当垃圾清掉**。

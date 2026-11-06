@@ -192,8 +192,8 @@ _cfg_validate() {
       ;;
     NET_ALLOW)
       if [[ -n "$v" ]]; then
-        [[ "$v" =~ ^[A-Za-z0-9._:,/\-]+$ ]] || {
-          log_err "CAPBOX_NET_ALLOW 只能包含域名/IP/逗号/冒号/斜线（当前: '$v'）"
+        [[ "$v" =~ ^[A-Za-z0-9._:,/*-]+$ ]] || {
+          log_err "CAPBOX_NET_ALLOW 只能包含域名/IP/逗号/冒号/斜线/星号（当前: '$v'）"
           return 2
         }
       fi
@@ -566,6 +566,12 @@ load_config() {
   [[ -n "${CAPBOX_NET:-}" ]] || CAPBOX_NET=open
   # host 为历史别名
   [[ "${CAPBOX_NET}" == "host" ]] && CAPBOX_NET=open
+  case "${CAPBOX_NET}" in
+    none | restricted | open) ;;
+    *)
+      die 2 "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的别名；当前: '${CAPBOX_NET}'）。拒绝回退到 open"
+      ;;
+  esac
   [[ -n "${CAPBOX_HOSTNAME:-}" ]] || CAPBOX_HOSTNAME=capbox
   [[ "${CAPBOX_EXEC_TIMEOUT:-}" =~ ^[0-9]+$ ]] || CAPBOX_EXEC_TIMEOUT=600
 
@@ -1176,10 +1182,15 @@ build_bwrap_args() {
 
   # ---- 命名空间 / 网络三档 ----
   if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
-    _net_append_bwrap_args a
+    _net_append_bwrap_args a || return $?
   else
     case "${CAPBOX_NET:-open}" in
       none | restricted) a+=(--unshare-net) ;;
+      open | host | "") ;;
+      *)
+        log_err "CAPBOX_NET 非法（${CAPBOX_NET}），且 net.sh 未加载；拒绝当作 open"
+        return 2
+        ;;
     esac
   fi
   a+=(--unshare-user --unshare-uts --unshare-ipc)
@@ -1212,9 +1223,10 @@ build_bwrap_args() {
 
   # restricted 模式由 net.sh 注入桥接代理；此处仅处理用户显式 CAPBOX_PROXY（open 模式）
   if [[ -n "${CAPBOX_PROXY:-}" ]]; then
-    local _mode="${CAPBOX_NET:-open}"
+    local _mode
+    _mode="${CAPBOX_NET:-open}"
     if declare -F _net_mode >/dev/null 2>&1; then
-      _mode="$(_net_mode)"
+      _mode="$(_net_mode)" || return $?
     fi
     if [[ "$_mode" != "restricted" ]]; then
       local np="localhost,127.0.0.1,::1,*.local"
@@ -1742,7 +1754,13 @@ cmd_doctor() {
     _doctor_fail "镜像源 URL 为空（检查 CAPBOX_MIRROR_${CAPBOX_DISTRO^^}）"
   else
     case "$CAPBOX_DISTRO" in
-      alpine) url="$mirror_root/v3.20/main/x86_64/APKINDEX.tar.gz" ;;
+      alpine)
+        local _apk_arch="x86_64"
+        if declare -F _capbox_arch >/dev/null 2>&1; then
+          _apk_arch="$(_capbox_arch 2>/dev/null || echo x86_64)"
+        fi
+        url="$mirror_root/v3.20/main/${_apk_arch}/APKINDEX.tar.gz"
+        ;;
       ubuntu) url="$mirror_root/dists/noble/Release" ;;
       *) url="$mirror_root" ;;
     esac

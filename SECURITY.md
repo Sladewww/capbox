@@ -60,7 +60,7 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 |---|---|
 | `open`（默认，`host` 别名） | 共享宿主网络；出站能力 ≈ 宿主 |
 | `none` | `--unshare-net`，容器内无网络 |
-| `restricted` | `--unshare-net` + 域名 allowlist HTTP 代理；**不假装** bwrap 能过滤原始 TCP |
+| `restricted` | `--unshare-net` + 域名 allowlist HTTP 代理；**不假装** bwrap 能过滤原始 TCP。`exec` 与 `capbox up` 共用这套桥（不同 sock，互不拆掉）。无端口的规则只放行 80/443；`example.com` 不含子域；解析到回环、链路本地或私网地址会被拒绝，除非该地址显式在 allowlist 中。未知 `CAPBOX_NET` 失败，不会当成 `open` |
 
 `open` 下若 guest 被投毒，仍可能用工作区文件或网络外泄数据——环境清空挡住的是**宿主环境里的密钥**，不是 guest 自己读到的工作区机密。
 

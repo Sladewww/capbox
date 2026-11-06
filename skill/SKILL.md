@@ -1,17 +1,18 @@
 ---
 name: capbox
-description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱动。要装系统软件包、要 root 或 mount、要跑不宜污染宿主的命令、要跨调用保留状态的系统环境、要长期存活的容器服务时用它；常驻进程只能起在 DSH 后台 job 里。只读查看、文件编辑、宿主一条命令能做完的事直接用 bash，不要绕道。
+description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱动。要装系统软件包、要 root 或 mount、要跑不宜污染宿主的命令、要跨调用保留状态的系统环境、要长期存活的容器服务时用它。不可信命令用 capbox init --agent（untrusted + restricted）。常驻进程用 capbox up --systemd，没有用户 systemd 时才放进活过工具调用的后台任务。只读查看、文件编辑、宿主一条命令能做完的事直接用 bash，不要绕道。
 ---
 
 # CapBox
 
-工作区里的一台 Linux。容器内 `uid=0` 且 capability 全量：能 mount、能装包、能改任何文件。
+工作区里的一台 Linux。`init --agent` 之后是加固档：容器内仍是 root，但 capability 被丢掉、seccomp 挡住 mount/unshare/io_uring，工作区里的 `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.docker` 被遮住。
 状态落在 `.capbox/os/<distro>/`，是工作区里的普通目录，所以跨调用、跨会话都在。
+人工调试可以不带 `--agent`（默认 `compat` + `NET=open`，全 capability、无 seccomp）。不要用默认档跑来路不明的命令。
 
 入口：把 CapBox 装到 PATH（一份模板），或用项目内 `.capbox/bin/capbox`。
 **状态永远在当前会话/项目目录的 `.capbox/`**，不是 PATH 上那份模板。
 
-- 会话里还没有 `.capbox` 时：直接 `capbox init`（会从已安装模板脚手架 `bin/`/`lib/`/`skill/` 到当前目录的 `.capbox/`，再下载 rootfs）。
+- 会话里还没有 `.capbox` 时：`capbox init --agent`（脚手架到当前目录的 `.capbox/`，下载 rootfs，并写成 untrusted + restricted）。
 - 也可先 `capbox bootstrap` 只脚手架、不下载。
 - 不要把仓库克隆进每个项目当作唯一安装方式；也不要把模板树本身当成工作区（尤其不要装在 `$HOME` 下当全局状态目录）。
 
@@ -32,40 +33,28 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 
 判据：如果宿主 bash 一条命令就能得到同样的输出，用宿主。CapBox 是为了解决"宿主做不到或不该做"，不是为了提高仪式感。
 
-## 硬约束：每次 bash 调用结束都会杀掉整棵进程树
+## 硬约束：工具调用结束可能会杀掉整棵进程树
 
-DSH 的 bash 工具每次调用都包一层 `bwrap --die-with-parent`，调用返回时杀掉**那棵树**。这条决定了一切：
+不少 agent 的 bash 工具在外层加了 `bwrap --die-with-parent`。调用返回时，那棵树里的进程都会死，包括 `nohup`、`setsid`、`disown`。这条决定了常驻容器怎么起：
 
 | 需求 | 做法 |
 |---|---|
-| 跑完就走的命令 | `capbox exec -- CMD`。进程随调用结束而死，正确 |
-| 活过多次调用的容器 | bash 工具 `run_in_background: true` 跑 `capbox up`（它前台阻塞、不返回，是正常的） |
-| 活过多次调用的服务 | `run_in_background: true` 跑 `capbox up`，再 `capbox exec --daemon -- sh -c 'nohup CMD > /workspace/x.log 2>&1 &'` |
-| 兜底（少一层间接） | 整条服务命令扔进 background job：`run_in_background: true` + `capbox exec -- CMD` |
+| 跑完就走的命令 | `capbox exec -- CMD` |
+| 活过这次工具调用的容器 | `capbox up --systemd`（用户 systemd 在工具沙箱外面）。没有 user bus 时，把 `capbox up` 放进该工具提供的后台任务（例如 `run_in_background: true`），不要在前台调用里 `&` |
+| 活过多次调用的服务 | 先让 `up` 活着，再 `capbox exec --daemon -- …` 或 `capbox service start` |
 
-判据不是"能不能用 `&`"，而是**进程挂在谁的树上**：
-
-- 一次性 `exec` 里 `nohup CMD &` → 挂在那次调用的树上 → **必死**。`setsid`、`disown` 也救不回来，杀的是整棵树。
-- `exec --daemon` 里 `nohup CMD &` → 挂在**守护容器**的树上，而守护容器由 DSH background job 托管 → **跨调用存活**。
-
-所以常驻的东西，父进程链必须最终接到一个 DSH background job 上。细节见 `reference/recipes.md`。
-
-**实测补充**：常驻容器的存活取决于**承载它的 job 是否还活着**，而不是「每次调用结束就死」。
-正确做法是用 bash 工具的 `run_in_background: true` 起 `capbox up`（它前台阻塞、永不返回，这是正常的）：
+判据不是"能不能用 `&`"，而是**进程挂在谁的树上**。一次性 `exec` 里的 `nohup CMD &` 挂在这次调用上，调用结束就没了。`exec --daemon` 里的后台进程挂在守护容器上，守护容器还在就还在。
 
 ```sh
-# 用 run_in_background 起，命令体只有这一条
+# 优先：脱离当前进程树
+capbox up --systemd
+# 没有 systemd --user 时，用工具的后台任务，命令体只有这一条：
 capbox up
 ```
 
-之后在任意调用里 `capbox exec --daemon -- CMD` 都能连上同一个容器（实测跨多次调用稳定存活，
-8 并发无串扰）。用 `capbox down` 或结束该后台 job 来收尾。
+之后在任意调用里 `capbox exec --daemon -- CMD` 都能连上同一个容器。用 `capbox down` 收尾（`--systemd` 起的会停掉对应的 user unit）。
 
-**唯一的坑**：不要用 `nohup ... &` / `setsid ... &` 在普通前台调用里起 `up` ——
-那次调用一结束，`--die-with-parent` 就会杀掉整棵进程树。
-
-判断容器是否还活着，看 `capbox status --json` 的 `daemon.running`；若为 false，
-查 `run/daemon/daemon.log` 有没有「收到停止请求」：有 = 有人正常停过它，没有 = 进程被强杀。
+判断容器是否还活着，看 `capbox status --json` 的 `daemon.running`。
 
 只是想在容器里算完就走，忽略本节。
 
@@ -74,14 +63,26 @@ capbox up
 首次在该会话/项目使用时（哪怕目录里还没有 `.capbox`）：
 
 ```sh
-capbox init --distro alpine
+capbox init --agent --distro alpine
 capbox doctor
 ```
+
+`init --agent` 会脚手架（如需）、下载 rootfs，并写入 `CAPBOX_SECURITY_PROFILE=untrusted`、`CAPBOX_NET=restricted`。
+出网前还要设 allowlist，否则 `exec` 会失败（这是故意的）：
+
+```sh
+capbox config set CAPBOX_NET_ALLOW 'example.com,*.python.org,github.com:22'
+```
+
+规则：没写端口只放行 80/443；子域要显式写 `*.example.com`（`example.com` 不再连带子域）；任意端口加 `:*`。解析到回环、链路本地、私网地址会被拒绝，除非那个地址自己在 allowlist 里。
+`restricted` 对一次性 `exec` 和 `capbox up` 都生效：原始 TCP 没有路由，只有走注入的 `http_proxy` 才能出去。
+
+人工调试可以 `capbox init --distro alpine`（默认 `compat` + `NET=open`）。不要把这个默认档当成 agent 的档。
 
 `init` 会：① 若缺 `.capbox/bin`/`lib`，从 PATH 上的 CapBox 模板脚手架到 `$PWD/.capbox`；② 下载并解包 rootfs。
 不要先手动 `git clone` 进项目——那只是可选的开发/离线安装方式。
 
-**完成判据**：`doctor` 每行 PASS 且退出 0；`capbox status --json` 里 `rootfs_bytes` 大于 0。
+**完成判据**：`doctor` 没有 FAIL（WARN 可以有）。`init --agent` 且还没写 `CAPBOX_NET_ALLOW` 时，restricted 那一行是 WARN，这是预期，补上 allowlist 再跑需要出网的命令。`capbox status --json` 里 `rootfs_bytes` 大于 0。
 
 `init` 幂等，rootfs 已存在时再跑不会重复下载。`ubuntu` 更大更慢，非必要不用；用 `--distro ubuntu` 换。
 缺 rootfs 时 `exec`/`pkg` 默认退出 4 并提示 init；若设置 `CAPBOX_AUTO_INIT=1` 才会在首次 exec 时自动 init（默认关，避免惊喜下载）。
@@ -113,14 +114,19 @@ capbox exec -- curl --version
 **完成判据**：`exec -- <cmd> --version`（或等价命令）能跑通。
 
 `pkg` 已按发行版分派并处理好 `APT::Sandbox::User=root` 与镜像源。
-装包时 `dpkg`/`apk` 打的 `chown ... Invalid argument` 警告**是本环境的正常现象**（userns 只映射一个 uid），忽略它，不要因为警告改命令或反复重试。
+`chown ... Invalid argument` **不是**一律可以忽略。先看 `capbox doctor` 的 UID 映射：`multi` 时这是真失败；`single` / `blocked` 时才是单 uid 映射的边界，换 uid 会 EINVAL。细节见 `reference/troubleshooting.md`。
 
 ## 4. 常驻容器（需要跨调用保留进程/服务时才用）
 
 只有在"要留个东西一直跑"时才走这节，否则用第 2 节。
 
 ```sh
-# ① bash 工具 run_in_background: true，命令只有这一条：
+# 优先
+capbox up --systemd
+```
+
+```sh
+# 没有 systemd --user 时：用后台任务，命令只有这一条
 capbox up
 ```
 
@@ -133,12 +139,13 @@ capbox logs -n 50                             # 守护容器日志
 capbox down                                   # 用完停掉
 ```
 
-- `up` 不返回是设计如此：它活着，容器就活着；background job 结束，容器就没了。
+- `up` 不带 `--systemd` 时不返回是设计如此：它活着，容器就活着。
+- `--systemd` 提交单元后就会返回；容器活在 user systemd 里，不活在这次工具调用里。
 - 没起容器就用 `--daemon` 会返回 **3**，这是状态提示不是故障：去起 `up`。
 - `--daemon` 的所有请求进的是**同一个**容器，`/root` 下的写入在后续 `--daemon` 调用里都读得到。
 - 常驻容器的 `/tmp`、`/run` 由 `.capbox/run/tmp/` 承载，容器活着期间保留。
 - **`down` 不是"关个 shell"，是"停整台机"**：容器内所有进程一起没，包括你起的服务。只想停单个服务用 `exec --daemon -- pkill NAME`。
-- 这里 `nohup CMD &` 是**对**的：它挂在守护容器树上，而守护容器由 background job 托管。一次性 `exec` 里则必死（见上面的硬约束）。
+- 这里 `nohup CMD &` 只有在守护容器已经活着时才是对的。一次性 `exec` 里则随那次调用死掉。
 
 **完成判据**：`status` 显示 running → `exec --daemon -- echo ok` 返回 0 → 用完 `down` 后 `status` 显示 stopped。
 
@@ -173,7 +180,7 @@ capbox cp ./data.csv guest:/root/data.csv
 | 0 | 成功 | — |
 | 1 | 一般错误（内部失败、下载失败） | 读 stderr，跑 `capbox doctor` 定位 |
 | 2 | 用法错误 | 检查子命令/选项拼写，别重试同一行 |
-| 3 | 常驻容器未运行 | 用 background job 起 `capbox up` |
+| 3 | 常驻容器未运行 | `capbox up --systemd`，或把 `capbox up` 放进后台任务 |
 | 4 | rootfs 不存在 | `capbox init` |
 | 5 | 依赖缺失（如 `bwrap`） | 环境问题，重试无用，报告给用户 |
 | 124 | 容器内命令超时 | 加大 `--timeout`，或改成 background job |

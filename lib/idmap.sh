@@ -680,6 +680,16 @@ except Exception:
     rm -rf "$tmp"
     return 1
   fi
+  if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
+    _idmap_after_map_hook "$child" || {
+      log_err "idmap：after_map hook 失败"
+      kill "$bp" 2>/dev/null || true
+      printf '\n' >&"$block_fd" 2>/dev/null || true
+      exec {block_fd}>&-
+      rm -rf "$tmp"
+      return 1
+    }
+  fi
   printf '\n' >&"$block_fd" 2>/dev/null || true
   # block_fd 与 tmp 交给子进程生命周期；稍后清理 info 目录可能还在用，延迟删
   exec {block_fd}>&-

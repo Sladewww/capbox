@@ -266,7 +266,7 @@ _security_doctor_report() {
           fi
           _doctor_pass "安全档 $profile（seccomp BPF=$(basename "$bpf")，capability drop，disable-userns=${dus:-on}）"
           if [[ "$dus" == "skipped-idmap" ]]; then
-            _doctor_warn "多 UID idmap 与 bwrap --disable-userns 不兼容：已跳过 disable-userns；嵌套 userns 仍可能可用（Linux 边界）"
+            _doctor_warn "不可信负载不要和多 UID idmap 一起用：已跳过 --disable-userns，guest 仍可嵌套 user namespace。装包可以开 idmap；跑不可信命令请 CAPBOX_IDMAP=off（或单 UID）后再用 untrusted/strict"
           fi
         else
           _doctor_fail "安全档 $profile 但无法生成 seccomp BPF（拒绝伪实现）"
