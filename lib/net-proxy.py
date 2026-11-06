@@ -26,48 +26,166 @@ def _norm_host(h: str) -> str:
 def parse_allowlist(raw: str) -> List[str]:
     out: List[str] = []
     for part in (raw or "").split(","):
-        p = _norm_host(part)
+        p = part.strip()
         if p:
             out.append(p)
     return out
 
 
-def host_allowed(host: str, allow: Iterable[str]) -> bool:
+def _parse_rule(raw: str) -> Tuple[str, Optional[int], bool]:
+    """Return (host pattern, explicit port or None, any_port).
+
+    No port means 80 and 443 only. ``:*`` means any port.
+    ``*.example.com`` matches subdomains, not the apex.
+    """
+    raw = (raw or "").strip()
+    if raw.startswith("["):
+        end = raw.find("]")
+        if end > 0:
+            host = raw[1:end]
+            rest = raw[end + 1 :]
+            if rest == ":*":
+                return _norm_host(host), None, True
+            if rest.startswith(":") and rest[1:].isdigit():
+                return _norm_host(host), int(rest[1:]), False
+            return _norm_host(host), None, False
+    if raw.endswith(":*"):
+        return _norm_host(raw[:-2]), None, True
+    if ":" in raw:
+        host, maybe_port = raw.rsplit(":", 1)
+        # unbracketed IPv6 has multiple colons; only split a single trailing :port
+        if maybe_port.isdigit() and host.count(":") == 0:
+            return _norm_host(host), int(maybe_port), False
+    return _norm_host(raw), None, False
+
+
+def _port_ok(port: Optional[int], rule_port: Optional[int], any_port: bool) -> bool:
+    if port is None:
+        return True
+    if any_port:
+        return True
+    if rule_port is None:
+        return port in (80, 443)
+    return port == rule_port
+
+
+def _host_pattern_match(host: str, pattern: str) -> bool:
+    pattern = _norm_host(pattern)
+    if pattern.startswith("*."):
+        base = pattern[2:]
+        # 拒绝 "*.com"：后缀至少再含一个点
+        if "." not in base or not base:
+            return False
+        return host.endswith("." + base)
+    return host == pattern
+
+
+def _ip_forbidden(ip: "ipaddress._BaseAddress") -> bool:
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _explicit_ip_allowed(ip: "ipaddress._BaseAddress", allow: Iterable[str]) -> bool:
+    for raw in allow:
+        host, _port, _any = _parse_rule(raw)
+        if not host:
+            continue
+        try:
+            if "/" in host:
+                if ip in ipaddress.ip_network(host, strict=False):
+                    return True
+            elif ip == ipaddress.ip_address(host):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def host_allowed(host: str, allow: Iterable[str], port: Optional[int] = None) -> bool:
     host = _norm_host(host)
     if not host:
         return False
-    # strip optional port from host:port (not for IPv6 without brackets — CONNECT uses host:port)
-    if host.count(":") == 1 and not host.startswith("["):
+    if host.count(":") == 1 and not host.startswith("[") and port is None:
         maybe_host, maybe_port = host.rsplit(":", 1)
         if maybe_port.isdigit():
             host = maybe_host
+            port = int(maybe_port)
+    rules = list(allow)
     try:
         ip = ipaddress.ip_address(host)
-        for a in allow:
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if _ip_forbidden(ip) and not _explicit_ip_allowed(ip, rules):
+            return False
+        for raw in rules:
+            pat, rule_port, any_port = _parse_rule(raw)
+            if not _port_ok(port, rule_port, any_port):
+                continue
             try:
-                if ip == ipaddress.ip_address(a):
+                if "/" in pat and ip in ipaddress.ip_network(pat, strict=False):
                     return True
-                if "/" in a and ip in ipaddress.ip_network(a, strict=False):
+                if ip == ipaddress.ip_address(pat):
                     return True
             except ValueError:
                 continue
         return False
-    except ValueError:
-        pass
-    for a in allow:
-        if not a or "/" in a:
+    for raw in rules:
+        pat, rule_port, any_port = _parse_rule(raw)
+        if not pat or "/" in pat:
             continue
         try:
-            ipaddress.ip_address(a)
+            ipaddress.ip_address(pat)
             continue
         except ValueError:
             pass
-        # 域名规则至少含一个点，避免把 "com" 当成后缀放行 evil.com
-        if "." not in a:
+        if not _port_ok(port, rule_port, any_port):
             continue
-        if host == a or host.endswith("." + a):
+        if _host_pattern_match(host, pat):
             return True
     return False
+
+
+def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
+    """Connect after the allowlist check. Names that resolve only to
+    loopback / link-local / private / metadata addresses are refused
+    unless that address is itself on the allowlist.
+    """
+    host = _norm_host(host)
+    try:
+        ipaddress.ip_address(host)
+        literal = True
+    except ValueError:
+        literal = False
+    if not host_allowed(host, allow, port):
+        raise OSError(f"blocked {host}:{port}")
+    if literal:
+        return socket.create_connection((host, port), timeout=20)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise OSError(str(exc)) from exc
+    last = "no address"
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        ip_s = sockaddr[0].split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(ip_s)
+        except ValueError:
+            continue
+        if _ip_forbidden(ip) and not _explicit_ip_allowed(ip, allow):
+            last = f"blocked resolved {ip_s}"
+            continue
+        try:
+            return socket.create_connection((ip_s, sockaddr[1]), timeout=20)
+        except OSError as exc:
+            last = str(exc)
+    raise OSError(last)
 
 
 def _split_hostport(authority: str, default_port: int) -> Tuple[str, int]:
@@ -157,7 +275,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
 
         if method == "CONNECT":
             host, port = _split_hostport(target, 443)
-            if not host_allowed(host, allow):
+            if not host_allowed(host, allow, port):
                 if log:
                     print(f"capbox-net DENY CONNECT {host}:{port}", file=sys.stderr)
                 conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
@@ -166,7 +284,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
             if log:
                 print(f"capbox-net ALLOW CONNECT {host}:{port}", file=sys.stderr)
             try:
-                upstream = socket.create_connection((host, port), timeout=20)
+                upstream = _dial(host, port, allow)
             except OSError:
                 conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 conn.close()
@@ -195,7 +313,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
             conn.close()
             return
 
-        if not host_allowed(host, allow):
+        if not host_allowed(host, allow, port):
             if log:
                 print(f"capbox-net DENY {method} {host}", file=sys.stderr)
             conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
@@ -204,7 +322,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
         if log:
             print(f"capbox-net ALLOW {method} {host}:{port}", file=sys.stderr)
         try:
-            upstream = socket.create_connection((host, port), timeout=20)
+            upstream = _dial(host, port, allow)
         except OSError:
             conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
             conn.close()

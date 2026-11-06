@@ -19,12 +19,18 @@ _net_mode() {
     none) printf 'none' ;;
     restricted) printf 'restricted' ;;
     open | host | "") printf 'open' ;;
-    *) printf 'open' ;;
+    *)
+      log_err "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的别名；当前: '${CAPBOX_NET}'）。拒绝回退到 open"
+      return 2
+      ;;
   esac
 }
 
 _net_needs_unshare() {
-  case "$(_net_mode)" in
+  local mode
+  # 模式非法时按需要隔离处理（失败即关闭），调用方仍应先看 _net_mode 的退出码。
+  mode="$(_net_mode)" || return 0
+  case "$mode" in
     none | restricted) return 0 ;;
     *) return 1 ;;
   esac
@@ -47,6 +53,22 @@ _net_dir() {
   printf '%s' "${CAPBOX_RUN_DIR:-$CAPBOX_DIR/run}/net"
 }
 
+# oneshot 与 daemon 使用不同的 sock/pid，避免一次性 exec 的清理杀掉常驻代理。
+_net_session_tag() {
+  case "${CAPBOX_NET_SESSION:-oneshot}" in
+    daemon) printf 'daemon' ;;
+    *) printf 'oneshot' ;;
+  esac
+}
+
+_net_proxy_sock() { printf '%s/%s-proxy.sock' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_proxy_ready() { printf '%s/%s-proxy.ready' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_proxy_pidf() { printf '%s/%s-proxy.pid' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_proxy_log() { printf '%s/%s-proxy.log' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_bridge_ready() { printf '%s/%s-bridge.ready' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_bridge_pidf() { printf '%s/%s-bridge.pid' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_bridge_log() { printf '%s/%s-bridge.log' "$(_net_dir)" "$(_net_session_tag)"; }
+
 _net_validate_allowlist() {
   local raw="${1:-}" part
   [[ -n "$raw" ]] || {
@@ -59,7 +81,7 @@ _net_validate_allowlist() {
     part="${part#"${part%%[![:space:]]*}"}"
     part="${part%"${part##*[![:space:]]}"}"
     [[ -n "$part" ]] || continue
-    if [[ ! "$part" =~ ^[A-Za-z0-9._:/\-]+$ ]]; then
+    if [[ ! "$part" =~ ^[A-Za-z0-9._:/*-]+$ ]]; then
       log_err "CAPBOX_NET_ALLOW 含非法字符: $part"
       return 2
     fi
@@ -94,7 +116,7 @@ _net_restricted_prereqs() {
 _net_append_bwrap_args() {
   local -n _nb_arr="$1"
   local mode
-  mode="$(_net_mode)"
+  mode="$(_net_mode)" || return $?
   case "$mode" in
     none)
       _nb_arr+=(--unshare-net)
@@ -131,20 +153,20 @@ _net_start_host_proxy() {
   nd="$(_net_dir)"
   mkdir -p "$nd"
   py="$(_net_proxy_py)" || return 5
-  sock="$nd/proxy.sock"
-  ready="$nd/proxy.ready"
-  pidf="$nd/proxy.pid"
+  sock="$(_net_proxy_sock)"
+  ready="$(_net_proxy_ready)"
+  pidf="$(_net_proxy_pidf)"
   rm -f "$sock" "$ready" "$pidf" 2>/dev/null || true
   _net_validate_allowlist "${CAPBOX_NET_ALLOW:-}" || return 2
   # 后台代理
   nohup python3 "$py" proxy --sock "$sock" --allow "$CAPBOX_NET_ALLOW" --ready "$ready" \
-    ${CAPBOX_DEBUG:+--log} >>"$nd/proxy.log" 2>&1 &
+    ${CAPBOX_DEBUG:+--log} >>"$(_net_proxy_log)" 2>&1 &
   echo $! >"$pidf"
   local i
   for i in $(seq 1 50); do
     [[ -S "$sock" && -f "$ready" ]] && return 0
     if ! kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
-      log_err "restricted 代理进程退出，见 $nd/proxy.log"
+      log_err "restricted 代理进程退出，见 $(_net_proxy_log)"
       return 1
     fi
     sleep 0.05
@@ -156,7 +178,7 @@ _net_start_host_proxy() {
 _net_stop_host_proxy() {
   local nd pidf pid
   nd="$(_net_dir)"
-  pidf="$nd/proxy.pid"
+  pidf="$(_net_proxy_pidf)"
   if [[ -f "$pidf" ]]; then
     pid="$(cat "$pidf" 2>/dev/null || true)"
     if [[ -n "$pid" ]]; then
@@ -165,13 +187,13 @@ _net_stop_host_proxy() {
     fi
     rm -f "$pidf"
   fi
-  rm -f "$nd/proxy.sock" "$nd/proxy.ready" 2>/dev/null || true
+  rm -f "$(_net_proxy_sock)" "$(_net_proxy_ready)" 2>/dev/null || true
 }
 
 _net_stop_bridge() {
   local nd pidf pid
   nd="$(_net_dir)"
-  pidf="$nd/bridge.pid"
+  pidf="$(_net_bridge_pidf)"
   if [[ -f "$pidf" ]]; then
     pid="$(cat "$pidf" 2>/dev/null || true)"
     if [[ -n "$pid" ]]; then
@@ -180,7 +202,7 @@ _net_stop_bridge() {
     fi
     rm -f "$pidf"
   fi
-  rm -f "$nd/bridge.ready" "$nd/go" 2>/dev/null || true
+  rm -f "$(_net_bridge_ready)" "$nd/go" 2>/dev/null || true
 }
 
 # 在 guest netns 内启动 lo + TCP 桥
@@ -193,9 +215,9 @@ _net_start_bridge_for_child() {
   }
   nd="$(_net_dir)"
   py="$(_net_proxy_py)" || return 5
-  sock="$nd/proxy.sock"
-  ready="$nd/bridge.ready"
-  pidf="$nd/bridge.pid"
+  sock="$(_net_proxy_sock)"
+  ready="$(_net_bridge_ready)"
+  pidf="$(_net_bridge_pidf)"
   rm -f "$ready" "$pidf" 2>/dev/null || true
   [[ -S "$sock" ]] || {
     log_err "代理 sock 不存在: $sock"
@@ -206,13 +228,13 @@ _net_start_bridge_for_child() {
     /bin/sh -c "
       ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null || true
       exec python3 $(printf %q "$py") bridge --listen 127.0.0.1:${CAPBOX_NET_BRIDGE_PORT} --sock $(printf %q "$sock") --ready $(printf %q "$ready")
-    " >>"$nd/bridge.log" 2>&1 &
+    " >>"$(_net_bridge_log)" 2>&1 &
   echo $! >"$pidf"
   local i
   for i in $(seq 1 50); do
     [[ -f "$ready" ]] && return 0
     if ! kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
-      log_err "restricted 桥接进程退出，见 $nd/bridge.log"
+      log_err "restricted 桥接进程退出，见 $(_net_bridge_log)"
       return 1
     fi
     sleep 0.05
@@ -226,6 +248,51 @@ _net_start_bridge_for_child() {
 _net_cleanup_restricted_session() {
   _net_stop_bridge
   _net_stop_host_proxy
+}
+
+# 在 bwrap 参数数组里、紧跟 bwrap 可执行文件之后插入 --info-fd。
+_net_inject_bwrap_info_fd() {
+  local -n _inf="$1"
+  local fd="${2:-3}"
+  local i
+  for (( i = 0; i < ${#_inf[@]}; i++ )); do
+    if [[ "${_inf[$i]}" == */bwrap || "${_inf[$i]}" == "bwrap" || "${_inf[$i]}" == "${CAPBOX_BWRAP:-}" ]]; then
+      _inf=("${_inf[@]:0:i+1}" --info-fd "$fd" "${_inf[@]:i+1}")
+      return 0
+    fi
+  done
+  log_err "restricted：argv 里没有 bwrap，无法注入 --info-fd"
+  return 1
+}
+
+_net_child_pid_from_info() {
+  local info="${1:-}"
+  [[ -s "$info" ]] || return 1
+  python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("child-pid") or "")
+except Exception:
+    print("")' "$info" 2>/dev/null
+}
+
+# 等到 bwrap --info-fd 写出 child-pid。成功时打印 pid。
+_net_wait_info_child() {
+  local info="${1:-}" bp="${2:-}"
+  local i child=""
+  for i in $(seq 1 100); do
+    if [[ -s "$info" ]]; then
+      child="$(_net_child_pid_from_info "$info" || true)"
+      if [[ -n "$child" ]]; then
+        printf '%s' "$child"
+        return 0
+      fi
+    fi
+    if [[ -n "$bp" ]] && ! kill -0 "$bp" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  return 1
 }
 
 # run_bwrap_oneshot 的 restricted 实现：cwd timeout cmd...
@@ -310,7 +377,10 @@ _net_run_bwrap_oneshot() {
 # doctor 用的网络项报告
 _net_doctor_report() {
   local mode
-  mode="$(_net_mode)"
+  mode="$(_net_mode)" || {
+    _doctor_fail "CAPBOX_NET 非法（${CAPBOX_NET:-}）；拒绝当作 open"
+    return
+  }
   case "$mode" in
     none)
       _doctor_pass "网络模式 none（--unshare-net，容器内无网络）"

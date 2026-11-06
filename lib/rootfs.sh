@@ -7,49 +7,117 @@
 
 # ---------- 1. 发行版镜像表 ---------------------------------------------------
 
-# 各发行版的固定版本与 tarball 名（契约 §0 已验证）
+# 各发行版的固定版本与 tarball 名。校验和见 lib/rootfs-sha256.txt（官方发布文件）。
 _capbox_alpine_version() { printf '3.20.3'; }
 _capbox_ubuntu_version() { printf '24.04.3'; }
 
-# _distro_tarball_name DISTRO  -> 缓存文件名
-_distro_tarball_name() {
-  case "${1:-}" in
-    alpine) printf 'alpine-minirootfs-%s-x86_64.tar.gz' "$(_capbox_alpine_version)" ;;
-    ubuntu) printf 'ubuntu-base-%s-base-amd64.tar.gz' "$(_capbox_ubuntu_version)" ;;
+# x86_64 | aarch64。失败时返回 1，不猜测。
+_capbox_arch() {
+  case "$(uname -m)" in
+    x86_64 | amd64) printf 'x86_64' ;;
+    aarch64 | arm64) printf 'aarch64' ;;
+    *)
+      log_err "不支持的 CPU 架构: $(uname -m)（需要 x86_64 或 aarch64）"
+      return 1
+      ;;
+  esac
+}
+
+# ubuntu tarball 用 amd64/arm64，不是 uname 的 x86_64/aarch64
+_capbox_ubuntu_arch() {
+  case "$(_capbox_arch)" in
+    x86_64) printf 'amd64' ;;
+    aarch64) printf 'arm64' ;;
     *) return 1 ;;
   esac
+}
+
+# _distro_tarball_name DISTRO  -> 缓存文件名
+_distro_tarball_name() {
+  local arch
+  arch="$(_capbox_arch)" || return 1
+  case "${1:-}" in
+    alpine) printf 'alpine-minirootfs-%s-%s.tar.gz' "$(_capbox_alpine_version)" "$arch" ;;
+    ubuntu) printf 'ubuntu-base-%s-base-%s.tar.gz' "$(_capbox_ubuntu_version)" "$(_capbox_ubuntu_arch)" ;;
+    *) return 1 ;;
+  esac
+}
+
+_distro_tarball_sha256() {
+  local distro="${1:-}" arch key file line
+  arch="$(_capbox_arch)" || return 1
+  case "$distro" in
+    alpine) key="alpine-${arch}" ;;
+    ubuntu) key="ubuntu-${arch}" ;;
+    *) return 1 ;;
+  esac
+  file="${CAPBOX_LIB_DIR:-}/rootfs-sha256.txt"
+  if [[ ! -f "$file" ]]; then
+    file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rootfs-sha256.txt"
+  fi
+  [[ -f "$file" ]] || {
+    log_err "缺少 rootfs 校验和文件: $file"
+    return 1
+  }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "$key "*)
+        printf '%s' "${line#"$key "}"
+        return 0
+        ;;
+    esac
+  done <"$file"
+  log_err "rootfs-sha256.txt 没有 $key"
+  return 1
+}
+
+_tarball_sha256_matches() {
+  local f="${1:-}" expect="${2:-}" got
+  [[ -n "$expect" && -s "$f" ]] || return 1
+  if have_cmd sha256sum; then
+    got="$(sha256sum "$f" | awk '{print $1}')"
+  elif have_cmd shasum; then
+    got="$(shasum -a 256 "$f" | awk '{print $1}')"
+  else
+    log_err "校验 rootfs 需要 sha256sum"
+    return 1
+  fi
+  [[ "$got" == "$expect" ]]
 }
 
 # _distro_tarball_url DISTRO  -> 官方上游 URL（缓存未命中时才用）
 _distro_tarball_url() {
+  local arch name
+  arch="$(_capbox_arch)" || return 1
+  name="$(_distro_tarball_name "$1")" || return 1
   case "${1:-}" in
     alpine)
-      printf 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/%s' \
-        "$(_distro_tarball_name alpine)"
+      printf 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/%s/%s' "$arch" "$name"
       ;;
     ubuntu)
-      printf 'https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/%s' \
-        "$(_distro_tarball_name ubuntu)"
+      printf 'https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/%s' "$name"
       ;;
     *) return 1 ;;
   esac
 }
 
-# 备选下载源（按顺序尝试；先国内镜像）
+# 备选下载源（按顺序尝试；先国内镜像）。每个源都要过 SHA256，失败就换下一个。
 _distro_tarball_urls() {
-  local d="${1:-}"
+  local d="${1:-}" name arch
+  arch="$(_capbox_arch)" || return 1
+  name="$(_distro_tarball_name "$d")" || return 1
   case "$d" in
     alpine)
       printf '%s\n' \
-        "https://mirrors.aliyun.com/alpine/v3.20/releases/x86_64/$(_distro_tarball_name alpine)" \
-        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/x86_64/$(_distro_tarball_name alpine)" \
-        "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/$(_distro_tarball_name alpine)"
+        "https://mirrors.aliyun.com/alpine/v3.20/releases/${arch}/$name" \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/${arch}/$name" \
+        "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/${arch}/$name"
       ;;
     ubuntu)
       printf '%s\n' \
-        "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/$(_distro_tarball_name ubuntu)" \
-        "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/$(_distro_tarball_name ubuntu)" \
-        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/$(_distro_tarball_name ubuntu)"
+        "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/$name" \
+        "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/$name" \
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/$name"
       ;;
     *) return 1 ;;
   esac
@@ -57,14 +125,19 @@ _distro_tarball_urls() {
 
 # ---------- 2. 下载与解包 -----------------------------------------------------
 
-# 校验 tarball 是否可用（gzip 完整性 + 大小下限）
+# 校验 tarball：gzip 完整性 + 体积下限 + 官方 SHA256（有钉扎时）
 _tarball_ok() {
-  local f="${1:-}"
+  local f="${1:-}" distro="${2:-}"
   [[ -s "$f" ]] || return 1
   local sz
   sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
   (( sz > 100000 )) || return 1
   gzip -t "$f" >/dev/null 2>&1 || return 1
+  if [[ -n "$distro" ]]; then
+    local expect
+    expect="$(_distro_tarball_sha256 "$distro")" || return 1
+    _tarball_sha256_matches "$f" "$expect" || return 1
+  fi
   return 0
 }
 
@@ -94,10 +167,14 @@ fetch_tarball() {
   mkdir -p "$CAPBOX_CACHE_DIR" || die 1 "无法创建缓存目录: $CAPBOX_CACHE_DIR"
 
   # 1) 缓存命中
-  if (( force == 0 )) && _tarball_ok "$dst"; then
+  if (( force == 0 )) && _tarball_ok "$dst" "$distro"; then
     log_info "使用已缓存镜像: $dst"
     printf '%s\n' "$dst"
     return 0
+  fi
+  if [[ -e "$dst" ]] && ! _tarball_ok "$dst" "$distro"; then
+    log_warn "缓存镜像未通过 SHA256，重新下载: $dst"
+    rm -f -- "$dst"
   fi
   if (( force == 1 )) && [[ -e "$dst" ]]; then
     log_info "强制重新下载，删除旧缓存: $dst"
@@ -127,13 +204,13 @@ fetch_tarball() {
     log_info "下载 $distro rootfs（源 $n/${#urls[@]}）: $u"
     if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -m 1800 \
       -o "$tmp" "$u" 2>/dev/null; then
-      if _tarball_ok "$tmp"; then
+      if _tarball_ok "$tmp" "$distro"; then
         mv -f -- "$tmp" "$dst"
-        log_info "下载完成: $dst（$(human_bytes "$(stat -c %s "$dst" 2>/dev/null || echo 0)"))"
+        log_info "下载完成: $dst（$(human_bytes "$(stat -c %s "$dst" 2>/dev/null || echo 0)")，SHA256 已核对）"
         ok=1
         break
       fi
-      log_warn "下载的文件校验失败，尝试下一个源"
+      log_warn "下载的文件未通过 gzip/SHA256 校验，尝试下一个源"
     else
       log_warn "下载失败: $u"
     fi
@@ -387,6 +464,7 @@ cmd_init() {
   local distro="$CAPBOX_DISTRO"
   local force=0
   local from=""
+  local agent=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -402,6 +480,10 @@ cmd_init() {
         force=1
         shift
         ;;
+      --agent)
+        agent=1
+        shift
+        ;;
       --from)
         from="${2:-}"
         shift 2 || shift
@@ -412,7 +494,7 @@ cmd_init() {
         ;;
       -h | --help)
         cat <<'EOF'
-用法: capbox init [--distro alpine|ubuntu] [--force] [--from URL|本地路径]
+用法: capbox init [--distro alpine|ubuntu] [--force] [--from URL|本地路径] [--agent]
 
   若当前工作区还没有完整的 .capbox/，会先从已安装的 CapBox 模板脚手架
   bin/、lib/、skill/ 到 $PWD/.capbox（不覆盖已有文件，不复制 cache/os/run）。
@@ -420,6 +502,8 @@ cmd_init() {
   --distro D   选择发行版（默认取 CAPBOX_DISTRO，初始 alpine）
   --force      忽略缓存重新下载，并覆盖已有 rootfs
   --from P     指定镜像来源：http(s) URL 或本地 tarball 路径
+  --agent      给 coding agent 的预设：SECURITY_PROFILE=untrusted，NET=restricted
+               （出网前还要设 CAPBOX_NET_ALLOW；无端口只放行 80/443）
 EOF
         return 0
         ;;
@@ -440,7 +524,7 @@ EOF
   fi
 
   need_cmd tar
-  with_lock init -- _do_init "$distro" "$force" "$from"
+  with_lock init -- _do_init "$distro" "$force" "$from" "$agent"
 }
 
 # 仅脚手架：把 CLI 模板的 bin/lib/skill 填进当前工作区 .capbox，不下载 rootfs
@@ -470,10 +554,35 @@ EOF
   return 0
 }
 
+_apply_agent_preset() {
+  config_set SECURITY_PROFILE untrusted || return $?
+  config_set NET restricted || return $?
+  log_info "agent 预设: CAPBOX_SECURITY_PROFILE=untrusted CAPBOX_NET=restricted"
+  log_info "untrusted 会遮盖工作区内的 .ssh .gnupg .aws .azure .kube .docker"
+  if [[ -z "${CAPBOX_NET_ALLOW:-}" ]]; then
+    log_warn "CAPBOX_NET_ALLOW 仍为空：restricted 下 exec 会失败。写入 allowlist 后再跑需要出网的命令"
+    log_warn "规则：example.com 只放行该主机的 80/443；子域写 *.example.com；任意端口加 :* （例 github.com:22）"
+  fi
+}
+
+# 显式 --from：gzip 必须有效。和官方钉扎一致则记录；不一致只警告。
+_tarball_accept_explicit() {
+  local f="${1:-}" distro="${2:-}" expect
+  _tarball_ok "$f" || return 1
+  expect="$(_distro_tarball_sha256 "$distro" 2>/dev/null || true)"
+  if [[ -n "$expect" ]] && _tarball_sha256_matches "$f" "$expect"; then
+    log_info "显式 rootfs 与官方 SHA256 一致"
+  else
+    log_warn "显式 --from 的 tarball 与官方 SHA256 不一致，按你指定的来源接受（官方下载路径不会这样）"
+  fi
+  return 0
+}
+
 _do_init() {
   local distro="${1:-}"
   local force="${2:-0}"
   local from="${3:-}"
+  local agent="${4:-0}"
   local rootfs="$CAPBOX_DIR/os/$distro"
 
   log_info "初始化 CapBox 发行版: $distro"
@@ -481,7 +590,10 @@ _do_init() {
   # 已存在且不强制 -> 幂等直接返回
   if rootfs_ready_at "$rootfs" && (( force == 0 )); then
     log_info "rootfs 已存在，跳过下载与解包: $rootfs"
-    _init_finalize "$distro"
+    _init_finalize "$distro" || return $?
+    if [[ "$agent" == "1" ]]; then
+      _apply_agent_preset || return $?
+    fi
     return 0
   fi
 
@@ -500,7 +612,7 @@ _do_init() {
           rm -f "$dst.part" 2>/dev/null || true
           die 1 "下载失败: $from"
         fi
-        _tarball_ok "$dst.part" || {
+        _tarball_accept_explicit "$dst.part" "$distro" || {
           rm -f "$dst.part" 2>/dev/null || true
           die 1 "下载的文件不是有效的 gzip tarball: $from"
         }
@@ -509,7 +621,7 @@ _do_init() {
         ;;
       *)
         [[ -f "$from" ]] || die 1 "本地 tarball 不存在: $from"
-        _tarball_ok "$from" || die 1 "不是有效的 gzip tarball: $from"
+        _tarball_accept_explicit "$from" "$distro" || die 1 "不是有效的 gzip tarball: $from"
         tarball="$(resolve_path "$from")"
         # 拷进缓存以便下次复用
         local name2
@@ -534,7 +646,10 @@ _do_init() {
   # 4) 切换配置里的 distro —— 由 _init_finalize 统一处理，
   #    这样「首次解包」与「幂等早退」两条路径行为一致
   #    （曾经只在解包路径上切，导致 init --distro 切换后 exec 仍进旧发行版）
-  _init_finalize "$distro"
+  _init_finalize "$distro" || return $?
+  if [[ "$agent" == "1" ]]; then
+    _apply_agent_preset || return $?
+  fi
 }
 
 # 注入镜像源/代理 + 首次引导 + 收尾检查（幂等，重复调用安全）

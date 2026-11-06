@@ -89,7 +89,7 @@ CLI 应自己加 `-o APT::Sandbox::User=root`（并写进 `/etc/apt/apt.conf.d/9
 
 `up` 是前台阻塞的守护进程。用普通 bash 调用跑它，那个调用会挂到超时；用 `nohup ... &` 跑它，调用返回时整棵进程树被杀，容器立刻消失，而 `.capbox/run/daemon/daemon.json` 可能残留。
 
-**正确做法**：bash 工具 `run_in_background: true` 跑 `capbox up` 这一条命令，然后用普通调用做后续操作。
+**正确做法**：优先 `capbox up --systemd`（user systemd 在工具调用的进程树外面）。没有 `systemctl --user` 时，用工具的后台任务跑 `capbox up` 这一条命令，然后用普通调用做后续操作。不要在会被 `--die-with-parent` 收掉的前台调用里 `nohup capbox up &`。
 
 排查顺序：
 

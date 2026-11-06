@@ -5,8 +5,12 @@ Uses libseccomp via ctypes (no python3-seccomp package required).
 Writes raw BPF to --out (or stdout as binary). Exit 0 on success.
 
 Profiles:
-  untrusted — deny mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/...
+  untrusted — deny mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/
+              unshare/setns/io_uring
   strict    — untrusted + ptrace + perf_event_open + process_vm_{read,write}v
+
+clone3 is intentionally NOT denied: glibc uses it to create threads. Namespace
+creation is blocked via unshare/setns (and bwrap --disable-userns when idmap is off).
 """
 from __future__ import annotations
 
@@ -44,13 +48,16 @@ _FALLBACK_NR = {
         "fsopen": 430,
         "fsconfig": 431,
         "fsmount": 432,
-        "move_mount": 433,
+        "move_mount": 429,
         "open_tree": 428,
         "fspick": 433,
         "mount_setattr": 442,
         "unshare": 272,
         "setns": 308,
         "clone3": 435,
+        "io_uring_setup": 425,
+        "io_uring_enter": 426,
+        "io_uring_register": 427,
     },
     "aarch64": {
         "mount": 40,
@@ -78,13 +85,16 @@ _FALLBACK_NR = {
         "fsopen": 430,
         "fsconfig": 431,
         "fsmount": 432,
-        "move_mount": 433,
+        "move_mount": 429,
         "open_tree": 428,
         "fspick": 433,
         "mount_setattr": 442,
         "unshare": 97,
         "setns": 268,
         "clone3": 435,
+        "io_uring_setup": 425,
+        "io_uring_enter": 426,
+        "io_uring_register": 427,
     },
 }
 
@@ -95,6 +105,8 @@ UNTRUSTED = [
     "open_by_handle_at", "name_to_handle_at",
     "keyctl", "add_key", "request_key",
     "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "mount_setattr",
+    "unshare", "setns",
+    "io_uring_setup", "io_uring_enter", "io_uring_register",
 ]
 
 STRICT_EXTRA = [

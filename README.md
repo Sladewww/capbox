@@ -22,18 +22,33 @@ CapBox 用 `bwrap`（bubblewrap）+ user namespace：把 `os/<distro>/` bind 成
 
 | 模式 | 行为 | 说明 |
 |------|------|------|
-| `open`（别名 `host`） | 共享宿主网络 | **默认**；与历史行为一致 |
+| `open`（别名 `host`） | 共享宿主网络 | 人类调试的默认；与历史行为一致 |
 | `none` | `bwrap --unshare-net` | 容器内无网络 |
-| `restricted` | `--unshare-net` + 域名 allowlist HTTP 代理 | **不假装** bwrap 能过滤域名。原始 TCP/UDP 无路由；仅尊重 `http(s)_proxy` 的客户端可出站 |
+| `restricted` | `--unshare-net` + 域名 allowlist HTTP 代理 | **不假装** bwrap 能过滤域名。原始 TCP/UDP 无路由；仅尊重 `http(s)_proxy` 的客户端可出站。一次性 `exec` 和 `capbox up` 都挂这条桥 |
 
-`restricted` 前置：`python3`、`nsenter`（util-linux）、非空 `CAPBOX_NET_ALLOW`（逗号分隔域名/IP）。
+`restricted` 前置：`python3`、`nsenter`（util-linux）、非空 `CAPBOX_NET_ALLOW`。
+未知取值直接失败，不会当成 `open`。
+
+allow 语法（逗号分隔）：
+
+| 写法 | 含义 |
+|------|------|
+| `example.com` | 只这个主机，只 80 和 443，不含子域 |
+| `*.example.com` | 子域，不含 apex；同样只 80/443 |
+| `github.com:22` | 只这个端口 |
+| `example.com:*` | 任意端口 |
+| `10.0.0.0/8` | 显式网段 |
+
+名字解析到回环、链路本地（含云元数据）或私网地址时拒绝，除非那个地址自己写在 allowlist 里。
 
 ```sh
 capbox config set CAPBOX_NET restricted
-capbox config set CAPBOX_NET_ALLOW 'pypi.org,files.pythonhosted.org,mirrors.aliyun.com'
+capbox config set CAPBOX_NET_ALLOW 'pypi.org,files.pythonhosted.org,*.python.org'
 capbox exec -- curl -I https://pypi.org/
 capbox exec --net none -- curl -I https://example.com/   # 仅本次覆盖为无网
 ```
+
+给 coding agent 用 `capbox init --agent`：写入 `CAPBOX_SECURITY_PROFILE=untrusted` 和 `CAPBOX_NET=restricted`（还要自己填 allowlist）。默认档仍是 `compat` + `open`，那是兼容，不是加固。
 
 ## 声明式配方（recipe）
 
@@ -73,7 +88,7 @@ capbox recipe show
 | 档 | 行为 |
 |----|------|
 | `compat`（默认） | 不削弱现有兼容：全量 capability、无 seccomp |
-| `untrusted` | capability drop + **真实** seccomp BPF（libseccomp）+ 遮盖 `.ssh` 等；多 UID idmap 时跳过 `--disable-userns`（与 `userns-block-fd` 不兼容，属 Linux/bwrap 边界） |
+| `untrusted` | capability drop + **真实** seccomp BPF（libseccomp，含 `unshare`/`setns`/`io_uring_*`）+ 遮盖 `.ssh` 等；多 UID idmap 时跳过 `--disable-userns`。doctor 会说明：**不可信负载不要和 idmap 一起开** |
 | `strict` | 更严 seccomp；默认倾向 `ROOTFS_RO=1`（overlay 可用时写 upper） |
 
 `capbox exec --profile untrusted -- …` 可单次覆盖。负向测试见 T30。
@@ -114,7 +129,8 @@ ln -s ~/.agents/capbox/bin/capbox ~/.local/bin/capbox   # 确保 ~/.local/bin �
 
 # 2) 任意项目/会话目录里第一次使用
 cd /path/to/your-project
-capbox init --distro alpine   # 自动在本目录生成 .capbox/ 并下载 rootfs
+capbox init --distro alpine   # 自动在本目录生成 .capbox/ 并下载 rootfs（官方 tarball，SHA256 钉扎；x86_64 与 aarch64）
+capbox init --agent --distro alpine   # 同上，并写成 untrusted + restricted
 capbox doctor
 capbox exec -- id -u          # → 0
 ```
@@ -150,7 +166,9 @@ capbox exec -- id -u             # → 0
 跨多次调用保活（起服务、留进程）：
 
 ```sh
-# 必须在后台任务里跑；前台阻塞是设计如此
+# 必须活过本次调用：优先交给用户 systemd
+capbox up --systemd
+# 没有 systemd --user 时，用会活下去的后台任务跑（前台阻塞是设计如此）
 capbox up
 capbox exec --daemon -- sh -c 'nohup sleep 3600 &'
 capbox down
@@ -161,13 +179,13 @@ capbox down
 | 命令 | 用途 |
 |---|---|
 | `bootstrap` | 在当前目录脚手架 `.capbox/`（不下载） |
-| `init [--distro D] [--from URL] [--force]` | 脚手架（如需）+ 安装 rootfs |
+| `init [--distro D] [--from URL] [--force] [--agent]` | 脚手架（如需）+ 安装 rootfs。`--agent` 写 untrusted + restricted |
 | `status [--json]` | distro / rootfs / daemon / 网络 |
 | `exec [--daemon] [--timeout N] [--cwd DIR] -- CMD` | 容器内执行 |
 | `shell [--daemon]` | 交互 shell |
 | `pkg install\|remove\|update\|list PKG...` | apk / apt |
 | `cp SRC DST` | 宿主 ↔ 容器（`guest:` / `host:`） |
-| `up` / `down` / `logs` | 常驻容器 |
+| `up [--systemd]` / `down` / `logs` | 常驻容器。`--systemd` 交给 systemd --user |
 | `service start\|stop\|status\|logs\|list` | 配置化服务（`.capbox/services/*.env`） |
 | `ls` / `ps` | 容器内目录 / 进程 |
 | `doctor` | 自检（有 FAIL 则退出 1） |
