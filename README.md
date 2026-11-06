@@ -48,7 +48,7 @@ capbox exec -- curl -I https://pypi.org/
 capbox exec --net none -- curl -I https://example.com/   # 仅本次覆盖为无网
 ```
 
-给 coding agent 用 `capbox init --agent`：写入 `CAPBOX_SECURITY_PROFILE=untrusted` 和 `CAPBOX_NET=restricted`（还要自己填 allowlist）。默认档仍是 `compat` + `open`，那是兼容，不是加固。
+给 coding agent 用 `capbox init --agent`：写入 `CAPBOX_SECURITY_PROFILE=untrusted` 和 `CAPBOX_NET=none`。`pkg install` 与 `pkg update` 仍出网；其它出网在当次命令声明（`exec --net restricted`，需 `CAPBOX_NET_ALLOW`，或 `--net open`）。默认档仍是 `compat` + `open`，那是兼容，不是加固。
 
 ## 声明式配方（recipe）
 
@@ -130,7 +130,7 @@ ln -s ~/.agents/capbox/bin/capbox ~/.local/bin/capbox   # 确保 ~/.local/bin �
 # 2) 任意项目/会话目录里第一次使用
 cd /path/to/your-project
 capbox init --distro alpine   # 自动在本目录生成 .capbox/ 并下载 rootfs（官方 tarball，SHA256 钉扎；x86_64 与 aarch64）
-capbox init --agent --distro alpine   # 同上，并写成 untrusted + restricted
+capbox init --agent --distro alpine   # 同上，并写成 untrusted + NET=none
 capbox doctor
 capbox exec -- id -u          # → 0
 ```
@@ -179,13 +179,13 @@ capbox down
 | 命令 | 用途 |
 |---|---|
 | `bootstrap` | 在当前目录脚手架 `.capbox/`（不下载） |
-| `init [--distro D] [--from URL] [--force] [--agent]` | 脚手架（如需）+ 安装 rootfs。`--agent` 写 untrusted + restricted |
+| `init [--distro D] [--from URL] [--force] [--agent]` | 脚手架（如需）+ 安装 rootfs。`--agent` 写 untrusted + NET=none |
 | `status [--json]` | distro / rootfs / daemon / 网络 |
 | `exec [--daemon] [--timeout N] [--cwd DIR] -- CMD` | 容器内执行 |
 | `shell [--daemon]` | 交互 shell |
 | `pkg install\|remove\|update\|list PKG...` | apk / apt |
 | `cp SRC DST` | 宿主 ↔ 容器（`guest:` / `host:`） |
-| `up [--systemd]` / `down` / `logs` | 常驻容器。`--systemd` 交给 systemd --user |
+| `up [--systemd] [--net MODE]` / `down` / `logs` | 常驻容器。`--systemd` 交给 systemd --user。`--net` 只作用于这一次 up |
 | `service start\|stop\|status\|logs\|list` | 配置化服务（`.capbox/services/*.env`） |
 | `ls` / `ps` | 容器内目录 / 进程 |
 | `doctor` | 自检（有 FAIL 则退出 1） |

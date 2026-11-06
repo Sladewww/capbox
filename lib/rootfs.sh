@@ -569,8 +569,9 @@ cmd_init() {
   --distro D   选择发行版（默认取 CAPBOX_DISTRO，初始 alpine）
   --force      忽略缓存重新下载，并覆盖已有 rootfs
   --from P     指定镜像来源：http(s) URL 或本地 tarball 路径
-  --agent      给 coding agent 的预设：SECURITY_PROFILE=untrusted，NET=restricted
-               （出网前还要设 CAPBOX_NET_ALLOW；无端口只放行 80/443）
+  --agent      给 coding agent 的预设：SECURITY_PROFILE=untrusted，NET=none
+               pkg install / pkg update 仍出网。其它出网在当次命令声明：
+               exec|shell|up --net restricted（需 CAPBOX_NET_ALLOW）或 --net open
 EOF
         return 0
         ;;
@@ -623,13 +624,12 @@ EOF
 
 _apply_agent_preset() {
   config_set SECURITY_PROFILE untrusted || return $?
-  config_set NET restricted || return $?
-  log_info "agent 预设: CAPBOX_SECURITY_PROFILE=untrusted CAPBOX_NET=restricted"
+  config_set NET none || return $?
+  log_info "agent 预设: CAPBOX_SECURITY_PROFILE=untrusted CAPBOX_NET=none"
   log_info "untrusted 会遮盖工作区内的 .ssh .gnupg .aws .azure .kube .docker"
-  if [[ -z "${CAPBOX_NET_ALLOW:-}" ]]; then
-    log_warn "CAPBOX_NET_ALLOW 仍为空：restricted 下 exec 会失败。写入 allowlist 后再跑需要出网的命令"
-    log_warn "规则：example.com 只放行该主机的 80/443；子域写 *.example.com；任意端口加 :* （例 github.com:22）"
-  fi
+  log_info "pkg install 与 pkg update 会出网。其它命令默认无网络"
+  log_info "当次要出网: capbox exec --net restricted -- CMD（需先写 CAPBOX_NET_ALLOW）或 --net open"
+  log_info "allowlist：example.com 只放行该主机的 80/443；子域写 *.example.com；任意端口加 :* （例 github.com:22）"
 }
 
 # 显式 --from：gzip 必须有效。和官方钉扎一致则记录；不一致只警告。

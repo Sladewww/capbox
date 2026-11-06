@@ -11,9 +11,10 @@
   - allow 语法：`example.com`（仅 80/443，不含子域）、`*.example.com`、`github.com:22`、`host:*`、CIDR。显式网段仍受端口约束。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在名单里才放行。
   - 未知的 `CAPBOX_NET` 直接失败，不会当成 `open`。
 
-`capbox init --agent` 写入 `untrusted` + `restricted`。agent 用这个，不要用默认的 `compat` + `open`。
+`capbox init --agent` 写入 `untrusted` + `NET=none`。agent 用这个，不要用默认的 `compat` + `open`。
+`pkg install` 和 `pkg update` 在 none 下仍出网，不写回配置。`remove` 和 `list` 不出网。`pip` / `npm` / `git` 不自动识别。
 
-CLI 覆盖：`capbox exec --net none|restricted|open -- CMD`
+当次声明：`capbox exec|shell|up --net none|restricted|open -- …`。`restricted` 需要已经写好的 `CAPBOX_NET_ALLOW`。服务在自己的 `.env` 里写 `NET=`。
 
 ## recipe
 

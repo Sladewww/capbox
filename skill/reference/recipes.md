@@ -26,7 +26,7 @@ ENV
 
 **完成判据**：`service status` 显示 running，日志里没有立刻退出。停这一个用 `service stop nginx`。`capbox down` 停的是守护容器，不停这个服务。
 
-网络跟全局 `CAPBOX_NET` 走。`init --agent` 之后全局是 `restricted`，宿主 `curl 127.0.0.1` 连不上这个服务自己的网络命名空间。要给宿主回环访问，只在这份 `.env` 里写 `NET=open`，或写 `PUBLISH=18080:80` 再 curl 宿主端口。不要为了这一个服务把全局 `CAPBOX_NET` 改成 `open`。
+`init --agent` 之后全局是 `none`。服务默认也没有网。要给宿主回环访问，只在这份 `.env` 里写 `NET=open`，或写 `PUBLISH=18080:80` 再 curl 宿主端口。不要为了这一个服务把全局 `CAPBOX_NET` 改成 `open`。
 
 ### 多次 `exec --daemon` 要共享同一台机时
 
@@ -102,7 +102,7 @@ service 进程就是这个 job 的前台进程。验证方式同上。代价：�
 
 ## Python HTTP 服务（最常用的临时服务）
 
-和上面一样，优先 `service`，不先 `up`。`NET=open` 只写在这个服务上，方便宿主 curl；全局网络保持 `init --agent` 的 `restricted`。
+和上面一样，优先 `service`，不先 `up`。`NET=open` 只写在这个服务上，方便宿主 curl；全局网络保持 `init --agent` 的 `none`。
 
 ```sh
 .capbox/bin/capbox pkg install python3

@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.3.0}"
+: "${CAPBOX_VERSION:=0.3.2}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -723,12 +723,12 @@ _daemon_up_via_systemd() {
 }
 
 cmd_up() {
-  local use_systemd=0
+  local use_systemd=0 net_override=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
         cat <<'EOF'
-用法: capbox up [--systemd]
+用法: capbox up [--systemd] [--net MODE]
 
 启动常驻守护容器。
 
@@ -741,6 +741,9 @@ nohup/setsid 也救不了。两种活法：
      需要用户会话的 systemd（systemctl --user 可用）。之后 capbox down 会停这个单元。
   2) 把 capbox up 放进活得比工具调用更久的任务（例如 bash 工具 run_in_background）。
 
+  --net MODE   只作用于这一次 up（none|restricted|open，host=open）。不写 config.env。
+               单元已在跑时不会改它的网络。
+
 停止: capbox down
 EOF
         return 0
@@ -749,9 +752,23 @@ EOF
         use_systemd=1
         shift
         ;;
+      --net)
+        [[ $# -ge 2 ]] || die 2 "up: --net 需要模式 none|restricted|open"
+        net_override="${2}"
+        shift 2
+        ;;
+      --net=*)
+        net_override="${1#*=}"
+        [[ -n "$net_override" ]] || die 2 "up: --net 需要模式 none|restricted|open"
+        shift
+        ;;
       *) die 2 "up: 未知选项 $1" ;;
     esac
   done
+
+  if [[ -n "$net_override" ]]; then
+    _capbox_declare_net "$net_override" up
+  fi
 
   if (( use_systemd == 1 )) && [[ "${CAPBOX_UP_SYSTEMD_CHILD:-}" != "1" ]]; then
     _daemon_up_via_systemd || return $?
@@ -1228,7 +1245,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.3.0}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.2}")"
     return 0
   fi
 
@@ -1261,7 +1278,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.0}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.2}"
   return 0
 }
 

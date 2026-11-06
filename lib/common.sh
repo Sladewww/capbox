@@ -34,7 +34,7 @@ if [[ -z "${CAPBOX_WORKSPACE:-}" ]]; then
 fi
 export CAPBOX_WORKSPACE
 
-readonly CAPBOX_VERSION="0.3.0"
+readonly CAPBOX_VERSION="0.3.2"
 readonly CAPBOX_SCHEMA_VERSION="0.3.0"
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
@@ -572,6 +572,7 @@ load_config() {
       die 2 "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的别名；当前: '${CAPBOX_NET}'）。拒绝回退到 open"
       ;;
   esac
+
   [[ -n "${CAPBOX_HOSTNAME:-}" ]] || CAPBOX_HOSTNAME=capbox
   [[ "${CAPBOX_EXEC_TIMEOUT:-}" =~ ^[0-9]+$ ]] || CAPBOX_EXEC_TIMEOUT=600
 
@@ -584,15 +585,22 @@ load_config() {
   _capbox_derive_paths
 }
 
-# 解析 bwrap 实际可执行文件路径。
-# 背景：契约 §2 的内置默认值写作 /usr/bin/bwrap，但部分发行版只提供
-# /usr/sbin/bwrap（PATH 里 sbin 在前，属同一份二进制）。为满足
-# 「status 报告的就是实际执行的」，规则按优先级：
-#   1) 环境变量显式指定              -> 原样使用（最高优先级）
-#   2) config.env 写了自定义路径      -> 用它（不可执行则警告并降级）
-#   3) PATH 自动发现 command -v bwrap
-#   4) 都没有 -> 内置默认 /usr/bin/bwrap
-# 其中「值等于内置默认」视为未自定义，以便自动发现更准确的路径。
+# 当次出网声明。只改本进程的 CAPBOX_NET，不写 config.env。
+# $1 模式  $2 调用方（写进错误信息）
+_capbox_declare_net() {
+  local mode="${1:-}" who="${2:-net}"
+  case "$mode" in
+    none | restricted | open) CAPBOX_NET="$mode" ;;
+    host) CAPBOX_NET=open ;;
+    *)
+      die 2 "${who}: --net 必须是 none|restricted|open（host 别名）；当前: ${mode}"
+      ;;
+  esac
+  if [[ "${CAPBOX_NET}" == "restricted" && -z "${CAPBOX_NET_ALLOW:-}" ]]; then
+    die 2 "${who}: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）"
+  fi
+}
+
 # 解析 bwrap 实际可执行文件路径。
 # 背景：契约 §2 的内置默认值写作 /usr/bin/bwrap，但部分发行版只提供
 # /usr/sbin/bwrap（PATH 里 sbin 在前，属同一份二进制）。为满足

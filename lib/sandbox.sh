@@ -88,11 +88,13 @@ cmd_exec() {
         shift
         ;;
       --net)
-        net_override="${2:-}"
-        shift 2 || shift
+        [[ $# -ge 2 ]] || die 2 "exec: --net 需要模式 none|restricted|open"
+        net_override="${2}"
+        shift 2
         ;;
       --net=*)
         net_override="${1#*=}"
+        [[ -n "$net_override" ]] || die 2 "exec: --net 需要模式 none|restricted|open"
         shift
         ;;
       --uid)
@@ -146,7 +148,8 @@ cmd_exec() {
   --timeout N  一次性执行超时秒数，0=不限，默认取 CAPBOX_EXEC_TIMEOUT
   --cwd DIR    容器内工作目录（默认 /workspace，相对路径按 /workspace 解释）
   --root       在容器根目录 / 下执行（等价于 --cwd /）
-  --net MODE   覆盖 CAPBOX_NET：none|restricted|open（host=open 别名）；仅本次 oneshot
+  --net MODE   覆盖本次 oneshot 的 CAPBOX_NET：none|restricted|open（host=open）
+               不写 config.env。与 --daemon 不能同用（守护容器的网络在 up 时确定）
   --uid N      容器内初始 uid（默认 CAPBOX_EXEC_UID / 0）；与 --daemon 组合时在命令前降权
   --gid N      容器内初始 gid
   --user NAME  从 guest /etc/passwd 解析 uid:gid（可与数字 uid 二选一）
@@ -171,14 +174,11 @@ EOF
 
   [[ "$timeout_s" =~ ^[0-9]+$ ]] || die 2 "exec: --timeout 必须是非负整数秒（当前: $timeout_s）"
 
+  if [[ -n "$net_override" && "$use_daemon" -eq 1 ]]; then
+    die 2 "exec: --daemon 用的是 capbox up 时的网络；要改网络请重新 up --net"
+  fi
   if [[ -n "$net_override" ]]; then
-    case "$net_override" in
-      none | restricted | open | host) CAPBOX_NET="$net_override" ;;
-      *) die 2 "exec: --net 必须是 none|restricted|open（host 别名）；当前: $net_override" ;;
-    esac
-    if [[ "$net_override" == "restricted" ]] && [[ -z "${CAPBOX_NET_ALLOW:-}" ]]; then
-      die 2 "exec: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）"
-    fi
+    _capbox_declare_net "$net_override" exec
   fi
 
   if [[ -n "$profile_override" ]]; then
@@ -306,17 +306,34 @@ _exec_via_daemon() {
 # ---------- 4. shell ----------------------------------------------------------
 
 cmd_shell() {
-  local use_daemon=0
+  local use_daemon=0 net_override=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --daemon) use_daemon=1; shift ;;
+      --net)
+        [[ $# -ge 2 ]] || die 2 "shell: --net 需要模式 none|restricted|open"
+        net_override="${2}"
+        shift 2
+        ;;
+      --net=*)
+        net_override="${1#*=}"
+        [[ -n "$net_override" ]] || die 2 "shell: --net 需要模式 none|restricted|open"
+        shift
+        ;;
       -h | --help)
-        printf '用法: capbox shell [--daemon]\n  交互式 shell（无 tty 时退化为读取 stdin 的 sh）\n'
+        printf '用法: capbox shell [--daemon] [--net MODE]\n  交互式 shell（无 tty 时退化为读取 stdin 的 sh）\n  --net 只作用于一次性 shell，不写 config.env，也不能改已在跑的守护容器\n'
         return 0
         ;;
       *) die 2 "shell: 未知选项 $1" ;;
     esac
   done
+
+  if [[ -n "$net_override" && "$use_daemon" -eq 1 ]]; then
+    die 2 "shell: --daemon 用的是 capbox up 时的网络；要改网络请重新 up --net"
+  fi
+  if [[ -n "$net_override" ]]; then
+    _capbox_declare_net "$net_override" shell
+  fi
 
   if (( use_daemon == 1 )); then
     if ! declare -F daemon_request >/dev/null 2>&1 || ! _probe_daemon; then
@@ -556,6 +573,8 @@ cmd_pkg() {
 
 按发行版自动分派到 apk（alpine）或 apt-get（ubuntu），
 ubuntu 自动附加 APT::Sandbox::User=root（本环境必需）。
+会话 CAPBOX_NET=none 时，install 和 update 仍会出网；remove 和 list 不会。
+这次出网不写进 config.env。pip / npm / git 不会因此获得网络。
 安装后会跑 dpkg --audit / 扫描 iU·iF 状态；有残留配置会明确报告（不掩盖）。
 启用 CAPBOX_IDMAP=auto/on 且多映射可用时，apt postinst 的 chown 更可能成功。
 EOF
@@ -616,8 +635,8 @@ EOF
       ;;
   esac
 
-  exec_in_guest "$cmdstr" /workspace "$timeout_s"
-  rc=$?
+  rc=0
+  _pkg_run_guest "$sub" "$cmdstr" "$timeout_s" || rc=$?
 
   if [[ "$sub" == "install" || "$sub" == "update" ]]; then
     _pkg_report_dpkg_audit || true
@@ -629,6 +648,23 @@ EOF
     else
       log_warn "pkg $sub 返回 $rc（单 UID 下 chown 告警常见；请看 dpkg audit 与可执行文件）"
     fi
+  fi
+  return "$rc"
+}
+
+# install / update 在会话为 none 时单独出网。remove / list 和随后的 dpkg audit 不给网。
+# 只改本进程的 CAPBOX_NET，调用结束恢复，不写 config.env。
+_pkg_run_guest() {
+  local sub="${1:-}" cmdstr="${2:-}" timeout_s="${3:-}"
+  local saved="${CAPBOX_NET:-}" granted=0 rc=0
+  if [[ "$sub" == "install" || "$sub" == "update" ]] && [[ "${CAPBOX_NET:-open}" == "none" ]]; then
+    CAPBOX_NET=open
+    granted=1
+    log_info "pkg ${sub}: 会话网络是 none，本次命令单独出网"
+  fi
+  exec_in_guest "$cmdstr" /workspace "$timeout_s" || rc=$?
+  if (( granted == 1 )); then
+    CAPBOX_NET="$saved"
   fi
   return "$rc"
 }
