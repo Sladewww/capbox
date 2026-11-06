@@ -4,9 +4,10 @@
 # 配置化服务：start / stop / status / logs
 #
 # 服务定义：.capbox/services/<name>.env（纯 KEY=value，不 source）
-#   CMD='nginx -g "daemon off;"'     # 必填
-#   UID=33  GID=33  USER=www-data    # 可选
+#   CMD='nginx -g "daemon off;"'     # 必填，是要执行的命令，不是环境变量
+#   UID=33  GID=33  USER=www-data    # 可选；USER/CWD 会在 --clearenv 之后 --setenv
 #   CWD=/  PIDFILE=  LOG=  NET=
+#   MY_VAR=hello                     # 其它 KEY=value 原样注入 guest
 #   REQUIRE_IDMAP=0                  # 1=需要 multi 映射
 #
 # 状态目录（宿主）：$CAPBOX_RUN_DIR/services/<name>/
@@ -19,10 +20,23 @@ _service_valid_name() {
   [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._@+-]*$ ]]
 }
 
+_service_reserved_key() {
+  case "${1:-}" in
+    CMD|UID|GID|USER|CWD|PIDFILE|LOG|NET|REQUIRE_IDMAP|\
+    READY_CMD|READY_TCP|READY_HTTP|READY_TIMEOUT|\
+    HEALTH_CMD|HEALTH_INTERVAL|HEALTH_RETRIES|\
+    RESTART|RESTART_MAX|RESTART_BACKOFF|STOP_TIMEOUT|\
+    DEPENDS_ON|PUBLISH) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _service_load() {
   local name="${1:-}"
   local -n _out="$2"
+  local -n _env="$3"
   _out=()
+  _env=()
   _service_valid_name "$name" || { log_err "服务名非法: $name"; return 2; }
   local f="$(_service_dir)/${name}.env"
   [[ -f "$f" ]] || { log_err "服务定义不存在: $f"; return 1; }
@@ -34,14 +48,6 @@ _service_load() {
     [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
     key="${BASH_REMATCH[1]}"
     raw="${BASH_REMATCH[2]}"
-    case "$key" in
-      CMD|UID|GID|USER|CWD|PIDFILE|LOG|NET|REQUIRE_IDMAP|\
-      READY_CMD|READY_TCP|READY_HTTP|READY_TIMEOUT|\
-      HEALTH_CMD|HEALTH_INTERVAL|HEALTH_RETRIES|\
-      RESTART|RESTART_MAX|RESTART_BACKOFF|STOP_TIMEOUT|\
-      DEPENDS_ON|PUBLISH) ;;
-      *) log_warn "服务 $name: 忽略未知键 $key"; continue ;;
-    esac
     if [[ "$raw" == \'*\' && ${#raw} -ge 2 ]]; then
       raw="${raw:1:${#raw}-2}"
     elif [[ "$raw" == \"*\" && ${#raw} -ge 2 ]]; then
@@ -51,10 +57,35 @@ _service_load() {
         return 2
       fi
     fi
-    _out["$key"]="$raw"
+    if [[ "$raw" == *$'\n'* ]]; then
+      log_err "服务 $name: $key 值含换行"
+      return 2
+    fi
+    if _service_reserved_key "$key"; then
+      _out["$key"]="$raw"
+    else
+      _env["$key"]="$raw"
+    fi
   done <"$f"
   [[ -n "${_out[CMD]:-}" ]] || { log_err "服务 $name: 缺少 CMD"; return 2; }
   return 0
+}
+
+# --clearenv 之后把 USER、CWD 和自定义键注入 guest。CMD 仍只是要执行的命令。
+_service_append_env_args() {
+  local -n _sa="$1"
+  local -n _sc="$2"
+  local -n _se="$3"
+  local k
+  if [[ -n "${_sc[USER]:-}" ]]; then
+    _sa+=(--setenv USER "${_sc[USER]}")
+  fi
+  if [[ -n "${_sc[CWD]:-}" ]]; then
+    _sa+=(--setenv CWD "${_sc[CWD]}")
+  fi
+  for k in "${!_se[@]}"; do
+    _sa+=(--setenv "$k" "${_se[$k]}")
+  done
 }
 
 _service_diagnose() {
@@ -261,8 +292,8 @@ _service_start() {
   done
 
   require_rootfs
-  local -A svc=()
-  _service_load "$name" svc || return $?
+  local -A svc=() svc_env=()
+  _service_load "$name" svc svc_env || return $?
 
   if _service_is_running "$name"; then
     log_info "服务 $name 已在运行（pid $(cat "$(_service_run_dir "$name")/supervisor.pid")）"
@@ -400,6 +431,7 @@ _service_start() {
     filtered+=("$a")
   done
   args=("${filtered[@]}")
+  _service_append_env_args args svc svc_env
   mkdir -p "$rd/guest-run" 2>/dev/null || true
   args+=(--bind "$rd/guest-run" /run)
   full=("$CAPBOX_BWRAP" "${args[@]}" -- /bin/sh -c "$wrap")

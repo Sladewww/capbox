@@ -59,7 +59,7 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 - `/workspace` 是工作区 RW 视图：guest 能读写项目文件；**不要把密钥只靠“不在环境变量里”来保护——文件在工作区同样可见。**
 - `untrusted`/`strict` 会遮盖工作区内默认敏感相对路径（如 `.ssh`），并可用 `CAPBOX_FS_HIDE` 扩展。
 - CLI / `config.env` / `services/` 对 guest **只读覆盖绑定**，降低“改 CLI = 下次宿主 RCE”的路径。
-- **缺失即预占**：不仅保护已存在的配置文件，还对**启动时缺失、但宿主 CLI 会读取的配置路径**施加预占保护。标准 `…/.capbox` 布局下整树只读（`run/`/`cache/` 再 RW 挂回），并对 `config.env` 钉 `--ro-bind /dev/null`；`config_save` 对已存在文件**就地覆盖**以保留 inode，避免长寿 daemon 挂载因 `mv` 换名失效。仓库即状态布局则回退为逐项保护 `bin/`/`lib/`/`config.env`/`services/`。两种布局都再把 `logs/`（含 `logs/audit.jsonl`）显式 `--ro-bind`；标准布局里这一步放在 `run/`、`cache/` 的可写挂回之后。`logs` 是符号链接或普通文件时拒绝启动。guest 可以读审计日志。宿主写日志走宿主路径，不受这条挂载影响。`doctor` 会让 guest 尝试追加 `audit.jsonl`，写成则 **FAIL**。`compat` 保留 `CAP_SYS_ADMIN` 且没有 seccomp，父挂载有可能被卸掉；`untrusted` 与 `strict` 的 seccomp 挡住 `mount`。compat 下的卸载不作为已经验证过的利用。这与 CVE-2026-25725 的修复语义一致。
+- **缺失即预占**：不仅保护已存在的配置文件，还对**启动时缺失、但宿主 CLI 会读取的配置路径**施加预占保护。标准 `…/.capbox` 布局下整树只读（`run/`/`cache/` 再 RW 挂回），并对 `config.env` 钉 `--ro-bind /dev/null`；`config_save` 对已存在文件**就地覆盖**以保留 inode，避免长寿 daemon 挂载因 `mv` 换名失效。仓库即状态布局则回退为逐项保护 `bin/`/`lib/`/`config.env`/`services/`。两种布局都再把 `logs/`（含 `logs/audit.jsonl`）显式 `--ro-bind`；标准布局里这一步放在 `run/`、`cache/` 的可写挂回之后，并且在 `FS_BINDS` 与 `CAPBOX_BWRAP_EXTRA` 之后再挂一次，保证最后盖住 `logs/` 的是只读绑定。`FS_BINDS` 的 guest 路径若等于 `logs/` 或其内部路径，启动直接失败。`logs` 或 `logs/audit.jsonl` 是符号链接、或 `audit.jsonl` 是目录时拒绝启动；宿主追加审计时若发现符号链接或目录也拒绝写入。guest 可以读审计日志。宿主写日志走宿主路径，不受这条挂载影响。`doctor` 会让 guest 尝试追加 `audit.jsonl`，写成则 **FAIL**。`compat` 保留 `CAP_SYS_ADMIN` 且没有 seccomp，父挂载有可能被卸掉；`untrusted` 与 `strict` 的 seccomp 挡住 `mount`。compat 下的卸载不作为已经验证过的利用。这与 CVE-2026-25725 的修复语义一致。
 - `CAPBOX_FS_BINDS` 拒绝工作区外的任意 bind。
 - 符号链接形式的受保护路径无法作为 bwrap 挂载目标；`doctor` 会警告，请改为普通文件/目录。
 

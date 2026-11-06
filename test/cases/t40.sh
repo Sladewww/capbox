@@ -380,6 +380,75 @@ PY
     declare -a ro3=()
     _capbox_append_ro_cli_binds ro3 || rc=$?
     [[ "$rc" -eq 1 ]]
+    rm -f "$ws/logs"
+    mkdir -p "$ws/logs"
+    ln -s /tmp/not-audit "$ws/logs/audit.jsonl"
+    rc=0
+    declare -a ro4=()
+    _capbox_append_ro_cli_binds ro4 || rc=$?
+    [[ "$rc" -eq 1 ]]
+    rm -f "$ws/logs/audit.jsonl"
+    declare -a seq=()
+    _capbox_append_ro_cli_binds seq
+    seq+=(--bind "$ws/logs" /workspace/logs)
+    _capbox_ro_protect_logs seq
+    last=-1
+    i=0
+    while (( i < ${#seq[@]} )); do
+      if [[ "${seq[$i]}" == "--ro-bind" && "${seq[$((i+1))]}" == "$ws/logs" ]]; then
+        last=$i
+      fi
+      i=$((i + 1))
+    done
+    [[ "$last" -gt 0 ]]
+    # 最后一次 logs 挂载必须晚于刚才插入的可写 --bind
+    bind_at=-1
+    i=0
+    while (( i < ${#seq[@]} )); do
+      if [[ "${seq[$i]}" == "--bind" && "${seq[$((i+1))]}" == "$ws/logs" ]]; then
+        bind_at=$i
+      fi
+      i=$((i + 1))
+    done
+    [[ "$last" -gt "$bind_at" ]]
+
+    # shellcheck disable=SC1091
+    . "$REPO/lib/fsguard.sh"
+    CAPBOX_FS_BINDS="$ws/logs:/workspace/logs:rw"
+    rc=0
+    declare -a fb=()
+    _fsguard_append_binds fb || rc=$?
+    [[ "$rc" -eq 2 ]]
+    unset CAPBOX_FS_BINDS
+
+    # shellcheck disable=SC1091
+    . "$REPO/lib/service.sh"
+    mkdir -p "$ws/services"
+    printf '%s\n' "CMD=true" "CWD=/workspace" "USER=root" "MY_VAR=hello" >"$ws/services/demo.env"
+    declare -A sv=() se=()
+    _service_load demo sv se
+    [[ "${sv[CMD]}" == "true" ]]
+    [[ "${se[MY_VAR]}" == "hello" ]]
+    [[ -z "${sv[MY_VAR]:-}" ]]
+    declare -a argv=()
+    _service_append_env_args argv sv se
+    ok_my=0
+    ok_cwd=0
+    ok_user=0
+    i=0
+    while (( i < ${#argv[@]} )); do
+      if [[ "${argv[$i]}" == "--setenv" && "${argv[$((i+1))]}" == "MY_VAR" && "${argv[$((i+2))]}" == "hello" ]]; then
+        ok_my=1
+      fi
+      if [[ "${argv[$i]}" == "--setenv" && "${argv[$((i+1))]}" == "CWD" && "${argv[$((i+2))]}" == "/workspace" ]]; then
+        ok_cwd=1
+      fi
+      if [[ "${argv[$i]}" == "--setenv" && "${argv[$((i+1))]}" == "USER" && "${argv[$((i+2))]}" == "root" ]]; then
+        ok_user=1
+      fi
+      i=$((i + 1))
+    done
+    [[ "$ok_my" == 1 && "$ok_cwd" == 1 && "$ok_user" == 1 ]]
   )
   # 标准 .capbox：logs 的只读绑定在 run 的可写挂回之后。
   (

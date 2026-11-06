@@ -85,6 +85,10 @@ audit_event() {
   dir="$(dirname "$(_audit_path)")"
   mkdir -p "$dir" 2>/dev/null || return 0
   f="$(_audit_path)"
+  if [[ -L "$f" || -d "$f" ]]; then
+    log_err "审计日志必须是普通文件，拒绝写入: $f"
+    return 1
+  fi
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
 
   local cmd="" exit_c="" ms="" object="" detail="" profile="" net="" uid=""

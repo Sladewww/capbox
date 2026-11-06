@@ -125,8 +125,9 @@ CASE_ASSERTS=$((CASE_ASSERTS + 1))
 # ---- 4) 宿主合法 service 定义 + start 仍可用 ----
 mkdir -p "$svc_dir"
 cat >"$svc_dir/t39ok.env" <<'E'
-CMD='sh -c "echo T39_SVC_OK; sleep 2"'
+CMD='sh -c "echo T39_SVC_OK; echo T39_MY=$MY_VAR; echo T39_CWD=$CWD; sleep 2"'
 CWD=/workspace
+MY_VAR=hello
 READY_TIMEOUT=5
 RESTART=no
 E
@@ -145,6 +146,18 @@ if [ "$ok_log" = 1 ]; then
   _ok "合法 service 日志出现 T39_SVC_OK"
 else
   _fail "合法 service 未跑起来或日志无 T39_SVC_OK" "log=$(tail -c 400 "$logf" 2>/dev/null)"
+fi
+CASE_ASSERTS=$((CASE_ASSERTS + 1))
+if [ -f "$logf" ] && grep -q 'T39_MY=hello' "$logf" 2>/dev/null; then
+  _ok "service.env 的 MY_VAR 在 --clearenv 之后进入 guest"
+else
+  _fail "guest 看不到 MY_VAR=hello" "log=$(tail -c 400 "$logf" 2>/dev/null)"
+fi
+CASE_ASSERTS=$((CASE_ASSERTS + 1))
+if [ -f "$logf" ] && grep -q 'T39_CWD=/workspace' "$logf" 2>/dev/null; then
+  _ok "service.env 的 CWD 被 --setenv"
+else
+  _fail "guest 看不到 CWD=/workspace" "log=$(tail -c 400 "$logf" 2>/dev/null)"
 fi
 CASE_ASSERTS=$((CASE_ASSERTS + 1))
 run_cmd "$CAPBOX_BIN" service stop t39ok

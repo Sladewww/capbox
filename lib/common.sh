@@ -34,7 +34,7 @@ if [[ -z "${CAPBOX_WORKSPACE:-}" ]]; then
 fi
 export CAPBOX_WORKSPACE
 
-readonly CAPBOX_VERSION="0.3.3"
+readonly CAPBOX_VERSION="0.3.4"
 readonly CAPBOX_SCHEMA_VERSION="0.3.0"
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
@@ -1167,11 +1167,30 @@ _capbox_ro_protect_logs() {
     return 1
   fi
   _capbox_ro_protect_host_dir "$host_dir" "$arr_name" || return $?
+  if [[ -L "$host_dir/audit.jsonl" ]]; then
+    log_err "logs/audit.jsonl 是符号链接，拒绝启动: $host_dir/audit.jsonl"
+    return 1
+  fi
+  if [[ -d "$host_dir/audit.jsonl" ]]; then
+    log_err "logs/audit.jsonl 必须是普通文件，拒绝启动: $host_dir/audit.jsonl"
+    return 1
+  fi
   if (( ${#_pl_arr[@]} == before )); then
     log_err "无法把 logs 只读挂进 guest: $host_dir"
     return 1
   fi
   return 0
+}
+
+# guest 挂载点是否正好盖住 logs/ 或其内部路径。
+_capbox_guest_covers_logs() {
+  local guest="${1:-}" logs
+  [[ -n "$guest" && "$guest" == /* ]] || return 1
+  logs="$(_guest_workspace_path "${CAPBOX_DIR:-}/logs")"
+  [[ -n "$logs" && "$logs" == /workspace/* ]] || return 1
+  guest="${guest%/}"
+  logs="${logs%/}"
+  [[ "$guest" == "$logs" || "$guest" == "$logs"/* ]]
 }
 
 _capbox_append_ro_cli_binds() {
@@ -1588,6 +1607,10 @@ build_bwrap_args() {
     read -r -a extra <<<"$CAPBOX_BWRAP_EXTRA"
     a+=("${extra[@]}")
   fi
+
+  # FS_BINDS / CAPBOX_BWRAP_EXTRA 都在第一次 logs 只读挂载之后。
+  # 再挂一次，保证最后盖住 logs 的是只读绑定。
+  _capbox_ro_protect_logs a || return $?
 
   printf '%s\n' "${a[@]}"
 }
