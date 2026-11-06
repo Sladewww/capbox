@@ -23,4 +23,4 @@
 
 ## 资源限额
 
-见 README「资源限额」。doctor 会报告是否具备可写 cgroup。
+见 [README.zh-CN.md](../../README.zh-CN.md)「资源限额」，细节在 Wiki [资源限额](https://github.com/Sladewww/capbox/wiki/资源限额)。doctor 会报告是否具备可写 cgroup。
