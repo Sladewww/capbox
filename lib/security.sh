@@ -142,15 +142,11 @@ _security_append_bwrap_args() {
     _sec_arr+=(--cap-drop "$c")
   done
 
-  # 禁止容器内再开 userns（缩小逃逸面）。
-  # 注意：与 idmap 的 --userns-block-fd 不兼容；多 UID 映射启用时必须跳过，并在 doctor 说明该边界。
-  if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled; then
-    CAPBOX_SECURITY_DISABLE_USERNS=skipped-idmap
-    log_debug "安全档：多 UID idmap 启用，跳过 --disable-userns（bwrap 不兼容 userns-block-fd）"
-  else
-    _sec_arr+=(--disable-userns)
-    CAPBOX_SECURITY_DISABLE_USERNS=on
-  fi
+  # 禁止容器内再开 userns。与 --userns-block-fd 不能同时出现；
+  # 真正走 idmap 的那次启动会在注入 block fd 时拿掉这个标志。
+  # 探测到 multi 但本次没有 block fd（例如 restricted 早期返回）时必须留着它。
+  _sec_arr+=(--disable-userns)
+  CAPBOX_SECURITY_DISABLE_USERNS=on
 
   # 遮盖工作区敏感相对路径
   if declare -F _fsguard_append_default_hides >/dev/null 2>&1; then
@@ -165,10 +161,8 @@ _security_append_bwrap_args() {
     done < <(_security_default_workspace_hides)
   fi
 
-  # strict：若未显式设 ROOTFS_RO，默认打开只读 rootfs + overlay 写层
-  if [[ "$profile" == "strict" && -z "${CAPBOX_ROOTFS_RO:-}" ]]; then
-    CAPBOX_ROOTFS_RO=1
-  fi
+  # strict 的默认只读 rootfs 在挂载决策之前设置（_capbox_apply_profile_rootfs_default）。
+  # 这里再写已经来不及：build_bwrap_args 先选 --bind / --overlay。
 
   # seccomp：真实 BPF，禁止伪实现
   local bpf

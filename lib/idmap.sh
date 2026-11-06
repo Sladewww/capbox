@@ -259,15 +259,24 @@ _idmap_enabled() {
 }
 
 # 解析初始 --uid/--gid（允许被 CAPBOX_EXEC_UID_OVERRIDE 覆盖）
+_idmap_exec_id() {
+  local v="${1:-}" n
+  [[ "$v" =~ ^[0-9]+$ ]] || return 2
+  n="$v"
+  while [[ "$n" == 0* && ${#n} -gt 1 ]]; do
+    n="${n#0}"
+  done
+  # 按十进制位数比较，避免 bash 算术把超长数字当成 0 或溢出后放行。
+  if (( ${#n} > 10 )) || { (( ${#n} == 10 )) && [[ "$n" > "4294967295" ]]; }; then
+    return 2
+  fi
+  printf '%s' "$n"
+}
 _idmap_exec_uid() {
-  local v="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
-  [[ "$v" =~ ^[0-9]+$ ]] || v=0
-  printf '%s' "$v"
+  _idmap_exec_id "${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
 }
 _idmap_exec_gid() {
-  local v="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
-  [[ "$v" =~ ^[0-9]+$ ]] || v=0
-  printf '%s' "$v"
+  _idmap_exec_id "${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
 }
 
 # 从 guest /etc/passwd 解析用户名 → uid:gid（rootfs 内）
@@ -373,7 +382,32 @@ _idmap_inject_block_fds() {
     return 0
   fi
   local -a head=("${__inj_av[@]:0:$dd}") tail=("${__inj_av[@]:$dd}")
-  __inj_av=("${head[@]}" --info-fd "$info_spec" --userns-block-fd "$block_fd" "${tail[@]}")
+  local -a filtered=()
+  local x
+  for x in "${head[@]}"; do
+    # bwrap 拒绝 --disable-userns 与 --userns-block-fd 同时出现。
+    [[ "$x" == "--disable-userns" ]] && continue
+    filtered+=("$x")
+  done
+  __inj_av=("${filtered[@]}" --info-fd "$info_spec" --userns-block-fd "$block_fd" "${tail[@]}")
+}
+
+# 0 = 本次应走多 UID；1 = 不走；2 = CAPBOX_IDMAP=on 但映射不可用（调用方必须失败）
+# 不能写 if _idmap_enabled：条件为假时 if 的状态是 0，返回码 2 会丢。
+_capbox_idmap_decision() {
+  if ! declare -F _idmap_enabled >/dev/null 2>&1; then
+    return 1
+  fi
+  local rc=0
+  _idmap_enabled || rc=$?
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if (( rc == 2 )) || [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
+    log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+    return 2
+  fi
+  return 1
 }
 
 
@@ -470,8 +504,14 @@ _idmap_wrap_argv_for_uid() {
   local __wname="$1"
   local -n _argv="$__wname"
   local uid gid dd=-1
-  uid="$(_idmap_exec_uid)"
-  gid="$(_idmap_exec_gid)"
+  uid="$(_idmap_exec_uid)" || {
+    log_err "EXEC_UID 必须是 0..4294967295 的数字（当前: ${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-}}）"
+    return 2
+  }
+  gid="$(_idmap_exec_gid)" || {
+    log_err "EXEC_GID 必须是 0..4294967295 的数字（当前: ${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-}}）"
+    return 2
+  }
   [[ "$uid" == "0" && "$gid" == "0" ]] && return 0
   dd="$(_idmap_find_bwrap_dd "$__wname" || true)"
   [[ -n "$dd" ]] || dd=-1
@@ -531,8 +571,11 @@ uid=int(sys.argv[1]); gid=int(sys.argv[2]); cmd=sys.argv[3:]
 os.setgid(gid)
 try:
     os.setgroups([gid])
-except Exception:
-    pass
+except OSError as exc:
+    extra = [g for g in os.getgroups() if g != gid]
+    if extra:
+        sys.stderr.write(\"setgroups failed (%s); supplementary groups remain\\n\" % exc)
+        sys.exit(1)
 os.setuid(uid)
 os.execvp(cmd[0], cmd)" "$uid" "$gid" "$@"
 fi
@@ -558,7 +601,7 @@ exit 127
 _idmap_run_bwrap_argv() {
   [[ $# -gt 0 ]] || return 2
   local -a _run_argv=("$@")
-  _idmap_wrap_argv_for_uid _run_argv
+  _idmap_wrap_argv_for_uid _run_argv || return $?
   set -- "${_run_argv[@]}"
   local tmp info_out block_fifo
   tmp="$(mktemp -d "${CAPBOX_RUN_DIR:-/tmp}/idmap.XXXXXX")" || return 1
@@ -613,12 +656,12 @@ except Exception:
     return 1
   fi
 
-  # 可选：restricted 桥（若调用方设置了钩子）
+  # 先放行。bwrap 在这之后才配置 loopback；钩子里的桥必须等地址出现。
+  printf '\n' >&"$block_fd" 2>/dev/null || true
   if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
     _idmap_after_map_hook "$child" || helper_rc=$?
     if (( helper_rc != 0 )); then
       kill "$bp" 2>/dev/null || true
-      printf '\n' >&"$block_fd" 2>/dev/null || true
       wait "$bp" 2>/dev/null || true
       exec {block_fd}>&-
       rm -rf "$tmp"
@@ -626,7 +669,6 @@ except Exception:
     fi
   fi
 
-  printf '\n' >&"$block_fd" 2>/dev/null || true
   wait "$bp"
   rc=$?
   exec {block_fd}>&-
@@ -638,7 +680,7 @@ except Exception:
 _idmap_spawn_bwrap_argv() {
   [[ $# -gt 0 ]] || return 2
   local -a _run_argv=("$@")
-  _idmap_wrap_argv_for_uid _run_argv
+  _idmap_wrap_argv_for_uid _run_argv || return $?
   set -- "${_run_argv[@]}"
   local tmp info_out block_fifo logf
   tmp="$(mktemp -d "${CAPBOX_RUN_DIR:-/tmp}/idmap.XXXXXX")" || return 1
@@ -680,17 +722,17 @@ except Exception:
     rm -rf "$tmp"
     return 1
   fi
+  # 先放行再跑钩子，避免桥抢在 bwrap 的 loopback 配置之前改 lo。
+  printf '\n' >&"$block_fd" 2>/dev/null || true
   if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
     _idmap_after_map_hook "$child" || {
       log_err "idmap：after_map hook 失败"
       kill "$bp" 2>/dev/null || true
-      printf '\n' >&"$block_fd" 2>/dev/null || true
       exec {block_fd}>&-
       rm -rf "$tmp"
       return 1
     }
   fi
-  printf '\n' >&"$block_fd" 2>/dev/null || true
   # block_fd 与 tmp 交给子进程生命周期；稍后清理 info 目录可能还在用，延迟删
   exec {block_fd}>&-
   # 保留 tmp 到进程结束较难；映射已完成，删 fifo 不影响已打开的 fd

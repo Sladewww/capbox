@@ -7,11 +7,14 @@
 # CAPBOX_PIDS_MAX    例: 256
 # CAPBOX_CPU_MAX     例: 50%  或 cgroup 原样 "50000 100000"
 # CAPBOX_DISK_MAX    例: 64M / 1G — 仅当能 losetup+mkfs.ext4+mount 时兑现：
-#   稀疏镜像 → loop → ext4；mount --bind -o rw rootfs 到私有树，再把 loop 挂到
-#   树内 CAPBOX_DISK_GUEST_PATH（默认 /var/lib/capbox-data）；bwrap --bind 该树为 /。
+#   稀疏镜像放在 state/disk（不放 guest 可写的 run/）；loop → ext4，挂到
+#   $base/mnt（nosuid,nodev），再在 bwrap 的第一个 -- 之前 --bind 到
+#   CAPBOX_DISK_GUEST_PATH（默认 /var/lib/capbox-data）。不改 rootfs 的
+#   --ro-bind，也不把整棵 rootfs bind 进配额目录。
 #   不把宿主块设备节点当作配额盘交给 guest；--dev 使用 bwrap 私有 /dev。
 #   需要宿主授权：root，或 sudo -n（不能伪装成无特权/rootless）。
 #   限额仅覆盖该 guest 路径，不含整个 rootfs 或 /workspace；宿主 /tmp 不作配额后端。
+#   卸载失败则保留目录，禁止 rm 仍挂着的树；sudo 清理失败不回落到无特权 rm。
 # CAPBOX_CGROUP_ROOT 可选：显式 cgroup v2 父目录（须已委派且可建子目录并出现
 #   memory.max/cpu.max/pids.max）。指定后严格使用，不回退其它候选；不可用则明确失败。
 #   注意：CAPBOX_RUN_DIR 会被 common.sh 覆盖，不能用来指定 cgroup 父目录。
@@ -275,8 +278,21 @@ _resources_setup_cgroup() {
 }
 
 _resources_disk_guest_path() {
-  # 与已验证原型一致：配额盘挂在 guest /var/lib/capbox-data
-  printf '%s' "${CAPBOX_DISK_GUEST_PATH:-/var/lib/capbox-data}"
+  # 配额盘在 guest 里的挂载点。必须是绝对路径，且不能借 .. 或 /. 逃出。
+  local p="${CAPBOX_DISK_GUEST_PATH:-/var/lib/capbox-data}" c
+  [[ "$p" == /* ]] || return 1
+  [[ "$p" != *[[:space:]\\]* ]] || return 1
+  p="${p%/}"
+  [[ -n "$p" && "$p" == /* ]] || return 1
+  [[ "$p" != *".."* && "$p" != *"/."* ]] || return 1
+  local IFS=/
+  local -a parts=()
+  read -r -a parts <<< "${p#/}"
+  (( ${#parts[@]} > 0 )) || return 1
+  for c in "${parts[@]}"; do
+    [[ -n "$c" && "$c" != "." && "$c" != ".." ]] || return 1
+  done
+  printf '%s' "$p"
 }
 
 _resources_disk_priv_mode() {
@@ -329,6 +345,11 @@ _resources_probe_disk() {
     CAPBOX_DISK_DETAIL="未配置 CAPBOX_DISK_MAX"
     return 1
   fi
+  local guest=""
+  if ! guest="$(_resources_disk_guest_path)"; then
+    CAPBOX_DISK_DETAIL="CAPBOX_DISK_GUEST_PATH 非法（必须是绝对路径，且不能含 .. 或 /.）"
+    return 1
+  fi
   if ! PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}" command -v losetup >/dev/null 2>&1 || ! PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}" command -v mkfs.ext4 >/dev/null 2>&1 || ! command -v mount >/dev/null 2>&1; then
     CAPBOX_DISK_DETAIL="缺少 losetup/mkfs.ext4/mount（需 e2fsprogs + util-linux）"
     return 1
@@ -348,12 +369,12 @@ _resources_probe_disk() {
   case "$mode" in
     direct)
       CAPBOX_DISK_STATUS=capable
-      CAPBOX_DISK_DETAIL="priv=direct；bind-rw rootfs + loop→$(_resources_disk_guest_path)（需 mount 权限）"
+      CAPBOX_DISK_DETAIL="priv=direct；loop→${guest}（需 mount 权限，非 rootless）"
       return 0
       ;;
     sudo)
       CAPBOX_DISK_STATUS=capable
-      CAPBOX_DISK_DETAIL="priv=sudo -n；bind-rw rootfs + loop→$(_resources_disk_guest_path)（需宿主授权，非 rootless）"
+      CAPBOX_DISK_DETAIL="priv=sudo -n；loop→${guest}（需宿主授权，非 rootless）"
       return 0
       ;;
     *)
@@ -365,163 +386,228 @@ _resources_probe_disk() {
   esac
 }
 
-# 把 argv 里对 CAPBOX_ROOTFS → / 的 --bind/--ro-bind 换成 newroot（强制 --bind）
-_resources_disk_rebind_rootfs() {
-  local -n _rr_arr="$1"
-  local newroot="$2"
-  local rf="${CAPBOX_ROOTFS:?}"
+# 在 bwrap argv 的第一个 -- 之前插入 --bind host_mnt guest。不改 rootfs 挂载。
+_resources_disk_bind_into() {
+  local -n _bi="$1"
+  local host_mnt="$2" guest="$3"
   local i
-  for (( i = 0; i < ${#_rr_arr[@]} - 2; i++ )); do
-    case "${_rr_arr[$i]}" in
-      --bind | --ro-bind | --rbind)
-        if [[ "${_rr_arr[$((i + 1))]}" == "$rf" && "${_rr_arr[$((i + 2))]}" == "/" ]]; then
-          _rr_arr[$i]="--bind"
-          _rr_arr[$((i + 1))]="$newroot"
-          return 0
-        fi
-        ;;
-    esac
+  for (( i = 0; i < ${#_bi[@]}; i++ )); do
+    if [[ "${_bi[$i]}" == "--" ]]; then
+      _bi=("${_bi[@]:0:$i}" --bind "$host_mnt" "$guest" "${_bi[@]:$i}")
+      return 0
+    fi
   done
   return 1
 }
 
-# 原型策略：mount --bind -o rw rootfs → base/root；loop 挂到 base/root$guest；
-# 普通用户 bwrap --bind base/root / 即可看见配额盘，无需单独 --bind 块设备。
-_resources_disk_setup_tree() {
-  local base="$1" img="$2" rootfs="$3" guest="$4" bytes="$5"
-  local loop mntpoint
-  export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
-  truncate -s "$bytes" "$img"
-  loop="$(losetup -f --show "$img")" || return 1
-  printf '%s\n' "$loop" >"$base/loop.dev"
-  mkfs.ext4 -F -q "$loop" || return 1
-  mkdir -p "$base/root"
-  mount --bind -o rw "$rootfs" "$base/root" || return 1
-  mount --make-rprivate "$base/root" 2>/dev/null || true
-  mntpoint="$base/root$guest"
-  mkdir -p "$mntpoint" || return 1
-  mount -o nosuid,nodev "$loop" "$mntpoint" || return 1
-  chmod 0777 "$mntpoint" 2>/dev/null || true
-  return 0
+# direct 与 sudo -n 共用这一份。脚本不接收 rootfs 路径，也不会把 rootfs bind 进来。
+_resources_disk_write_ops() {
+  local dest="${1:-}"
+  [[ -n "$dest" ]] || return 1
+  cat >"$dest" <<'EOS'
+#!/bin/bash
+set -euo pipefail
+export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
+cmd="${1:-}"
+base="${2:-}"
+img="${3:-}"
+bytes="${4:-}"
+
+reject_symlink() {
+  local p
+  for p in "$@"; do
+    if [[ -L "$p" ]]; then
+      printf 'capbox: refuse symlink: %s\n' "$p" >&2
+      exit 1
+    fi
+  done
 }
 
-_resources_disk_cleanup_tree() {
-  local base="${1:-}"
-  [[ -n "$base" && -d "$base" ]] || return 0
-  local guest loop mntpoint
-  guest="$(_resources_disk_guest_path)"
-  mntpoint="$base/root$guest"
-  _resources_disk_priv umount "$mntpoint" 2>/dev/null || umount "$mntpoint" 2>/dev/null || true
-  _resources_disk_priv umount "$base/root" 2>/dev/null || umount "$base/root" 2>/dev/null || true
-  if [[ -f "$base/loop.dev" ]]; then
-    loop="$(cat "$base/loop.dev" 2>/dev/null || true)"
-    if [[ -n "$loop" ]]; then
-      _resources_disk_priv losetup -d "$loop" 2>/dev/null || losetup -d "$loop" 2>/dev/null || true
+mounted() {
+  local mnt="$1" line mp
+  [[ -r /proc/self/mountinfo ]] || return 1
+  while IFS= read -r line; do
+    mp="${line#* * * * }"
+    mp="${mp%% *}"
+    mp="${mp//\\040/ }"
+    [[ "$mp" == "$mnt" ]] && return 0
+  done < /proc/self/mountinfo
+  return 1
+}
+
+valid_loop() {
+  [[ "${1:-}" =~ ^/dev/loop[0-9]+$ ]]
+}
+
+case "$cmd" in
+  setup)
+    [[ -n "$base" && -n "$img" && "$bytes" =~ ^[0-9]+$ ]] || exit 2
+    reject_symlink "$base" "$(dirname -- "$img")"
+    [[ -d "$base" && ! -L "$base" ]] || exit 1
+    if [[ -d "$base/mnt" || -L "$base/mnt" ]]; then
+      reject_symlink "$base/mnt"
+    else
+      mkdir -- "$base/mnt"
     fi
+    reject_symlink "$base/mnt"
+    if [[ -e "$img" || -L "$img" ]]; then
+      printf 'capbox: image already exists: %s\n' "$img" >&2
+      exit 1
+    fi
+    ( set -o noclobber; : >"$img" )
+    reject_symlink "$img"
+    [[ -f "$img" ]] || exit 1
+    truncate -s "$bytes" "$img"
+    loop="$(losetup -f --show "$img")" || exit 1
+    loop="${loop//[[:space:]]/}"
+    if ! valid_loop "$loop"; then
+      losetup -d "$loop" 2>/dev/null || true
+      printf 'capbox: unexpected loop device: %s\n' "$loop" >&2
+      exit 1
+    fi
+    printf '%s\n' "$loop" >"$base/loop.dev"
+    mkfs.ext4 -F -q "$loop"
+    mount -o nosuid,nodev "$loop" "$base/mnt"
+    chmod 0777 "$base/mnt" 2>/dev/null || true
+    ;;
+  cleanup)
+    [[ -n "$base" ]] || exit 0
+    if [[ -L "$base" ]]; then
+      printf 'capbox: refuse symlink disk dir: %s\n' "$base" >&2
+      exit 1
+    fi
+    [[ -d "$base" ]] || exit 0
+    mnt="$base/mnt"
+    if mounted "$mnt"; then
+      umount "$mnt"
+      if mounted "$mnt"; then
+        printf 'capbox: still mounted: %s\n' "$mnt" >&2
+        exit 1
+      fi
+    fi
+    if [[ -f "$base/loop.dev" && ! -L "$base/loop.dev" ]]; then
+      loop="$(tr -d '[:space:]' <"$base/loop.dev" || true)"
+      if valid_loop "$loop"; then
+        losetup -d "$loop" 2>/dev/null || true
+      fi
+    fi
+    rm -rf --one-file-system -- "$base"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOS
+  chmod 0700 "$dest" 2>/dev/null || true
+}
+
+_resources_disk_run_ops() {
+  local mode="$1" ops="$2"
+  shift 2
+  if [[ "$mode" == "sudo" ]]; then
+    sudo -n bash "$ops" "$@"
+  else
+    bash "$ops" "$@"
   fi
-  rm -rf -- "$base" 2>/dev/null || true
+}
+
+_resources_disk_fail_cleanup() {
+  local mode="$1" ops="$2" base="$3" detail="$4"
+  if ! _resources_disk_run_ops "$mode" "$ops" cleanup "$base"; then
+    log_err "DISK_MAX 清理失败，保留 ${base}（未对仍挂载的目录做无特权 rm）"
+  else
+    rm -f -- "$ops" 2>/dev/null || true
+  fi
+  CAPBOX_DISK_DETAIL="$detail"
+  return 1
 }
 
 _resources_apply_disk_wrap() {
   local -n _dw_cmd="$1"
-  local bytes mode id base img guest rootfs
+  local bytes mode base img guest ops diskroot
   CAPBOX_RESOURCES_APPLIED_DISK=""
 
   bytes="$(_resources_parse_bytes "${CAPBOX_DISK_MAX:-}")" || {
     log_warn "DISK_MAX 无法解析: ${CAPBOX_DISK_MAX:-}"
     return 1
   }
+  guest="$(_resources_disk_guest_path)" || {
+    CAPBOX_DISK_DETAIL="CAPBOX_DISK_GUEST_PATH 非法（必须是绝对路径，且不能含 .. 或 /.）"
+    return 1
+  }
   _resources_probe_disk || return 1
   mode="${CAPBOX_DISK_PRIV_MODE:-none}"
   [[ "$mode" != "none" ]] || return 1
-  rootfs="${CAPBOX_ROOTFS:?}"
-  [[ -d "$rootfs" ]] || return 1
+  [[ -d "${CAPBOX_ROOTFS:-}" && ! -L "${CAPBOX_ROOTFS}" ]] || return 1
 
-  id="$$-$RANDOM"
-  base="${CAPBOX_RUN_DIR:?}/disk/${id}"
-  img="$base/disk.img"
-  guest="$(_resources_disk_guest_path)"
-  mkdir -p "$base" || return 1
-  chmod 0755 "$base" 2>/dev/null || true
-
-  # 特权建树（与 loop-guest-prototype.sh 同构）
-  if [[ "$mode" == "sudo" ]]; then
-    if ! sudo -n env PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}" \
-      bash -c 'truncate -s "$0" "$1"
-        loop=$(losetup -f --show "$1") || exit 1
-        printf "%s\n" "$loop" >"$2/loop.dev"
-        mkfs.ext4 -F -q "$loop" || exit 1
-        mkdir -p "$2/root"
-        mount --bind -o rw "$3" "$2/root" || exit 1
-        mount --make-rprivate "$2/root" 2>/dev/null || true
-        mkdir -p "$2/root$4"
-        mount -o nosuid,nodev "$loop" "$2/root$4" || exit 1
-        chmod 0777 "$2/root$4" 2>/dev/null || true
-      ' "$bytes" "$img" "$base" "$rootfs" "$guest"; then
-      _resources_disk_cleanup_tree "$base"
-      CAPBOX_DISK_DETAIL="sudo 建立 bind-rw rootfs+loop 失败"
-      return 1
-    fi
-  else
-    if ! _resources_disk_setup_tree "$base" "$img" "$rootfs" "$guest" "$bytes"; then
-      _resources_disk_cleanup_tree "$base"
-      CAPBOX_DISK_DETAIL="建立 bind-rw rootfs+loop 失败"
-      return 1
-    fi
+  diskroot="${CAPBOX_STATE_DIR:?}/disk"
+  mkdir -p -- "$diskroot" || return 1
+  if [[ -L "$diskroot" || -L "${CAPBOX_STATE_DIR}" ]]; then
+    CAPBOX_DISK_DETAIL="state/disk 是符号链接，拒绝建立配额盘"
+    return 1
   fi
-
-  local -a inner=("${_dw_cmd[@]}")
-  if ! _resources_disk_rebind_rootfs inner "$base/root"; then
-    _resources_disk_cleanup_tree "$base"
-    CAPBOX_DISK_DETAIL="argv 中未找到 --bind/--ro-bind \$CAPBOX_ROOTFS /，无法接入配额盘"
+  base="$(mktemp -d "$diskroot/d.XXXXXX")" || return 1
+  if [[ -L "$base" || ! -d "$base" ]]; then
+    CAPBOX_DISK_DETAIL="配额目录不是真实目录"
+    return 1
+  fi
+  img="$base/disk.img"
+  ops="$(mktemp "${TMPDIR:-/tmp}/capbox-disk-ops.XXXXXX")" || {
+    rmdir -- "$base" 2>/dev/null || true
+    return 1
+  }
+  if ! _resources_disk_write_ops "$ops"; then
+    rm -f -- "$ops"
+    rmdir -- "$base" 2>/dev/null || true
     return 1
   fi
 
-  # 执行后（成功/失败）都卸挂载并 losetup -d
+  if ! _resources_disk_run_ops "$mode" "$ops" setup "$base" "$img" "$bytes"; then
+    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "建立 loop 配额盘失败（priv=$mode）"
+    return 1
+  fi
+
+  local -a inner=("${_dw_cmd[@]}")
+  if ! _resources_disk_bind_into inner "$base/mnt" "$guest"; then
+    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "argv 中没有 --，无法把配额盘挂进 guest"
+    return 1
+  fi
+
+  # 命令结束后用同一份脚本卸载。sudo 失败不回落到无特权 rm。
   _dw_cmd=(
     /bin/bash -c
-    'base="$1"; mode="$2"; guest="$3"; shift 3
-     cleanup() {
-       export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
-       umount "$base/root$guest" 2>/dev/null || true
-       umount "$base/root" 2>/dev/null || true
-       if [[ -f "$base/loop.dev" ]]; then
-         loop=$(cat "$base/loop.dev" 2>/dev/null || true)
-         [[ -n "$loop" ]] && losetup -d "$loop" 2>/dev/null || true
-       fi
-       rm -rf -- "$base" 2>/dev/null || true
-     }
+    'set -u
+     base=$1; mode=$2; ops=$3; shift 3
      priv_cleanup() {
+       local rc=0
        if [[ "$mode" == "sudo" ]]; then
-         sudo -n bash -c '\''base="$0"; guest="$1"
-           umount "$base/root$guest" 2>/dev/null || true
-           umount "$base/root" 2>/dev/null || true
-           if [[ -f "$base/loop.dev" ]]; then
-             loop=$(cat "$base/loop.dev" 2>/dev/null || true)
-             [[ -n "$loop" ]] && losetup -d "$loop" 2>/dev/null || true
-           fi
-           rm -rf -- "$base" 2>/dev/null || true
-         '\'' "$base" "$guest" || cleanup
+         sudo -n bash "$ops" cleanup "$base" || rc=1
        else
-         cleanup
+         bash "$ops" cleanup "$base" || rc=1
        fi
+       if [[ "$rc" -eq 0 ]]; then
+         rm -f -- "$ops"
+       else
+         printf "capbox: DISK_MAX 卸载失败，保留 %s\n" "$base" >&2
+       fi
+       return "$rc"
      }
-     trap priv_cleanup EXIT
+     trap "priv_cleanup || exit 1" EXIT
      "$@"
      rc=$?
      trap - EXIT
-     priv_cleanup
+     priv_cleanup || exit 1
      exit "$rc"'
     bash
     "$base"
     "$mode"
-    "$guest"
+    "$ops"
     "${inner[@]}"
   )
 
   CAPBOX_DISK_BASE="$base"
   CAPBOX_RESOURCES_APPLIED_DISK="loop:${bytes}:${guest}"
-  log_debug "DISK_MAX 已应用: $bytes -> guest:$guest via bind-rw rootfs tree (priv=$mode)"
+  log_debug "DISK_MAX 已应用: $bytes -> guest:$guest via state loop (priv=$mode)"
   return 0
 }
 
@@ -565,7 +651,7 @@ _resources_wrap_argv() {
     local -a inner=("${_rw_cmd[@]}")
     _rw_cmd=(
       /bin/bash -c
-      'echo $$ >"$1/cgroup.procs" 2>/dev/null || true; shift; exec "$@"'
+      'if ! echo $$ >"$1/cgroup.procs"; then printf "cgroup.procs write failed\n" >&2; exit 1; fi; shift; exec "$@"'
       bash
       "$cg"
       "${inner[@]}"
@@ -660,5 +746,12 @@ _resources_doctor_report() {
   [[ -n "${CAPBOX_MEMORY_MAX:-}" ]] && _doctor_pass "已配置 MEMORY_MAX=$CAPBOX_MEMORY_MAX"
   [[ -n "${CAPBOX_CPU_MAX:-}" ]] && _doctor_pass "已配置 CPU_MAX=$CAPBOX_CPU_MAX"
   [[ -n "${CAPBOX_PIDS_MAX:-}" ]] && _doctor_pass "已配置 PIDS_MAX=$CAPBOX_PIDS_MAX"
-  [[ -n "${CAPBOX_DISK_MAX:-}" ]] && _doctor_pass "已配置 DISK_MAX=$CAPBOX_DISK_MAX（guest $(_resources_disk_guest_path)）"
+  if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
+    local gp=""
+    if gp="$(_resources_disk_guest_path)"; then
+      _doctor_pass "已配置 DISK_MAX=$CAPBOX_DISK_MAX（guest $gp）"
+    else
+      _doctor_warn "DISK_MAX 的 guest 路径非法"
+    fi
+  fi
 }

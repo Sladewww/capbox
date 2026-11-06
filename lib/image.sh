@@ -18,6 +18,87 @@ _image_sha256_file() {
   sha256sum "$1" | awk '{print $1}'
 }
 
+# 解包到 dest。用 Python data filter 拒绝绝对路径、.. 和指向包外的链接。
+# 保留数字属主（非 root 时内核仍会忽略 chown）。
+_image_extract_archive() {
+  local arch="${1:-}" dest="${2:-}" tarpath="$1" tmp="" rc=0
+  [[ -n "$arch" && -n "$dest" && -d "$dest" && ! -L "$dest" ]] || return 1
+  if [[ "$arch" == *.zst ]]; then
+    have_cmd zstd || {
+      log_err "解包 zst 需要 zstd"
+      return 1
+    }
+    tmp="$(mktemp "${TMPDIR:-/tmp}/capbox-image.XXXXXX.tar")" || return 1
+    if ! zstd -q -d -c -- "$arch" >"$tmp"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+    tarpath="$tmp"
+  fi
+  rc=0
+  python3 - "$tarpath" "$dest" <<'PY' || rc=$?
+import inspect, sys, tarfile
+src, dest = sys.argv[1], sys.argv[2]
+sig = inspect.signature(tarfile.TarFile.extractall)
+if "filter" not in sig.parameters:
+    sys.stderr.write("python tarfile has no data filter; refusing extract\n")
+    sys.exit(1)
+with tarfile.open(src, "r:*") as tf:
+    tf.extractall(dest, numeric_owner=True, filter="data")
+PY
+  [[ -n "$tmp" ]] && rm -f -- "$tmp"
+  return "$rc"
+}
+
+# 真实目录，且 realpath 必须落在 root 下面。
+_image_realpath_inside() {
+  local path="${1:-}" root="${2:-}" real base
+  [[ -n "$path" && -n "$root" && ! -L "$path" ]] || return 1
+  real="$(realpath -- "$path" 2>/dev/null)" || return 1
+  base="$(realpath -- "$root" 2>/dev/null)" || return 1
+  [[ "$real" == "$base" || "$real" == "$base"/* ]] || return 1
+  printf '%s\n' "$real"
+}
+
+# 把 src 拷进 rootfs 下的相对路径。祖先或目标是符号链接则失败。
+_image_install_tree() {
+  local src="${1:-}" rel="${2:-}"
+  local root dest
+  [[ -d "$src" && ! -L "$src" ]] || return 1
+  [[ "$rel" == /* || "$rel" == *..* || -z "$rel" ]] && return 1
+  root="$(realpath -- "$CAPBOX_ROOTFS" 2>/dev/null)" || return 1
+  [[ -d "$root" && ! -L "$CAPBOX_ROOTFS" ]] || return 1
+  dest="$root/$rel"
+  local cur="$root" part rest="${dest#"$root"/}"
+  local IFS=/
+  local -a parts=()
+  read -r -a parts <<< "$rest"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" && "$part" != "." && "$part" != ".." ]] || return 1
+    if [[ -L "$cur/$part" ]]; then
+      log_err "拒绝把镜像内容写入符号链接: $cur/$part"
+      return 1
+    fi
+    if [[ -d "$cur/$part" ]]; then
+      cur="$cur/$part"
+      continue
+    fi
+    if [[ -e "$cur/$part" ]]; then
+      log_err "缓存目标不是目录: $cur/$part"
+      return 1
+    fi
+    mkdir -- "$cur/$part" || return 1
+    cur="$cur/$part"
+  done
+  [[ "$cur" == "$dest" && -d "$dest" && ! -L "$dest" ]] || return 1
+  if find "$src" -type l -print -quit | grep -q .; then
+    log_err "缓存树含符号链接，拒绝写入 rootfs"
+    return 1
+  fi
+  cp -a -- "$src/." "$dest/" || return 1
+  return 0
+}
+
 _image_write_meta() {
   local arch="${1:-}" distro="${2:-}" sum="${3:-}"
   {
@@ -119,25 +200,33 @@ H
       else arch="$(_image_dir)/${name}.tar.gz"; fi
       parent="$(dirname "$CAPBOX_ROOTFS")"
       target="$parent/${CAPBOX_DISTRO}.imported-${name}"
-      rm -rf "$target"
-      mkdir -p "$target.extract"
-      if [[ "$arch" == *.zst ]]; then
-        zstd -q -d -c "$arch" | tar --numeric-owner -C "$target.extract" -xf -
-      else
-        tar --numeric-owner -C "$target.extract" -xzf "$arch"
+      if [[ -L "$parent" || -L "$target" || -L "$target.extract" ]]; then
+        die 1 "导入目标路径是符号链接"
       fi
+      rm -rf --one-file-system -- "$target" "$target.extract"
+      mkdir -p -- "$target.extract" || die 1 "无法创建解包目录"
+      [[ -d "$target.extract" && ! -L "$target.extract" ]] || die 1 "解包目录不是真实目录"
+      _image_extract_archive "$arch" "$target.extract" || die 1 "导入归档解包失败"
       local extracted="$target.extract/$(basename "$CAPBOX_ROOTFS")"
-      [[ -d "$extracted" ]] || extracted="$(find "$target.extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-      [[ -d "$extracted" ]] || die 1 "导入归档无根目录"
-      mv -- "$extracted" "$target"
-      rm -rf "$target.extract"
+      if [[ ! -d "$extracted" || -L "$extracted" ]]; then
+        extracted="$(find "$target.extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+      fi
+      [[ -n "$extracted" ]] || die 1 "导入归档无根目录"
+      _image_realpath_inside "$extracted" "$target.extract" >/dev/null || die 1 "导入根目录越出解包目录"
+      [[ ! -e "$target" && ! -L "$target" ]] || die 1 "导入目标已存在"
+      mv -- "$extracted" "$target" || die 1 "无法放置导入目录"
+      [[ -d "$target" && ! -L "$target" ]] || die 1 "导入结果不是真实目录"
+      rm -rf --one-file-system -- "$target.extract"
       log_info "已导入到旁路: $target（未替换当前 rootfs）"
       if (( force == 1 )); then
         local bak="$parent/${CAPBOX_DISTRO}.pre-import-$$"
-        mv -- "$CAPBOX_ROOTFS" "$bak"
-        if mv -- "$target" "$CAPBOX_ROOTFS"; then
+        [[ -d "$CAPBOX_ROOTFS" && ! -L "$CAPBOX_ROOTFS" ]] || die 1 "当前 rootfs 不是真实目录，拒绝 --force"
+        [[ ! -e "$bak" && ! -L "$bak" ]] || die 1 "备份路径已存在: $bak"
+        mv -- "$CAPBOX_ROOTFS" "$bak" || die 1 "无法挪开当前 rootfs"
+        if mv -- "$target" "$CAPBOX_ROOTFS" && [[ -d "$CAPBOX_ROOTFS" && ! -L "$CAPBOX_ROOTFS" ]]; then
           log_info "已 --force 替换当前 rootfs；旧树在 $bak"
         else
+          rm -rf --one-file-system -- "$CAPBOX_ROOTFS"
           mv -- "$bak" "$CAPBOX_ROOTFS" || true
           die 1 "替换失败"
         fi
@@ -213,7 +302,26 @@ H
             got="$(_image_sha256_file "$arch")"
             [[ "$expect" == "$got" ]] || die 1 "缓存校验失败"
           fi
-          tar --numeric-owner -C "$CAPBOX_ROOTFS" -xzf "$arch"
+          local rel stage
+          if [[ "${CAPBOX_DISTRO}" == "alpine" ]]; then
+            rel="var/cache/apk"
+          else
+            rel="var/cache/apt"
+          fi
+          stage="$(mktemp -d "${CAPBOX_STATE_DIR:-${TMPDIR:-/tmp}}/cache-restore.XXXXXX")" || die 1 "无法创建缓存暂存目录"
+          if ! _image_extract_archive "$arch" "$stage"; then
+            rm -rf --one-file-system -- "$stage"
+            die 1 "缓存归档解包失败"
+          fi
+          if [[ ! -d "$stage/$rel" || -L "$stage/$rel" ]]; then
+            rm -rf --one-file-system -- "$stage"
+            die 1 "缓存归档没有 $rel"
+          fi
+          if ! _image_install_tree "$stage/$rel" "$rel"; then
+            rm -rf --one-file-system -- "$stage"
+            die 1 "拒绝把缓存写入 rootfs"
+          fi
+          rm -rf --one-file-system -- "$stage"
           log_info "已恢复离线包缓存到 rootfs"
           ;;
         *) die 2 "image cache: save|restore|path" ;;

@@ -55,8 +55,13 @@ _net_dir() {
 
 # oneshot 与 daemon 使用不同的 sock/pid，避免一次性 exec 的清理杀掉常驻代理。
 _net_session_tag() {
-  case "${CAPBOX_NET_SESSION:-oneshot}" in
+  local tag="${CAPBOX_NET_SESSION:-oneshot}"
+  case "$tag" in
     daemon) printf 'daemon' ;;
+    svc-*)
+      tag="$(printf '%s' "$tag" | tr -c 'A-Za-z0-9_-' '-')"
+      printf '%s' "$tag"
+      ;;
     *) printf 'oneshot' ;;
   esac
 }
@@ -223,9 +228,20 @@ _net_start_bridge_for_child() {
     log_err "代理 sock 不存在: $sock"
     return 1
   }
-  # 不带 -t：配合 --preserve-credentials 进入 user+net ns
+  # 不带 -t：配合 --preserve-credentials 进入 user+net ns。
+  # bwrap 在放行后用 NLM_F_EXCL 添加 127.0.0.1。这里不能先改 lo，否则地址已存在，
+  # RTM_NEWADDR 失败（报错里的 errno 经常是残留值，看起来像 No child processes）。
   nohup nsenter --user="/proc/$child/ns/user" --net="/proc/$child/ns/net" --preserve-credentials -- \
     /bin/sh -c "
+      i=0
+      while [ \"\$i\" -lt 200 ]; do
+        if ip -4 addr show dev lo 2>/dev/null | grep -q 127.0.0.1; then
+          break
+        fi
+        i=\$((i+1))
+        sleep 0.02
+      done
+      ip -4 addr show dev lo 2>/dev/null | grep -q 127.0.0.1 || exit 1
       ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null || true
       exec python3 $(printf %q "$py") bridge --listen 127.0.0.1:${CAPBOX_NET_BRIDGE_PORT} --sock $(printf %q "$sock") --ready $(printf %q "$ready")
     " >>"$(_net_bridge_log)" 2>&1 &
@@ -323,9 +339,10 @@ _net_run_bwrap_oneshot() {
   mapfile -t args < <(build_bwrap_args oneshot "$cwd")
   (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数"
 
-  # 等宿主写入 go 文件（位于工作区 bind 内）后再 exec 原 argv
+  # 等宿主写入 go 文件（位于工作区 bind 内）后再 exec 原 argv。
+  # --info-fd 只在非 idmap 路径注入：idmap 自己用 fd 4，两套 info-fd 会冲突。
   wrap_cmd=(
-    "$CAPBOX_BWRAP" --info-fd 3 "${args[@]}"
+    "$CAPBOX_BWRAP" "${args[@]}"
     -- /bin/sh -c
     'while [ ! -f "$1" ]; do sleep 0.05; done; shift; exec "$@"'
     sh
@@ -334,8 +351,34 @@ _net_run_bwrap_oneshot() {
   )
 
   if declare -F _resources_wrap_argv >/dev/null 2>&1; then
-    _resources_wrap_argv wrap_cmd || true
+    _resources_wrap_argv wrap_cmd || return $?
   fi
+  if declare -F _security_wrap_argv >/dev/null 2>&1; then
+    _security_wrap_argv wrap_cmd || return $?
+  fi
+
+  local idmap_rc=1
+  if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
+    _capbox_idmap_decision
+    idmap_rc=$?
+  fi
+  if (( idmap_rc == 2 )); then
+    return 1
+  fi
+  if (( idmap_rc == 0 )); then
+    _idmap_after_map_hook() {
+      _net_start_bridge_for_child "$1" || return $?
+      : >"$go"
+      return 0
+    }
+    local rc=0
+    _idmap_run_bwrap_argv "${wrap_cmd[@]}"
+    rc=$?
+    rm -f "$info" "$go" 2>/dev/null || true
+    return "$rc"
+  fi
+
+  _net_inject_bwrap_info_fd wrap_cmd 3 || return 1
 
   local rc=0 child="" bp
   if (( to > 0 )) && have_cmd timeout; then

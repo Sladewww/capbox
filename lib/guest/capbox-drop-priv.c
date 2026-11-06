@@ -27,16 +27,22 @@ int main(int argc, char **argv) {
   }
 
   errno = 0;
-  uid = (uid_t)strtoul(argv[1], &end, 10);
-  if (errno != 0 || end == argv[1] || *end != '\0') {
-    fprintf(stderr, "capbox-drop-priv: invalid uid: %s\n", argv[1]);
-    return 2;
+  {
+    unsigned long long raw = strtoull(argv[1], &end, 10);
+    if (errno != 0 || end == argv[1] || *end != '\0' || raw > 0xFFFFFFFFull) {
+      fprintf(stderr, "capbox-drop-priv: invalid uid: %s\n", argv[1]);
+      return 2;
+    }
+    uid = (uid_t)raw;
   }
   errno = 0;
-  gid = (gid_t)strtoul(argv[2], &end, 10);
-  if (errno != 0 || end == argv[2] || *end != '\0') {
-    fprintf(stderr, "capbox-drop-priv: invalid gid: %s\n", argv[2]);
-    return 2;
+  {
+    unsigned long long raw = strtoull(argv[2], &end, 10);
+    if (errno != 0 || end == argv[2] || *end != '\0' || raw > 0xFFFFFFFFull) {
+      fprintf(stderr, "capbox-drop-priv: invalid gid: %s\n", argv[2]);
+      return 2;
+    }
+    gid = (gid_t)raw;
   }
 
   if (setgid(gid) != 0) {
@@ -45,9 +51,23 @@ int main(int argc, char **argv) {
     return 1;
   }
   gids[0] = gid;
-  /* Best-effort clear+set supplementary groups (matches setpriv --clear-groups). */
+  /* Keep going only when no supplementary group other than the target remains.
+     setgroups is denied in some user namespaces; leftover gid 0 is not a drop. */
   if (setgroups(1, gids) != 0) {
-    /* Some profiles deny setgroups; continue with primary gid only. */
+    gid_t cur[64];
+    int n = getgroups(64, cur);
+    int i;
+    if (n < 0) {
+      fprintf(stderr, "capbox-drop-priv: getgroups: %s\n", strerror(errno));
+      return 1;
+    }
+    for (i = 0; i < n; i++) {
+      if (cur[i] != gid) {
+        fprintf(stderr, "capbox-drop-priv: setgroups(%u) failed and other groups remain\n",
+                (unsigned)gid);
+        return 1;
+      }
+    }
   }
   if (setuid(uid) != 0) {
     fprintf(stderr, "capbox-drop-priv: setuid(%u): %s\n",

@@ -8,9 +8,8 @@
 #   2) $CAPBOX_WORKSPACE/capbox.recipe
 #   3) $CAPBOX_DIR/recipe.env
 #
-# 支持键（短键，亦可写 CAPBOX_ 前缀）：
-#   DISTRO MIRROR MIRROR_ALPINE MIRROR_UBUNTU PROXY NET NET_ALLOW
-#   HOSTNAME EXEC_TIMEOUT MEMORY_MAX CPU_MAX PIDS_MAX
+# 支持键（短键，亦可写 CAPBOX_ 前缀）：CAPBOX_RECIPE_KEYS。
+# apply 会把除 PACKAGES、INIT 以外、且出现在配方里的键全部 config_set。
 #   PACKAGES   —— 逗号/空白分隔，apply 时 pkg install
 #   INIT       —— 1/yes 时若 rootfs 未就绪则执行 init（默认 1）
 # =============================================================================
@@ -191,7 +190,8 @@ _recipe_cmd_apply() {
   _recipe_load_into "$f" R
 
   local k v
-  for k in DISTRO MIRROR MIRROR_ALPINE MIRROR_UBUNTU PROXY NET NET_ALLOW HOSTNAME EXEC_TIMEOUT BWRAP MEMORY_MAX CPU_MAX PIDS_MAX IDMAP UID_MAP GID_MAP SETGROUPS EXEC_UID EXEC_GID; do
+  for k in "${CAPBOX_RECIPE_KEYS[@]}"; do
+    [[ "$k" == "PACKAGES" || "$k" == "INIT" ]] && continue
     [[ -n "${R[$k]+x}" ]] || continue
     v="${R[$k]}"
     if declare -F config_set >/dev/null 2>&1; then
