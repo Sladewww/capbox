@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T38-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T40-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -102,19 +102,20 @@ capbox recipe show
 
 ## 可观测性
 
-- `CAPBOX_AUDIT=off|summary|full`：JSONL 写入 `.capbox/logs/audit.jsonl`（命令默认可摘要，脱敏 password/token）
+- `CAPBOX_AUDIT=off|summary|full`：JSONL 写入 `.capbox/logs/audit.jsonl`（命令默认可摘要，脱敏 password/token）。该目录对 guest 只读，宿主仍可追加
 - `capbox audit tail|path|clear`、`capbox metrics [--json]`：真实 cgroup/disk/服务状态，无假数据
 
 
 ## 安装
 
-需要 Linux + [`bubblewrap`](https://github.com/containers/bubblewrap)（`bwrap`）。
+需要 Linux + [`bubblewrap`](https://github.com/containers/bubblewrap) **>= 0.12.0**（`bwrap`）。`doctor` 和启动都会拒绝更低的版本（退出码 6）；`--version` 解析不了也拒绝。`compat` 不豁免。发行版包若仍报 `0.11.x`（包括撤回过补丁的 `0.11.1`），要换成上游 0.12.0 或更新的二进制。Debian/Ubuntu 可先 `sudo apt install --only-upgrade bubblewrap`。确认接受风险时，单次用 `capbox --allow-old-bwrap <command>`，持久用 `capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1`。两条都会写入审计。`doctor` 不因放行变成通过。没有环境变量绕过。
 
 ```sh
 # Debian/Ubuntu
 sudo apt install bubblewrap
 # Alpine: apk add bubblewrap
 # Fedora: sudo dnf install bubblewrap
+# 装完确认：bwrap --version    # 需要 >= 0.12.0
 ```
 
 **推荐：全局一份模板 + 每项目自动 `.capbox`**
@@ -188,14 +189,14 @@ capbox down
 | `up [--systemd] [--net MODE]` / `down` / `logs` | 常驻容器。`--systemd` 交给 systemd --user。`--net` 只作用于这一次 up |
 | `service start\|stop\|status\|logs\|list` | 配置化服务（`.capbox/services/*.env`） |
 | `ls` / `ps` | 容器内目录 / 进程 |
-| `doctor` | 自检（有 FAIL 则退出 1） |
+| `doctor` | 自检（有 FAIL 则退出 1；bwrap 低于 0.12.0 时退出 6，放行也不改成 PASS） |
 | `config get\|set\|list` | 读写配置 |
 | `clean [--all]` | 清缓存；`--all` 含 rootfs |
 
-全局选项：`--root DIR`（工作区根）、`--debug`。
+全局选项：`--root DIR`（工作区根）、`--debug`、`--allow-old-bwrap`（仅本次接受旧版 bwrap）。
 
 退出码：`0` 成功，`1` 一般错误，`2` 用法错误，`3` 常驻容器未运行，`4` rootfs 不存在，
-`5` 依赖缺失，`124` 超时；其余透传容器内退出码。
+`5` 依赖缺失，`6` 安全基线不满足（bwrap 低于 0.12.0），`124` 超时；其余透传容器内退出码。
 
 ## 配置化服务
 

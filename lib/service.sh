@@ -375,9 +375,21 @@ _service_start() {
   fi
 
   local -a args=() full=()
+  local _bbrc=0
   CAPBOX_BWRAP_NO_DIE_WITH_PARENT=1
   export CAPBOX_BWRAP_NO_DIE_WITH_PARENT
-  mapfile -t args < <(build_bwrap_args oneshot "$cwd")
+  CAPBOX_BWRAP_BASELINE_CMD="service start ${name}"
+  mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
+    _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
+    unset 'args[-1]'
+  fi
+  if (( _bbrc == 6 )); then
+    _service_abort 6 || return $?
+  fi
+  if (( _bbrc != 0 )); then
+    _service_abort "$_bbrc" "无法构造 bwrap 参数（rc=${_bbrc}；常见原因：bwrap 版本不足）" || return $?
+  fi
   if ((${#args[@]} == 0)); then
     _service_abort 4 "无法构造 bwrap 参数" || return $?
   fi

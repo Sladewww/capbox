@@ -11,6 +11,14 @@
 
 set -u
 
+# 继承来的环境变量不能打开旧版 bwrap 放行。单次标记只来自本次 argv。
+if [ -n "${CAPBOX_ALLOW_OLD_BWRAP+x}" ]; then
+  printf '[capbox] 警告: 忽略环境变量 CAPBOX_ALLOW_OLD_BWRAP=%s；持久放行写入 config.env，单次放行用 --allow-old-bwrap\n' \
+    "$CAPBOX_ALLOW_OLD_BWRAP" >&2
+  unset CAPBOX_ALLOW_OLD_BWRAP
+fi
+unset CAPBOX_ALLOW_OLD_BWRAP_ONCE
+
 # ---------- 0. 定位 CapBox 根目录 --------------------------------------------
 # 规则：
 #   1) CAPBOX_ROOT / --root → 工作区根下的 .capbox/（可尚不存在）
@@ -41,6 +49,11 @@ while [ $# -gt 0 ]; do
       ;;
     --root=*)
       export CAPBOX_ROOT="${1#*=}"
+      shift
+      ;;
+    --allow-old-bwrap)
+      CAPBOX_ALLOW_OLD_BWRAP_ONCE=1
+      export CAPBOX_ALLOW_OLD_BWRAP_ONCE
       shift
       ;;
     --)
@@ -192,11 +205,12 @@ capbox_usage() {
   cat <<'EOF'
 CapBox —— 工作区内持久化的 root Linux 容器
 
-用法: capbox [--root DIR] [--debug] <command> [options] [-- args]
+用法: capbox [--root DIR] [--debug] [--allow-old-bwrap] <command> [options] [-- args]
 
 全局选项
   --root DIR                        指定工作区根（其下使用 DIR/.capbox）；等价于 CAPBOX_ROOT
   --debug                           打开调试日志
+  --allow-old-bwrap                 仅本次接受低于 0.12.0 的 bwrap（不写配置，写入审计）
 
 系统生命周期
   bootstrap                         在当前工作区脚手架 .capbox/（从 PATH 上的模板复制）
@@ -266,6 +280,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   3   守护容器未运行（需要 daemon 的命令）
   4   rootfs 不存在（先运行 capbox init）
   5   依赖缺失（bwrap 等）
+  6   安全基线不满足（bwrap 低于 0.12.0，且未显式放行）
   124 容器内命令超时
 
 要点
@@ -328,6 +343,11 @@ capbox_main() {
       --root=*)
         export CAPBOX_ROOT="${1#*=}"
         root_changed=1
+        shift
+        ;;
+      --allow-old-bwrap)
+        CAPBOX_ALLOW_OLD_BWRAP_ONCE=1
+        export CAPBOX_ALLOW_OLD_BWRAP_ONCE
         shift
         ;;
       --) shift; break ;;

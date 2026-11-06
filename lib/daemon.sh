@@ -106,10 +106,41 @@ fi
 
 # ---- 0.4 bwrap 参数兜底（契约 §3.4 的同构实现） ------------------------------
 
+# 兜底路径自己检查版本。common.sh 的门禁在时用它（含单次/持久放行与审计）。
+# 助手缺失时按同一条 >= 0.12.0 规则拒绝，退出码 6。不读环境变量放行。
+_daemon_require_bwrap_version() {
+  if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
+    CAPBOX_BWRAP_BASELINE_CMD="up"
+  fi
+  if declare -F _capbox_enforce_bwrap_baseline >/dev/null 2>&1; then
+    _capbox_enforce_bwrap_baseline
+    return $?
+  fi
+  local bin line maj min pat
+  bin="${CAPBOX_BWRAP:-}"
+  if [[ -z "$bin" || ! -x "$bin" ]]; then
+    log_err "bwrap 不可用: ${bin:-未设置}"
+    return 5
+  fi
+  line="$("$bin" --version 2>/dev/null | head -n 1 || true)"
+  if [[ "$line" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    maj=$((10#${BASH_REMATCH[1]}))
+    min=$((10#${BASH_REMATCH[2]}))
+    pat=$((10#${BASH_REMATCH[3]}))
+    if (( maj > 0 || (maj == 0 && min > 12) || (maj == 0 && min == 12 && pat >= 0) )); then
+      return 0
+    fi
+  fi
+  log_err "bwrap 低于安全基线 0.12.0（兜底路径不接受放行）"
+  return 6
+}
+
 # _daemon_bwrap_args MODE   —— 打印一行一个参数（不含 -- 命令部分）
 _daemon_bwrap_args() {
   local mode="${1:-daemon}"
   local -a a=()
+
+  _daemon_require_bwrap_version || return $?
 
   a+=(--bind "$CAPBOX_ROOTFS" /)
   a+=(--proc /proc)
@@ -124,10 +155,10 @@ _daemon_bwrap_args() {
   a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
   # 防止 guest 改写 CLI / config.env（与 common.sh build_bwrap_args 同构）
   if declare -F _capbox_append_ro_cli_binds >/dev/null 2>&1; then
-    _capbox_append_ro_cli_binds a
+    _capbox_append_ro_cli_binds a || return $?
   else
     # 兜底：common.sh 未加载时手工 ro-bind（含缺失 config.env / services 预占）
-    local _gp _cfg _svc
+    local _gp _cfg _svc _logs
     if [[ -d "${CAPBOX_BIN_DIR:-}" ]]; then
       _gp="$(_daemon_guest_path "$CAPBOX_BIN_DIR")"
       [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_BIN_DIR" "$_gp")
@@ -152,6 +183,37 @@ _daemon_bwrap_args() {
       [[ -d "$_svc" ]] || mkdir -p "$_svc" 2>/dev/null || true
       if [[ -d "$_svc" && ! -L "$_svc" ]]; then
         a+=(--ro-bind "$_svc" "$_gp")
+      fi
+    fi
+    _logs="${CAPBOX_DIR:-}/logs"
+    _gp="$(_daemon_guest_path "$_logs")"
+    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
+      if [[ -L "$_logs" || ( -e "$_logs" && ! -d "$_logs" ) ]]; then
+        log_err "logs 必须是普通目录，拒绝启动: $_logs"
+        return 1
+      fi
+      [[ -d "$_logs" ]] || mkdir -p "$_logs" 2>/dev/null || true
+      if [[ -d "$_logs" && ! -L "$_logs" ]]; then
+        a+=(--ro-bind "$_logs" "$_gp")
+      else
+        log_err "无法把 logs 只读挂进 guest: $_logs"
+        return 1
+      fi
+    fi
+    local _vercache
+    _vercache="${CAPBOX_STATE_DIR:-${CAPBOX_DIR:-}/state}/bwrap-version"
+    _gp="$(_daemon_guest_path "$_vercache")"
+    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
+      if [[ -L "$_vercache" ]]; then
+        log_err "bwrap 版本缓存是符号链接，拒绝启动: $_vercache"
+        return 1
+      fi
+      if [[ ! -e "$_vercache" ]]; then
+        mkdir -p "$(dirname -- "$_vercache")" 2>/dev/null || true
+        ( umask 077; : >"$_vercache" ) 2>/dev/null || true
+      fi
+      if [[ -f "$_vercache" && ! -L "$_vercache" ]]; then
+        a+=(--ro-bind /dev/null "$_gp")
       fi
     fi
   fi
@@ -591,13 +653,18 @@ _daemon_build_up_argv() {
   _out=()
 
   local -a base=()
+  if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
+    CAPBOX_BWRAP_BASELINE_CMD="up"
+  fi
   if declare -F sandbox_bwrap_cmd >/dev/null 2>&1; then
     local x errf outf
     errf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-bwrap.XXXXXX")" || return 1
     outf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-argv.XXXXXX")" || { rm -f "$errf"; return 1; }
     if ! sandbox_bwrap_cmd daemon "" "/workspace" >"$outf" 2>"$errf"; then
       local brc=$?
-      log_err "无法构造守护容器 bwrap 参数（rc=$brc）"
+      if (( brc != 6 )); then
+        log_err "无法构造守护容器 bwrap 参数（rc=$brc）"
+      fi
       [[ -s "$errf" ]] && cat "$errf" >&2
       rm -f "$errf" "$outf"
       return "$brc"
@@ -612,7 +679,15 @@ _daemon_build_up_argv() {
     }
   else
     local -a args=()
-    mapfile -t args < <(_daemon_bwrap_args daemon)
+    local _bbrc=0
+    mapfile -t args < <(_daemon_bwrap_args daemon; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+    if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
+      _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
+      unset 'args[-1]'
+    fi
+    if (( _bbrc != 0 )); then
+      return "$_bbrc"
+    fi
     (( ${#args[@]} > 0 )) || return 1
     base=("$CAPBOX_BWRAP" "${args[@]}")
   fi
@@ -698,6 +773,10 @@ _daemon_up_via_systemd() {
   cli="${_CAPBOX_CLI_BIN_DIR:-}/capbox"
   [[ -x "$cli" ]] || cli="$(command -v capbox 2>/dev/null || true)"
   [[ -n "$cli" && -x "$cli" ]] || die 1 "找不到 capbox 可执行文件，无法交给 systemd"
+  local -a child_cmd=("$cli")
+  if [[ "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-}" == "1" ]]; then
+    child_cmd+=(--allow-old-bwrap)
+  fi
   mkdir -p "$CAPBOX_RUN_DIR"
   printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
   local -a envargs=()
@@ -713,7 +792,7 @@ _daemon_up_via_systemd() {
   if ! systemd-run --user --collect --unit="$unit" \
     -p "WorkingDirectory=${CAPBOX_WORKSPACE}" \
     "${envargs[@]}" \
-    -- "$cli" up; then
+    -- "${child_cmd[@]}" up; then
     log_err "systemd-run 失败"
     return 1
   fi
@@ -862,7 +941,14 @@ EOF
   fi
 
   local -a argv=()
-  _daemon_build_up_argv argv
+  local _up_rc=0
+  _daemon_build_up_argv argv || _up_rc=$?
+  if (( _up_rc == 6 )); then
+    die 6
+  fi
+  if (( _up_rc != 0 )); then
+    die "$_up_rc" "无法构造 bwrap 命令"
+  fi
   (( ${#argv[@]} > 0 )) || die 1 "无法构造 bwrap 命令"
 
   local idmap_rc=1

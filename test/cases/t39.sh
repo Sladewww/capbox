@@ -35,9 +35,13 @@ _guest_path_for_test() {
 
 cfg="$CAPBOX_DIR/config.env"
 svc_dir="$CAPBOX_DIR/services"
+log_host="$CAPBOX_DIR/logs/audit.jsonl"
+log_guest="$(_guest_path_for_test "$log_host")"
+marker="T39_AUDIT_TAMPER_$$"
+host_probe="$CAPBOX_DIR/logs/.t39-host-write-$$"
 cfg_guest="$(_guest_path_for_test "$cfg")"
 svc_guest="$(_guest_path_for_test "$svc_dir")"
-if [ -z "$cfg_guest" ] || [ -z "$svc_guest" ]; then
+if [ -z "$cfg_guest" ] || [ -z "$svc_guest" ] || [ -z "$log_guest" ]; then
   skip_case "CAPBOX_DIR 不在工作区视图内，无法测 /workspace 预占"
   case_finish; exit 0
 fi
@@ -67,6 +71,13 @@ restore_t39() {
     mv -- "$svc_bak" "$svc_dir"
   else
     rm -f -- "$CAPBOX_DIR/services/t39ok.env" "$CAPBOX_DIR/services/t39evil.env" 2>/dev/null || true
+  fi
+  rm -f -- "${host_probe:-}" 2>/dev/null || true
+  # 只删探针标记行，不截断已有审计日志。
+  if [ -n "${log_host:-}" ] && [ -f "$log_host" ] && [ ! -L "$log_host" ] && grep -q -F -- "$marker" "$log_host" 2>/dev/null; then
+    _strip="$QA_TMP/t39-audit.strip"
+    grep -v -F -- "$marker" "$log_host" >"$_strip" && cat "$_strip" >"$log_host"
+    rm -f -- "$_strip"
   fi
 }
 trap restore_t39 EXIT
@@ -146,6 +157,24 @@ if [ -f "$svc_dir/t39evil.env" ]; then
   _fail "guest 在已有 services/ 下创建了 t39evil.env"
 else
   _ok "已有 services/ 下 guest 无法新建 *.env"
+fi
+CASE_ASSERTS=$((CASE_ASSERTS + 1))
+
+# ---- 6) logs/audit.jsonl 对 guest 只读；宿主仍可写 logs/ ----
+mkdir -p "$CAPBOX_DIR/logs"
+run_cmd "$CAPBOX_BIN" exec -- sh -c "echo $marker >> \"$log_guest\""
+assert_ne 0 "$RUN_RC" "guest 追加 audit.jsonl 应非零退出"
+if [ -f "$log_host" ] && grep -q -F -- "$marker" "$log_host" 2>/dev/null; then
+  _fail "guest 写入了 logs/audit.jsonl"
+else
+  _ok "guest 未能写入 logs/audit.jsonl"
+fi
+CASE_ASSERTS=$((CASE_ASSERTS + 1))
+if printf 'host\n' >"$host_probe" 2>/dev/null; then
+  _ok "宿主仍可在 logs/ 下创建文件"
+  rm -f -- "$host_probe"
+else
+  _fail "宿主无法在 logs/ 下创建文件"
 fi
 CASE_ASSERTS=$((CASE_ASSERTS + 1))
 
