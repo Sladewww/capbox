@@ -25,8 +25,28 @@ sandbox_bwrap_cmd() {
   [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
   rootfs_ready || die 4 "rootfs 不存在或不可用: ${CAPBOX_ROOTFS:-未设置}；请先运行 capbox init"
 
+  if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
+    if [[ "$mode" == "daemon" && -z "$cmd" ]]; then
+      CAPBOX_BWRAP_BASELINE_CMD="up"
+    else
+      CAPBOX_BWRAP_BASELINE_CMD="${cmd:-exec}"
+    fi
+  fi
+
   local -a args=()
-  mapfile -t args < <(build_bwrap_args "$mode" "$cwd")
+  local _bbrc=0
+  mapfile -t args < <(build_bwrap_args "$mode" "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
+    _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
+    unset 'args[-1]'
+  fi
+  # 6：基线说明已经写在 stderr。返回给 up，避免 die 把说明关进临时文件后直接退出。
+  if (( _bbrc == 6 )); then
+    return 6
+  fi
+  if (( _bbrc != 0 )); then
+    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
+  fi
   (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数（rootfs 缺失）"
 
   printf '%s\0' "$CAPBOX_BWRAP"

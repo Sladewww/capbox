@@ -88,6 +88,7 @@ set +e
   mkdir -p "$CAPBOX_DIR"
   # shellcheck disable=SC1091
   . "$REPO/lib/common.sh"
+  eval "$(declare -f config_set | sed '1s/^config_set/_config_set_real/')"
   # shellcheck disable=SC1091
   . "$REPO/lib/security.sh"
   # shellcheck disable=SC1091
@@ -332,6 +333,257 @@ PY
   _apply_agent_preset
   printf '%s\n' "${keys[@]}" | grep -qx 'NET=none'
   printf '%s\n' "${keys[@]}" | grep -qx 'SECURITY_PROFILE=untrusted'
+
+  # 仓库即状态：logs 必须出现在 --ro-bind 里。符号链接和普通文件拒绝。
+  (
+    ws="$policy_tmp/repolike"
+    mkdir -p "$ws/bin" "$ws/lib" "$ws/logs"
+    CAPBOX_DIR="$ws"
+    CAPBOX_WORKSPACE="$ws"
+    CAPBOX_BIN_DIR="$ws/bin"
+    CAPBOX_LIB_DIR="$ws/lib"
+    _capbox_derive_paths
+    declare -a ro=()
+    _capbox_append_ro_cli_binds ro
+    found=0
+    seen_cache=0
+    i=0
+    while (( i < ${#ro[@]} )); do
+      if [[ "${ro[$i]}" == "--ro-bind" && "${ro[$((i+1))]}" == "$ws/logs" ]]; then
+        found=1
+      fi
+      if [[ "${ro[$i]}" == "--ro-bind" ]] && (( i + 2 < ${#ro[@]} )) \
+        && [[ "${ro[$((i+1))]}" == "/dev/null" && "${ro[$((i+2))]}" == "/workspace/state/bwrap-version" ]]; then
+        seen_cache=1
+      fi
+      i=$((i+1))
+    done
+    [[ "$found" -eq 1 ]]
+    [[ "$seen_cache" -eq 1 ]]
+    rm -rf "$ws/state"
+    mkdir -p "$ws/state"
+    ln -s /tmp/x "$ws/state/bwrap-version"
+    rc=0
+    declare -a ro_cache=()
+    _capbox_append_ro_cli_binds ro_cache || rc=$?
+    [[ "$rc" -eq 1 ]]
+    rm -f "$ws/state/bwrap-version"
+    rm -rf "$ws/logs"
+    ln -s /tmp "$ws/logs"
+    rc=0
+    declare -a ro2=()
+    _capbox_append_ro_cli_binds ro2 || rc=$?
+    [[ "$rc" -eq 1 ]]
+    rm -f "$ws/logs"
+    printf 'x\n' >"$ws/logs"
+    rc=0
+    declare -a ro3=()
+    _capbox_append_ro_cli_binds ro3 || rc=$?
+    [[ "$rc" -eq 1 ]]
+  )
+  # 标准 .capbox：logs 的只读绑定在 run 的可写挂回之后。
+  (
+    ws="$policy_tmp/stdws"
+    mkdir -p "$ws/.capbox/logs" "$ws/.capbox/run" "$ws/.capbox/cache" "$ws/.capbox/bin" "$ws/.capbox/lib"
+    CAPBOX_DIR="$ws/.capbox"
+    CAPBOX_WORKSPACE="$ws"
+    _capbox_derive_paths
+    declare -a ro=()
+    _capbox_append_ro_cli_binds ro
+    seen_rw=0
+    seen_logs_after=0
+    seen_cache=0
+    logs_at=-1
+    cache_at=-1
+    i=0
+    while (( i < ${#ro[@]} )); do
+      if [[ "${ro[$i]}" == "--bind" && "${ro[$((i+1))]}" == "$CAPBOX_DIR/run" ]]; then
+        seen_rw=1
+      fi
+      if [[ "${ro[$i]}" == "--ro-bind" && "${ro[$((i+1))]}" == "$CAPBOX_DIR/logs" ]]; then
+        [[ "$seen_rw" -eq 1 ]]
+        seen_logs_after=1
+        logs_at=$i
+      fi
+      if [[ "${ro[$i]}" == "--ro-bind" ]] && (( i + 2 < ${#ro[@]} )) \
+        && [[ "${ro[$((i+1))]}" == "/dev/null" && "${ro[$((i+2))]}" == "/workspace/.capbox/state/bwrap-version" ]]; then
+        seen_cache=1
+        cache_at=$i
+      fi
+      i=$((i+1))
+    done
+    [[ "$seen_logs_after" -eq 1 ]]
+    [[ "$seen_cache" -eq 1 ]]
+    [[ "$cache_at" -gt "$logs_at" ]]
+  )
+
+  old="$policy_tmp/bwrap-old"
+  printf '%s\n' '#!/bin/sh' 'echo bubblewrap 0.11.1' >"$old"
+  chmod +x "$old"
+  if _capbox_bwrap_version_ok "$old"; then
+    echo "0.11.1 should fail" >&2
+    exit 1
+  fi
+  [[ "$CAPBOX_BWRAP_VERSION_DETAIL" == *"0.12.0"* ]]
+  ub="$policy_tmp/bwrap-ubuntu"
+  printf '%s\n' '#!/bin/sh' 'echo bubblewrap 0.11.1-1ubuntu0.3' >"$ub"
+  chmod +x "$ub"
+  if _capbox_bwrap_version_ok "$ub"; then
+    echo "reverted 0.11.1 distro string should fail" >&2
+    exit 1
+  fi
+  okb="$policy_tmp/bwrap-ok"
+  printf '%s\n' '#!/bin/sh' 'echo bubblewrap 0.12.0' >"$okb"
+  chmod +x "$okb"
+  _capbox_bwrap_version_ok "$okb"
+  [[ "$CAPBOX_BWRAP_VERSION_DETAIL" == "0.12.0" ]]
+  newb="$policy_tmp/bwrap-new"
+  printf '%s\n' '#!/bin/sh' 'echo bubblewrap 0.13.1' >"$newb"
+  chmod +x "$newb"
+  _capbox_bwrap_version_ok "$newb"
+  [[ "$CAPBOX_BWRAP_VERSION_DETAIL" == "0.13.1" ]]
+  bad="$policy_tmp/bwrap-bad"
+  printf '%s\n' '#!/bin/sh' 'echo no-version-here' >"$bad"
+  chmod +x "$bad"
+  if _capbox_bwrap_version_ok "$bad"; then
+    echo "unparseable version should fail" >&2
+    exit 1
+  fi
+  [[ "$CAPBOX_BWRAP_VERSION_DETAIL" == *"无法解析"* ]]
+  saved_bwrap="${CAPBOX_BWRAP:-}"
+  CAPBOX_BWRAP="$old"
+  unset CAPBOX_ALLOW_OLD_BWRAP_ONCE || true
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  rc=0
+  build_bwrap_args oneshot /workspace >/dev/null || rc=$?
+  [[ "$rc" -eq 6 ]]
+  rc=0
+  _daemon_bwrap_args daemon >/dev/null || rc=$?
+  [[ "$rc" -eq 6 ]]
+
+  suf="$policy_tmp/bwrap-suf"
+  printf '%s\n' '#!/bin/sh' 'echo bubblewrap 0.11.2-1ubuntu1' >"$suf"
+  chmod +x "$suf"
+  if _capbox_bwrap_version_ok "$suf"; then
+    echo "0.11.2-1ubuntu1 should fail" >&2
+    exit 1
+  fi
+  [[ "$CAPBOX_BWRAP_VERSION" == "0.11.2" ]]
+
+  (
+    printf 'CAPBOX_ALLOW_OLD_BWRAP=0\n' >"$CAPBOX_DIR/config.env"
+    CAPBOX_ALLOW_OLD_BWRAP=1
+    load_config
+    [[ "${CAPBOX_ALLOW_OLD_BWRAP:-}" == "0" ]]
+    printf 'CAPBOX_ALLOW_OLD_BWRAP=1\n' >"$CAPBOX_DIR/config.env"
+    CAPBOX_ALLOW_OLD_BWRAP=0
+    load_config
+    [[ "${CAPBOX_ALLOW_OLD_BWRAP:-}" == "1" ]]
+  )
+
+  CAPBOX_BWRAP="$old"
+  printf 'CAPBOX_ALLOW_OLD_BWRAP=0\n' >"$CAPBOX_DIR/config.env"
+  load_config
+  CAPBOX_BWRAP="$old"
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  CAPBOX_ALLOW_OLD_BWRAP_ONCE=1
+  CAPBOX_BWRAP_BASELINE_CMD='exec -- id'
+  rm -rf "$CAPBOX_DIR/logs"
+  mkdir -p "$CAPBOX_DIR/logs"
+  rc=0
+  _capbox_enforce_bwrap_baseline || rc=$?
+  [[ "$rc" -eq 0 ]]
+  auditf="$CAPBOX_DIR/logs/audit.jsonl"
+  grep -q '"event":"old_bwrap_bypass"' "$auditf"
+  grep -q '"scope":"once"' "$auditf"
+  grep -q '"version":"0.11.1"' "$auditf"
+  grep -q 'exec -- id' "$auditf"
+  if _capbox_bwrap_version_ok "$old"; then
+    echo "once must not mark version ok" >&2
+    exit 1
+  fi
+  unset CAPBOX_ALLOW_OLD_BWRAP_ONCE
+
+  CAPBOX_ALLOW_OLD_BWRAP=1
+  CAPBOX_BWRAP="$old"
+  CAPBOX_BWRAP_BASELINE_CMD='exec -- true'
+  rc=0
+  _capbox_enforce_bwrap_baseline || rc=$?
+  [[ "$rc" -eq 0 ]]
+  grep -q '"scope":"persist"' "$auditf"
+  if _capbox_bwrap_version_ok; then
+    echo "persist must not mark version ok" >&2
+    exit 1
+  fi
+
+  DOCTOR_FAILS=0
+  DOCTOR_WARNS=0
+  doc_out="$(_capbox_doctor_check_bwrap "$old"; printf 'FLAGS %s %s\n' "${CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL}" "${CAPBOX_DOCTOR_BWRAP_LAUNCH_OK}")"
+  [[ "$doc_out" == *"FAIL  bwrap 0.11.1 低于安全基线 0.12.0"* ]]
+  [[ "$doc_out" != *"PASS  bwrap 版本"* ]]
+  [[ "$doc_out" == *"FLAGS 1 1"* ]]
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  unset CAPBOX_ALLOW_OLD_BWRAP_ONCE || true
+  DOCTOR_FAILS=0
+  DOCTOR_WARNS=0
+  doc_out="$(_capbox_doctor_check_bwrap "$old"; printf 'FLAGS %s %s\n' "${CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL}" "${CAPBOX_DOCTOR_BWRAP_LAUNCH_OK}")"
+  [[ "$doc_out" == *"FAIL  bwrap 0.11.1 低于安全基线 0.12.0"* ]]
+  [[ "$doc_out" == *"FLAGS 1 0"* ]]
+
+  CAPBOX_SECURITY_PROFILE=compat
+  CAPBOX_BWRAP="$old"
+  rc=0
+  _capbox_enforce_bwrap_baseline || rc=$?
+  [[ "$rc" -eq 6 ]]
+
+  eval "$(declare -f _config_set_real | sed '1s/^_config_set_real/config_set/')"
+  printf 'CAPBOX_ALLOW_OLD_BWRAP=0\n' >"$CAPBOX_DIR/config.env"
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  rc=0
+  config_set ALLOW_OLD_BWRAP 1 || rc=$?
+  [[ "$rc" -eq 2 ]]
+  grep -qx 'CAPBOX_ALLOW_OLD_BWRAP=0' "$CAPBOX_DIR/config.env"
+  CAPBOX_ALLOW_OLD_BWRAP_CONFIRM=1
+  config_set ALLOW_OLD_BWRAP 1
+  grep -q "CAPBOX_ALLOW_OLD_BWRAP='1'" "$CAPBOX_DIR/config.env"
+  grep -q 'config set CAPBOX_ALLOW_OLD_BWRAP 1' "$auditf"
+  rc=0
+  config_set ALLOW_OLD_BWRAP 1 || rc=$?
+  [[ "$rc" -eq 2 ]]
+  CAPBOX_ALLOW_OLD_BWRAP_CONFIRM=1
+  rc=0
+  config_set ALLOW_OLD_BWRAP true || rc=$?
+  [[ "$rc" -eq 2 ]]
+  unset CAPBOX_ALLOW_OLD_BWRAP_CONFIRM
+
+  printf 'CAPBOX_ALLOW_OLD_BWRAP=0\n' >"$CAPBOX_DIR/config.env"
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  rm -rf "$CAPBOX_DIR/logs"
+  ln -s /tmp "$CAPBOX_DIR/logs"
+  CAPBOX_ALLOW_OLD_BWRAP_CONFIRM=1
+  rc=0
+  config_set ALLOW_OLD_BWRAP 1 || rc=$?
+  [[ "$rc" -ne 0 ]]
+  grep -q "CAPBOX_ALLOW_OLD_BWRAP='0'" "$CAPBOX_DIR/config.env"
+  rm -f "$CAPBOX_DIR/logs"
+  unset CAPBOX_ALLOW_OLD_BWRAP_CONFIRM
+
+  cntf="$policy_tmp/bwrap-invocations"
+  count="$policy_tmp/bwrap-count"
+  printf '%s\n' '#!/bin/sh' "echo x >> '$cntf'" 'echo bubblewrap 0.13.1' >"$count"
+  chmod +x "$count"
+  rm -f "$cntf" "$CAPBOX_DIR/state/bwrap-version"
+  _capbox_bwrap_version_ok "$count"
+  _capbox_bwrap_version_ok "$count"
+  [[ "$(wc -l <"$cntf")" -eq 1 ]]
+  touch -d '2000-01-01 00:00:00' "$count"
+  _capbox_bwrap_version_ok "$count"
+  [[ "$(wc -l <"$cntf")" -eq 2 ]]
+  [[ "$CAPBOX_BWRAP_VERSION_DETAIL" == "0.13.1" ]]
+
+  CAPBOX_BWRAP="$saved_bwrap"
+  CAPBOX_ALLOW_OLD_BWRAP=0
+  unset CAPBOX_ALLOW_OLD_BWRAP_ONCE CAPBOX_ALLOW_OLD_BWRAP_CONFIRM CAPBOX_BWRAP_BASELINE_CMD || true
 ) >"$QA_TMP/t40-policy.out" 2>"$QA_TMP/t40-policy.err"
 policy_rc=$?
 set -e

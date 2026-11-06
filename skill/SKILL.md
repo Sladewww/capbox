@@ -187,6 +187,7 @@ capbox cp ./data.csv guest:/root/data.csv
 | 3 | 常驻容器未运行 | `capbox up --systemd`，或把 `capbox up` 放进后台任务 |
 | 4 | rootfs 不存在 | `capbox init` |
 | 5 | 依赖缺失（如 `bwrap`） | 环境问题，重试无用，报告给用户 |
+| 6 | 安全基线不满足（bwrap 低于 0.12.0） | 升级 bubblewrap。接受风险才用当次 `--allow-old-bwrap`，或 `config set --yes CAPBOX_ALLOW_OLD_BWRAP 1`。不要 export 变量绕过。`doctor` 仍是 FAIL |
 | 124 | 容器内命令超时 | 加大 `--timeout`，或改成 background job |
 | 其他 | 容器内命令自己的退出码，原样透传 | 按那条命令的语义处理 |
 

@@ -335,8 +335,23 @@ _net_run_bwrap_oneshot() {
   _CAPBOX_NET_TMP_GO="$go"
   trap '_net_cleanup_restricted_session; rm -f -- "${_CAPBOX_NET_TMP_INFO:-}" "${_CAPBOX_NET_TMP_GO:-}" 2>/dev/null || true' RETURN
 
+  if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
+    CAPBOX_BWRAP_BASELINE_CMD="$*"
+  fi
+
   local -a args=() wrap_cmd=()
-  mapfile -t args < <(build_bwrap_args oneshot "$cwd")
+  local _bbrc=0
+  mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
+    _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
+    unset 'args[-1]'
+  fi
+  if (( _bbrc == 6 )); then
+    die 6
+  fi
+  if (( _bbrc != 0 )); then
+    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
+  fi
   (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数"
 
   # 等宿主写入 go 文件（位于工作区 bind 内）后再 exec 原 argv。

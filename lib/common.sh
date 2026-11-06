@@ -67,6 +67,7 @@ readonly CAPBOX_CFG_KEYS=(
   OVERLAY
   AUDIT
   AUDIT_CMD
+  ALLOW_OLD_BWRAP
 )
 
 # 支持的发行版
@@ -354,6 +355,12 @@ _cfg_validate() {
         return 2
       }
       ;;
+    ALLOW_OLD_BWRAP)
+      [[ "$v" == "0" || "$v" == "1" ]] || {
+        log_err "CAPBOX_ALLOW_OLD_BWRAP 只能是 0 或 1（当前: '$v'）。持久放行: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1"
+        return 2
+      }
+      ;;
     *)
       log_err "未知配置项: CAPBOX_${k}"
       return 2
@@ -393,7 +400,7 @@ config_save() {
   local tmp="$f.tmp.$$"
   local k v
   {
-    printf '# CapBox 配置（KEY=value；可手工编辑；环境变量优先级高于本文件）\n'
+    printf '# CapBox 配置（KEY=value；可手工编辑；除 CAPBOX_ALLOW_OLD_BWRAP 外，环境变量优先级高于本文件）\n'
     printf '# 仅允许 CAPBOX_* 白名单键的 KEY=value（不会被 source）。由 `capbox config set` 维护。\n'
     for k in "${CAPBOX_CFG_KEYS[@]}"; do
       v="$(_cfg_value_for_file "$k")"
@@ -499,8 +506,15 @@ load_config() {
   local -a prot_vals=()
   local -A file_seen=()
 
+  # ALLOW_OLD_BWRAP 不接受环境变量。父进程 export 不能打开或关闭持久放行。
+  if [[ -n "${CAPBOX_ALLOW_OLD_BWRAP+x}" ]]; then
+    log_warn "忽略环境变量 CAPBOX_ALLOW_OLD_BWRAP=${CAPBOX_ALLOW_OLD_BWRAP}；持久放行只能写入 config.env，单次放行用 capbox --allow-old-bwrap"
+    unset CAPBOX_ALLOW_OLD_BWRAP
+  fi
+
   # 1) 记录调用前就存在的环境变量（最高优先级）
   for k in "${CAPBOX_CFG_KEYS[@]}"; do
+    [[ "$k" == "ALLOW_OLD_BWRAP" ]] && continue
     if declare -p "CAPBOX_$k" >/dev/null 2>&1; then
       prot_keys+=("$k")
       prot_vals+=("$(_cfg_value "$k")")
@@ -559,6 +573,7 @@ load_config() {
   : "${CAPBOX_OVERLAY=auto}"
   : "${CAPBOX_AUDIT=summary}"
   : "${CAPBOX_AUDIT_CMD=}"
+  : "${CAPBOX_ALLOW_OLD_BWRAP=0}"
 
   # 空值兜底（配置文件写坏了也不至于炸）
   [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; log_warn "CAPBOX_DISTRO 为空，回退 alpine"; }
@@ -643,6 +658,227 @@ _capbox_resolve_bwrap() {
   CAPBOX_BWRAP="${cfg_val:-$builtin}"
 }
 
+# 从版本串取前三段数字。后缀（0.11.1-1ubuntu0.3）只作比较用的补丁号来源，不参与字符串比较。
+_capbox_bwrap_parse_version_line() {
+  local line="${1-}"
+  [[ "$line" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+  CAPBOX_BWRAP_VERSION="$((10#${BASH_REMATCH[1]}))".$((10#${BASH_REMATCH[2]})).$((10#${BASH_REMATCH[3]}))
+  return 0
+}
+
+_capbox_bwrap_version_meets() {
+  local maj="${1:-0}" min="${2:-0}" pat="${3:-0}"
+  (( maj > 0 || (maj == 0 && min > 12) || (maj == 0 && min == 12 && pat >= 0) ))
+}
+
+# 根据 CAPBOX_BWRAP_VERSION 填写 DETAIL 并返回 0/1。空版本视为无法解析。
+_capbox_bwrap_apply_version_result() {
+  local bin="${1:-bwrap}" maj min pat
+  if [[ ! "${CAPBOX_BWRAP_VERSION:-}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    CAPBOX_BWRAP_VERSION=""
+    CAPBOX_BWRAP_VERSION_DETAIL="无法解析 ${bin} --version（需要 >= 0.12.0）"
+    return 1
+  fi
+  maj="${BASH_REMATCH[1]}"
+  min="${BASH_REMATCH[2]}"
+  pat="${BASH_REMATCH[3]}"
+  if _capbox_bwrap_version_meets "$maj" "$min" "$pat"; then
+    CAPBOX_BWRAP_VERSION_DETAIL="${CAPBOX_BWRAP_VERSION}"
+    return 0
+  fi
+  CAPBOX_BWRAP_VERSION_DETAIL="bwrap ${CAPBOX_BWRAP_VERSION} 低于 0.12.0（发行版撤回的 0.11.x 补丁不算；需要 >= 0.12.0）"
+  return 1
+}
+
+_capbox_bwrap_cache_file() {
+  printf '%s\n' "${CAPBOX_STATE_DIR:-${CAPBOX_DIR:-}/state}/bwrap-version"
+}
+
+# 缓存命中返回 0，并设置 CAPBOX_BWRAP_VERSION（解析失败时为空）。
+# 只比较 path + dev + inode + mtime + size。不信任文件里的 ok 位。
+# 版本缓存文件对 guest 钉成只读（见 _capbox_append_ro_cli_binds），避免 guest 改一行就把旧二进制说成新的。
+_capbox_bwrap_cache_hit() {
+  local bin="${1:-}" f line key val path="" dev="" ino="" mtime="" size="" parse="" version="" st
+  f="$(_capbox_bwrap_cache_file)"
+  [[ -n "$bin" && -f "$f" && ! -L "$f" ]] || return 1
+  st="$(stat -c '%d %i %Y %s' -- "$bin" 2>/dev/null)" || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^([a-z]+)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    val="${BASH_REMATCH[2]}"
+    case "$key" in
+      path) path="$val" ;;
+      dev) dev="$val" ;;
+      ino) ino="$val" ;;
+      mtime) mtime="$val" ;;
+      size) size="$val" ;;
+      parse) parse="$val" ;;
+      version) version="$val" ;;
+    esac
+  done <"$f"
+  [[ "$path" == "$bin" && "$st" == "$dev $ino $mtime $size" ]] || return 1
+  if [[ "$parse" == "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    CAPBOX_BWRAP_VERSION="$version"
+  else
+    CAPBOX_BWRAP_VERSION=""
+  fi
+  return 0
+}
+
+_capbox_bwrap_cache_store() {
+  local bin="${1:-}" parse="${2:-0}" version="${3:-}" f dir tmp st dev ino mtime size
+  [[ -n "$bin" && -n "${CAPBOX_DIR:-}" ]] || return 0
+  f="$(_capbox_bwrap_cache_file)"
+  [[ -L "$f" ]] && return 0
+  st="$(stat -c '%d %i %Y %s' -- "$bin" 2>/dev/null)" || return 0
+  read -r dev ino mtime size <<<"$st"
+  dir="$(dirname -- "$f")"
+  [[ -L "$dir" ]] && return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tmp="$(mktemp "$dir/.bwrap-version.XXXXXX")" || return 0
+  {
+    printf 'path=%s\n' "$bin"
+    printf 'dev=%s\n' "$dev"
+    printf 'ino=%s\n' "$ino"
+    printf 'mtime=%s\n' "$mtime"
+    printf 'size=%s\n' "$size"
+    printf 'parse=%s\n' "$parse"
+    printf 'version=%s\n' "$version"
+  } >"$tmp" || { rm -f -- "$tmp"; return 0; }
+  if [[ -f "$f" && ! -L "$f" ]]; then
+    cat "$tmp" >"$f" 2>/dev/null || cp -f -- "$tmp" "$f" 2>/dev/null || true
+    rm -f -- "$tmp"
+  else
+    mv -f -- "$tmp" "$f" 2>/dev/null || rm -f -- "$tmp"
+  fi
+  return 0
+}
+
+# bwrap 是否不低于 0.12.0。
+# 可选参数是二进制路径，默认 CAPBOX_BWRAP。
+# 成功时 CAPBOX_BWRAP_VERSION 与 CAPBOX_BWRAP_VERSION_DETAIL 均为 major.minor.patch。
+# 返回 0 达标，1 版本不足、二进制缺失或无法解析。
+# 结果缓存在 state/bwrap-version；二进制的 dev/inode/mtime/size 变了才重新执行 --version。
+# 发行版把 CVE-2026-87766 补丁打进 0.11.x 再撤回后，版本串仍是 0.11.x，不算修复。
+_capbox_bwrap_version_ok() {
+  local bin="${1:-${CAPBOX_BWRAP:-}}"
+  local line
+  CAPBOX_BWRAP_VERSION=""
+  CAPBOX_BWRAP_VERSION_DETAIL=""
+  if [[ -z "$bin" || ! -x "$bin" ]]; then
+    CAPBOX_BWRAP_VERSION_DETAIL="无法解析 ${bin:-bwrap} --version（需要 >= 0.12.0）"
+    return 1
+  fi
+  if _capbox_bwrap_cache_hit "$bin"; then
+    _capbox_bwrap_apply_version_result "$bin"
+    return $?
+  fi
+  line="$("$bin" --version 2>/dev/null | head -n 1 || true)"
+  if _capbox_bwrap_parse_version_line "$line"; then
+    _capbox_bwrap_cache_store "$bin" 1 "$CAPBOX_BWRAP_VERSION"
+  else
+    CAPBOX_BWRAP_VERSION=""
+    _capbox_bwrap_cache_store "$bin" 0 ""
+  fi
+  _capbox_bwrap_apply_version_result "$bin"
+}
+
+# 单次 flag 优先于持久配置。两者都没有则拒绝。不读环境变量。
+_capbox_old_bwrap_scope() {
+  if [[ "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-}" == "1" ]]; then
+    printf 'once'
+    return 0
+  fi
+  if [[ "${CAPBOX_ALLOW_OLD_BWRAP:-}" == "1" ]]; then
+    printf 'persist'
+    return 0
+  fi
+  return 1
+}
+
+# $1 可选，写入的文件描述符。默认 2（stderr）。doctor 报告走 stdout。
+_capbox_print_old_bwrap_details() {
+  local dest="${1:-2}"
+  cat >&"$dest" <<'EOF'
+      受影响: CVE-2026-87766 (/oldroot 符号链接逃逸), CVE-2026-41163 (setuid ptrace)
+      这些漏洞在沙箱进程启动前触发，--clearenv / fsguard / seccomp 均无法防御
+      本检查对 compat、untrusted、strict 同样生效
+      升级: sudo apt install --only-upgrade bubblewrap
+            若发行版未包含 0.12.0，需从源码或更新的仓库安装
+      如确认接受风险，单次允许: capbox --allow-old-bwrap <command>
+      持久允许: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1
+            （会写入审计日志；doctor 仍为 FAIL）
+EOF
+}
+
+_capbox_print_old_bwrap_deny() {
+  local ver="${CAPBOX_BWRAP_VERSION:-未知}"
+  printf 'FAIL  bwrap %s 低于安全基线 0.12.0\n' "$ver" >&2
+  _capbox_print_old_bwrap_details
+}
+
+# 版本达标返回 0。旧版在单次或持久放行时写审计并返回 0，否则打印说明并返回 6。
+# compat 不豁免。CAPBOX_BWRAP_BASELINE_CMD 由调用方放入审计的 cmd 字段。
+_capbox_enforce_bwrap_baseline() {
+  local scope="" ver=""
+  if _capbox_bwrap_version_ok; then
+    return 0
+  fi
+  # 二进制根本不存在：留给「bwrap 不可用」的退出码 5，这里不伪装成基线 6。
+  if [[ -z "${CAPBOX_BWRAP:-}" || ! -x "${CAPBOX_BWRAP:-}" ]]; then
+    log_err "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
+    return 5
+  fi
+  ver="${CAPBOX_BWRAP_VERSION:-未知}"
+  if scope="$(_capbox_old_bwrap_scope)"; then
+    if [[ "$scope" == "persist" ]]; then
+      log_warn "bwrap ${ver} 低于安全基线 0.12.0，已被 CAPBOX_ALLOW_OLD_BWRAP 放行（doctor 仍为 FAIL）"
+    fi
+    if ! _capbox_audit_old_bwrap "$scope" "$ver" "${CAPBOX_BWRAP_BASELINE_CMD:-}"; then
+      log_err "无法写入旧版 bwrap 放行审计，拒绝启动"
+      return 6
+    fi
+    return 0
+  fi
+  _capbox_print_old_bwrap_deny
+  return 6
+}
+
+# 旧版放行必须留痕。CAPBOX_AUDIT=off 也写。日志或目录是符号链接则失败。
+# scope: once | persist。cmd 经 _audit_redact 脱敏（函数在时）。
+_capbox_audit_old_bwrap() {
+  local scope="${1:-}" version="${2:-}" cmd="${3:-}"
+  local dir f ts esc_ts esc_ver esc_scope esc_cmd
+  [[ "$scope" == "once" || "$scope" == "persist" ]] || return 1
+  [[ -n "${CAPBOX_DIR:-}" ]] || return 1
+  dir="${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}"
+  f="$dir/audit.jsonl"
+  if [[ -L "$dir" || -L "$f" ]]; then
+    log_err "审计日志路径是符号链接，拒绝记录旧版 bwrap 放行: $f"
+    return 1
+  fi
+  if [[ -e "$dir" && ! -d "$dir" ]]; then
+    log_err "审计日志目录不是普通目录，拒绝记录旧版 bwrap 放行: $dir"
+    return 1
+  fi
+  mkdir -p "$dir" 2>/dev/null || return 1
+  if [[ -L "$dir" || -L "$f" || ! -d "$dir" ]]; then
+    log_err "审计日志路径不可用，拒绝记录旧版 bwrap 放行: $f"
+    return 1
+  fi
+  if declare -F _audit_redact >/dev/null 2>&1; then
+    cmd="$(_audit_redact "$cmd")" || return 1
+  fi
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
+  esc_ts="$(json_escape "$ts")"
+  esc_ver="$(json_escape "$version")"
+  esc_scope="$(json_escape "$scope")"
+  esc_cmd="$(json_escape "$cmd")"
+  printf '{"ts":"%s","event":"old_bwrap_bypass","version":"%s","scope":"%s","cmd":"%s"}\n' \
+    "$esc_ts" "$esc_ver" "$esc_scope" "$esc_cmd" >>"$f" || return 1
+  return 0
+}
+
 # 由 CAPBOX_DISTRO 派生全部路径
 _capbox_derive_paths() {
   CAPBOX_OS_DIR="$CAPBOX_DIR/os"
@@ -669,7 +905,9 @@ config_get() {
 }
 
 config_set() {
-  local k v
+  local k v confirm ver
+  confirm="${CAPBOX_ALLOW_OLD_BWRAP_CONFIRM:-}"
+  unset CAPBOX_ALLOW_OLD_BWRAP_CONFIRM
   k="$(_cfg_norm_key "${1:-}")"
   v="${2-}"
   _cfg_known "$k" || {
@@ -677,6 +915,11 @@ config_set() {
     return 2
   }
   _cfg_validate "$k" "$v" || return 2
+  if [[ "$k" == "ALLOW_OLD_BWRAP" && "$v" == "1" && "$confirm" != "1" ]]; then
+    log_err "持久放行旧版 bwrap 需要 --yes（会写入审计日志；doctor 仍为 FAIL）"
+    _capbox_print_old_bwrap_details
+    return 2
+  fi
   eval "CAPBOX_${k}=\${v}"
   CAPBOX_CFG_EXPLICIT["$k"]="user"
   if [[ "$k" == "BWRAP" ]]; then
@@ -686,6 +929,19 @@ config_set() {
   config_save
   # 派生路径可能变化（例如切 distro）
   _capbox_derive_paths
+  if [[ "$k" == "ALLOW_OLD_BWRAP" && "$v" == "1" ]]; then
+    _capbox_bwrap_version_ok >/dev/null || true
+    ver="${CAPBOX_BWRAP_VERSION:-未知}"
+    [[ -n "$ver" ]] || ver="未知"
+    if ! _capbox_audit_old_bwrap persist "$ver" "config set CAPBOX_ALLOW_OLD_BWRAP 1"; then
+      log_err "无法写入旧版 bwrap 放行审计，已撤销 CAPBOX_ALLOW_OLD_BWRAP"
+      CAPBOX_ALLOW_OLD_BWRAP=0
+      CAPBOX_CFG_EXPLICIT["ALLOW_OLD_BWRAP"]="user"
+      config_save
+      _capbox_derive_paths
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -757,8 +1013,9 @@ _capbox_guest_path_in_rootfs() {
   return 1
 }
 
-# 向 bwrap 参数数组追加：对工作区内的 bin/ lib/ config.env / services 做 --ro-bind，
-# 防止 guest 改写 CLI 或注入宿主下次会读取的配置（含「启动时缺失」路径，见 CVE-2026-25725 同类）。
+# 向 bwrap 参数数组追加：对工作区内的 bin/ lib/ config.env / services / logs 做 --ro-bind，
+# 防止 guest 改写 CLI、注入宿主下次会读取的配置，或改写 logs/audit.jsonl
+# （含「启动时缺失」路径，见 CVE-2026-25725 同类）。
 # 用法：_capbox_append_ro_cli_binds <array_name>
 #
 # 缺失路径策略（bwrap 只能通过挂载拒绝写入）：
@@ -885,6 +1142,30 @@ _capbox_ro_protect_host_dir() {
   _pd_arr+=(--ro-bind "$host_dir" "$guest_path")
 }
 
+# logs/（含 audit.jsonl）必须整目录只读。符号链接或普通文件拒绝启动。
+# 挂载没加进数组也拒绝，避免「目录建失败就静默跳过」变成可写。
+_capbox_ro_protect_logs() {
+  local arr_name="${1:-}"
+  local -n _pl_arr="$arr_name"
+  local host_dir="${CAPBOX_DIR:-}/logs"
+  local before=${#_pl_arr[@]}
+
+  if [[ -L "$host_dir" ]]; then
+    log_err "logs 是符号链接，拒绝启动: $host_dir"
+    return 1
+  fi
+  if [[ -e "$host_dir" && ! -d "$host_dir" ]]; then
+    log_err "logs 必须是普通目录，拒绝启动: $host_dir"
+    return 1
+  fi
+  _capbox_ro_protect_host_dir "$host_dir" "$arr_name" || return $?
+  if (( ${#_pl_arr[@]} == before )); then
+    log_err "无法把 logs 只读挂进 guest: $host_dir"
+    return 1
+  fi
+  return 0
+}
+
 _capbox_append_ro_cli_binds() {
   local -n _ro_arr="$1"
   local host_path guest_path cap_guest sub sub_host sub_guest
@@ -908,13 +1189,17 @@ _capbox_append_ro_cli_binds() {
         [[ -n "$sub_guest" && "$sub_guest" == /workspace/* ]] || continue
         _ro_arr+=(--bind "$sub_host" "$sub_guest")
       done
+      # logs 放在 run/cache 的可写挂回之后，显式只读覆盖父级挂载。
+      _capbox_ro_protect_logs _ro_arr || return $?
       # 仍对 config.env 钉 /dev/null，避免通过已存在挂载点做内容注入的歧义
       _capbox_ro_protect_host_file "$CAPBOX_DIR/config.env" _ro_arr || return $?
+      # 版本缓存不能被 guest 改成「已达标」。/dev/null 钉在路径上，宿主仍可就地写。
+      _capbox_ro_protect_host_file "${CAPBOX_STATE_DIR:-$CAPBOX_DIR/state}/bwrap-version" _ro_arr || return $?
       return 0
     fi
   fi
 
-  # 回退：逐项保护 bin/ lib/ config.env / services
+  # 回退：逐项保护 bin/ lib/ config.env / services / logs
   for host_path in "${CAPBOX_BIN_DIR:-}" "${CAPBOX_LIB_DIR:-}"; do
     [[ -n "$host_path" ]] || continue
     if [[ -L "$host_path" ]]; then
@@ -928,6 +1213,8 @@ _capbox_append_ro_cli_binds() {
   done
   _capbox_ro_protect_host_file "${CAPBOX_DIR:-}/config.env" _ro_arr || return $?
   _capbox_ro_protect_host_dir "${CAPBOX_DIR:-}/services" _ro_arr || return $?
+  _capbox_ro_protect_logs _ro_arr || return $?
+  _capbox_ro_protect_host_file "${CAPBOX_STATE_DIR:-$CAPBOX_DIR/state}/bwrap-version" _ro_arr || return $?
 }
 
 json_escape() {
@@ -1175,6 +1462,8 @@ build_bwrap_args() {
   local cwd="${2:-/workspace}"
   local -a a=()
 
+  _capbox_enforce_bwrap_baseline || return $?
+
   [[ -n "${CAPBOX_ROOTFS:-}" && -d "$CAPBOX_ROOTFS" ]] || return 4
   if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
     _capbox_require_safe_workspace || return $?
@@ -1308,14 +1597,18 @@ run_bwrap_oneshot() {
   local -a args=()
   local -a full=()
   local _bbrc=0
+  CAPBOX_BWRAP_BASELINE_CMD="$*"
   mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
   # 从末尾取构造结果码，避免 mapfile 吞掉 build_bwrap_args 的退出码
   if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
     _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
     unset 'args[-1]'
   fi
+  if (( _bbrc == 6 )); then
+    die 6
+  fi
   if (( _bbrc != 0 )); then
-    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：FS_BINDS 越界、安全档/seccomp 失败）"
+    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
   fi
   if [[ ${#args[@]} -eq 0 ]]; then
     die 4 "rootfs 不存在: $CAPBOX_ROOTFS（请先运行 capbox init）"
@@ -1659,9 +1952,39 @@ cmd_config() {
       printf '\n'
       ;;
     set)
-      [[ $# -eq 2 ]] || die 2 "用法: capbox config set KEY VALUE"
-      config_set "$1" "$2" || exit 2
-      log_info "已设置 ${1} = ${2}"
+      local yes=0 key="" val="" have_key=0 have_val=0 set_rc=0
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --yes)
+            yes=1
+            shift
+            ;;
+          *)
+            if (( have_key == 0 )); then
+              key="$1"
+              have_key=1
+            elif (( have_val == 0 )); then
+              val="$1"
+              have_val=1
+            else
+              die 2 "用法: capbox config set [--yes] KEY VALUE"
+            fi
+            shift
+            ;;
+        esac
+      done
+      (( have_key == 1 && have_val == 1 )) || die 2 "用法: capbox config set [--yes] KEY VALUE"
+      if (( yes == 1 )); then
+        CAPBOX_ALLOW_OLD_BWRAP_CONFIRM=1
+      else
+        unset CAPBOX_ALLOW_OLD_BWRAP_CONFIRM
+      fi
+      config_set "$key" "$val" || set_rc=$?
+      unset CAPBOX_ALLOW_OLD_BWRAP_CONFIRM
+      if (( set_rc != 0 )); then
+        exit "$set_rc"
+      fi
+      log_info "已设置 ${key} = ${val}"
       ;;
     list | "")
       _config_list
@@ -1707,6 +2030,18 @@ _doctor_warn() {
   DOCTOR_WARNS=$(( DOCTOR_WARNS + 1 ))
 }
 
+# 去掉审计探针留下的标记行，保留文件其余内容和 inode。
+_doctor_strip_marker() {
+  local f="${1:-}" mark="${2:-}" tmp
+  [[ -n "$f" && -n "$mark" && -f "$f" && ! -L "$f" ]] || return 0
+  grep -q -F -- "$mark" "$f" 2>/dev/null || return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/capbox-audit-strip.XXXXXX")" || return 0
+  if grep -v -F -- "$mark" "$f" >"$tmp"; then
+    cat "$tmp" >"$f" 2>/dev/null || cp -f -- "$tmp" "$f" 2>/dev/null || true
+  fi
+  rm -f -- "$tmp"
+}
+
 # 探测 userns 内是否拿到全量 capability；成功时打印 CapEff 十六进制值
 _doctor_probe_userns() {
   local bwrap="${CAPBOX_BWRAP:-}"
@@ -1728,10 +2063,46 @@ _doctor_probe_userns() {
   printf '%s' "$capeff"
 }
 
+# 报告 bwrap 是否达到 0.12.0。放行不把这一项改成 PASS。
+# 设置 CAPBOX_DOCTOR_BWRAP_VER_OK / _LAUNCH_OK / _BASELINE_FAIL 为 0 或 1。
+_capbox_doctor_check_bwrap() {
+  local bwrap="${1:-${CAPBOX_BWRAP:-}}"
+  local _bv="" _scope=""
+  CAPBOX_DOCTOR_BWRAP_VER_OK=0
+  CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=0
+  CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL=0
+  if [[ -n "$bwrap" && -x "$bwrap" ]]; then
+    _doctor_pass "bwrap 已安装 ($bwrap)"
+    if _capbox_bwrap_version_ok "$bwrap"; then
+      CAPBOX_DOCTOR_BWRAP_VER_OK=1
+      CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=1
+      _doctor_pass "bwrap 版本 ${CAPBOX_BWRAP_VERSION_DETAIL}（>= 0.12.0）"
+    else
+      CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL=1
+      _bv="${CAPBOX_BWRAP_VERSION:-未知}"
+      _doctor_fail "bwrap ${_bv} 低于安全基线 0.12.0"
+      _capbox_print_old_bwrap_details 1
+      if _scope="$(_capbox_old_bwrap_scope)"; then
+        if [[ "$_scope" == "once" ]]; then
+          _doctor_warn "bwrap ${_bv} 低于基线，本次 --allow-old-bwrap 放行（doctor 仍为 FAIL）"
+        else
+          _doctor_warn "bwrap ${_bv} 低于基线，已被 CAPBOX_ALLOW_OLD_BWRAP 放行（doctor 仍为 FAIL）"
+        fi
+        CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=1
+      fi
+    fi
+  else
+    _doctor_fail "bwrap 不可用 (${bwrap:-未设置})；请安装 bubblewrap >= 0.12.0 或设置 CAPBOX_BWRAP"
+  fi
+}
+
 cmd_doctor() {
   DOCTOR_FAILS=0
   DOCTOR_WARNS=0
   local bwrap="${CAPBOX_BWRAP:-}"
+  local _bwrap_ver_ok=0
+  local _bwrap_launch_ok=0
+  local _bwrap_baseline_fail=0
 
   # 0) 工作区安全（禁止 $HOME 或 / 作为 RW workspace）
   if _capbox_workspace_is_dangerous; then
@@ -1741,12 +2112,11 @@ cmd_doctor() {
     _doctor_pass "工作区安全 ($CAPBOX_WORKSPACE)"
   fi
 
-  # 1) bwrap
-  if [[ -n "$bwrap" && -x "$bwrap" ]]; then
-    _doctor_pass "bwrap 已安装 ($bwrap)"
-  else
-    _doctor_fail "bwrap 不可用 (${bwrap:-未设置})；请安装 bubblewrap 或设置 CAPBOX_BWRAP"
-  fi
+  # 1) bwrap。版本不够时退出码在函数末尾给 6；二进制缺失仍走一般 FAIL。
+  _capbox_doctor_check_bwrap "$bwrap"
+  _bwrap_ver_ok="${CAPBOX_DOCTOR_BWRAP_VER_OK:-0}"
+  _bwrap_launch_ok="${CAPBOX_DOCTOR_BWRAP_LAUNCH_OK:-0}"
+  _bwrap_baseline_fail="${CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL:-0}"
 
   # 2) userns 全权限
   if [[ -n "$bwrap" && -x "$bwrap" ]]; then
@@ -1895,7 +2265,8 @@ cmd_doctor() {
   fi
 
   # 9) 环境变量清空（--clearenv 白名单）
-  if rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+  # 版本不够时不跑 oneshot：build_bwrap_args 会拒绝，探针会误报成「环境变量未清空」。
+  if (( _bwrap_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
     local env_probe="" env_rc=0
     # 用真实 oneshot 路径探测；哨兵与常见密钥名都不得出现，HOME/PATH 仍须可用。
     env_probe="$(
@@ -1914,18 +2285,28 @@ cmd_doctor() {
     else
       _doctor_fail "环境变量未清空或白名单缺失（probe rc=$env_rc out=${env_probe:-<empty>}）；应无条件 bwrap --clearenv 后再 --setenv"
     fi
+  elif (( _bwrap_launch_ok != 1 && _bwrap_baseline_fail == 1 )); then
+    _doctor_warn "跳过环境清空探测（bwrap 版本低于安全基线）"
+  elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
+    _doctor_warn "跳过环境清空探测（bwrap 不可用）"
   else
     _doctor_warn "跳过环境清空探测（rootfs 或 bwrap 不可用）"
   fi
 
   # 10) 缺失配置路径预占（CVE-2026-25725 同类：guest 不得创建宿主会读的 config/services）
-  if rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
-    local _cfg_g _svc_g _probe_out _probe_rc=0 _host_cfg _host_svc_probe
+  #     同时确认 logs/audit.jsonl 对 guest 只读。
+  if (( _bwrap_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+    local _cfg_g _svc_g _log_g _probe_out _probe_rc=0 _host_cfg _host_svc_probe _host_log _log_tampered=0
     _cfg_g="$(_guest_workspace_path "$CAPBOX_DIR/config.env")"
     _svc_g="$(_guest_workspace_path "$CAPBOX_DIR/services")"
+    _log_g="$(_guest_workspace_path "$CAPBOX_DIR/logs/audit.jsonl")"
     _host_cfg="$CAPBOX_DIR/config.env"
     _host_svc_probe="$CAPBOX_DIR/services/_doctor_probe.env"
+    _host_log="$CAPBOX_DIR/logs/audit.jsonl"
     if [[ -n "$_cfg_g" && "$_cfg_g" == /workspace/* && -n "$_svc_g" && "$_svc_g" == /workspace/* ]]; then
+      if [[ -z "$_log_g" || "$_log_g" != /workspace/* ]]; then
+        _doctor_fail "无法定位 guest 侧 logs/audit.jsonl，不能确认只读"
+      else
       rm -f -- "${_host_svc_probe}.attempt" 2>/dev/null || true
       _probe_out="$(
         run_bwrap_oneshot /workspace 30 /bin/sh -c "
@@ -1938,9 +2319,17 @@ cmd_doctor() {
           if [ -w \"$_cfg_g\" ] 2>/dev/null; then echo CFG_WRITABLE; fi
           if echo x > \"$_cfg_g\" 2>/dev/null; then echo CFG_WRITE_OK; fi
           if echo CMD=true > \"$_svc_g/_doctor_probe.env\" 2>/dev/null; then echo SVC_WRITE_OK; fi
+          if echo CAPBOX_DOCTOR_AUDIT_TAMPER >> \"$_log_g\" 2>/dev/null; then echo LOG_WRITE_OK; fi
           echo PROBE_DONE
         "
       )" || _probe_rc=$?
+      if [[ -f "$_host_log" && ! -L "$_host_log" ]] && grep -q -F -- 'CAPBOX_DOCTOR_AUDIT_TAMPER' "$_host_log" 2>/dev/null; then
+        _log_tampered=1
+        _doctor_strip_marker "$_host_log" 'CAPBOX_DOCTOR_AUDIT_TAMPER'
+      fi
+      if [[ "$_probe_out" == *LOG_WRITE_OK* ]]; then
+        _log_tampered=1
+      fi
       if [[ -f "$_host_cfg" ]] && grep -q 'DOCTOR_INJECT' "$_host_cfg" 2>/dev/null; then
         _doctor_fail "guest 写入了宿主 config.env（缺失/已存在路径未只读保护）"
       elif [[ -f "$_host_svc_probe" ]]; then
@@ -1948,12 +2337,19 @@ cmd_doctor() {
         rm -f -- "$_host_svc_probe" 2>/dev/null || true
       elif [[ "$_probe_out" == *CFG_WRITE_OK* || "$_probe_out" == *SVC_WRITE_OK* ]]; then
         _doctor_fail "guest 可写受保护配置路径（probe out=${_probe_out:-<empty>}）"
+      elif (( _log_tampered == 1 )); then
+        _doctor_fail "guest 写入了宿主 logs/audit.jsonl（logs 未只读保护）"
       else
-        _doctor_pass "配置路径预占生效（缺失/已存在的 config.env 与 services/ 均不可被 guest 写入）"
+        _doctor_pass "配置路径预占生效（缺失/已存在的 config.env、services/ 与 logs/audit.jsonl 均不可被 guest 写入）"
+      fi
       fi
     else
       _doctor_warn "跳过配置预占探测（CAPBOX_DIR 不在工作区视图内）"
     fi
+  elif (( _bwrap_launch_ok != 1 && _bwrap_baseline_fail == 1 )); then
+    _doctor_warn "跳过配置预占探测（bwrap 版本低于安全基线）"
+  elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
+    _doctor_warn "跳过配置预占探测（bwrap 不可用）"
   else
     _doctor_warn "跳过配置预占探测（rootfs 或 bwrap 不可用）"
   fi
@@ -1966,6 +2362,10 @@ cmd_doctor() {
   fi
 
   printf '\n'
+  if (( _bwrap_baseline_fail == 1 )); then
+    printf '自检结果: 安全基线不满足（退出码 6）；%d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
+    return 6
+  fi
   if (( DOCTOR_FAILS > 0 )); then
     printf '自检结果: %d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
     return 1

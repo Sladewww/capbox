@@ -155,11 +155,12 @@ ls .capbox/run/daemon/               # daemon.json / req/ / out/ 是否在
 
 ## `doctor` 逐项解读
 
-`doctor` 退出 0 才代表环境可用（有 FAIL 就退出 1）。
+`doctor` 退出 0 才代表环境可用（有 FAIL 就退出 1）。bwrap 低于 0.12.0 时退出 6，放行也不改成通过。
 
 | 检查项 | FAIL 说明与处置 |
 |---|---|
 | bwrap 可用 | 环境缺依赖（退出码 5）。重试无用，报告用户 |
+| bwrap 版本 | 低于 0.12.0，或 `bwrap --version` 解析不了。安装上游 bubblewrap >= 0.12.0（Debian/Ubuntu：`sudo apt install --only-upgrade bubblewrap`；发行版没有 0.12.0 就从源码或更新的仓库装）。版本串仍是 0.11.x 的发行版包（含撤回补丁的）不算达标。`compat` 同样拒绝。`doctor` 为 FAIL 并退出 6，`exec` / `shell` / `service start` / `up` 拒绝启动。接受风险：当次 `capbox --allow-old-bwrap <command>`，或 `capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1`。两条都写审计。放行后 `doctor` 仍是 FAIL。不要用环境变量绕过 |
 | userns 全权限 | 沙箱配置问题，容器内拿不到 `--cap-add ALL`。报告用户 |
 | rootfs 存在 | 还没 `init`，或 `clean --all` 把它删了 |
 | 网络 / 镜像源连通 | 看上面「网络不通」「代理与镜像源」 |
