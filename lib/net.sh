@@ -371,6 +371,9 @@ _net_run_bwrap_oneshot() {
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
     _security_wrap_argv wrap_cmd || return $?
   fi
+  if declare -F _landlock_apply_argv >/dev/null 2>&1; then
+    _landlock_apply_argv wrap_cmd || return $?
+  fi
 
   local idmap_rc=1
   if declare -F _capbox_idmap_decision >/dev/null 2>&1; then

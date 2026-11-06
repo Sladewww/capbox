@@ -34,7 +34,7 @@ if [[ -z "${CAPBOX_WORKSPACE:-}" ]]; then
 fi
 export CAPBOX_WORKSPACE
 
-readonly CAPBOX_VERSION="0.3.2"
+readonly CAPBOX_VERSION="0.3.3"
 readonly CAPBOX_SCHEMA_VERSION="0.3.0"
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
@@ -61,6 +61,7 @@ readonly CAPBOX_CFG_KEYS=(
   EXEC_UID
   EXEC_GID
   SECURITY_PROFILE
+  LANDLOCK
   ROOTFS_RO
   FS_HIDE
   FS_BINDS
@@ -309,6 +310,12 @@ _cfg_validate() {
     SECURITY_PROFILE)
       [[ "$v" == "compat" || "$v" == "untrusted" || "$v" == "strict" || "$v" == "default" || -z "$v" ]] || {
         log_err "CAPBOX_SECURITY_PROFILE 只能是 compat|untrusted|strict（当前: '$v'）"
+        return 2
+      }
+      ;;
+    LANDLOCK)
+      [[ "$v" == "on" || "$v" == "off" || -z "$v" ]] || {
+        log_err "CAPBOX_LANDLOCK 只能是 on 或 off（当前: '$v'）。未设置时 strict 默认开启"
         return 2
       }
       ;;
@@ -567,6 +574,7 @@ load_config() {
   : "${CAPBOX_DISK_MAX=}"
   : "${CAPBOX_RESOURCES_MODE=warn}"
   : "${CAPBOX_SECURITY_PROFILE=compat}"
+  : "${CAPBOX_LANDLOCK=}"
   : "${CAPBOX_ROOTFS_RO=0}"
   : "${CAPBOX_FS_HIDE=}"
   : "${CAPBOX_FS_BINDS=}"
@@ -1632,6 +1640,9 @@ run_bwrap_oneshot() {
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
     _security_wrap_argv full || return $?
   fi
+  if declare -F _landlock_apply_argv >/dev/null 2>&1; then
+    _landlock_apply_argv full || return $?
+  fi
 
   local rc=0 use_idmap=0 idmap_rc=1
   if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
@@ -2256,6 +2267,9 @@ cmd_doctor() {
   fi
   if declare -F _security_doctor_report >/dev/null 2>&1; then
     _security_doctor_report
+  fi
+  if declare -F _landlock_doctor_report >/dev/null 2>&1; then
+    _landlock_doctor_report
   fi
   if declare -F _fsguard_doctor_report >/dev/null 2>&1; then
     _fsguard_doctor_report

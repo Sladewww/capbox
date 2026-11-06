@@ -414,6 +414,11 @@ _service_start() {
       _service_abort 1 "资源限额无法应用" || return $?
     }
   fi
+  if declare -F _landlock_apply_argv >/dev/null 2>&1; then
+    _landlock_apply_argv full || {
+      _service_abort $? "Landlock 未能启用" || return $?
+    }
+  fi
 
   local idmap_rc=1
   if declare -F _capbox_idmap_decision >/dev/null 2>&1; then

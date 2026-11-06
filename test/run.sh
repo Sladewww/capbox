@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# .capbox/test/run.sh — CapBox 验收测试主入口（契约 §7，T01–T40）
+# .capbox/test/run.sh — CapBox 验收测试主入口（契约 §7，T01–T41）
 # -----------------------------------------------------------------------------
 # 用法：
-#   .capbox/test/run.sh                 # 跑全部 T01–T40
+#   .capbox/test/run.sh                 # 跑全部 T01–T41
 #   .capbox/test/run.sh --list          # 只列出用例
 #   .capbox/test/run.sh T05 T06         # 只跑指定用例（大小写均可）
 #   .capbox/test/run.sh --list -v       # 带说明的清单
