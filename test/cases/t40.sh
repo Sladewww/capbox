@@ -4,6 +4,11 @@ set -u
 CASE_TITLE="网络策略：端口、通配、私网地址、非法 NET"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
 case_begin "$1" "$CASE_TITLE" "$2"
+if is_fake_cli; then
+  skip_case "假 CLI 桩的沙箱没有 lib/，策略测试只在真 CLI 验收里跑"
+  case_finish
+  exit 0
+fi
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
