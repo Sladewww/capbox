@@ -18,6 +18,7 @@ CWD=/
 READY_TCP=127.0.0.1:80
 READY_TIMEOUT=15
 RESTART=on-failure
+# MY_VAR=hello    # 非保留键会在 --clearenv 之后 --setenv 进 guest；CMD 本身不是环境变量
 ENV
 .capbox/bin/capbox service start nginx
 .capbox/bin/capbox service status nginx

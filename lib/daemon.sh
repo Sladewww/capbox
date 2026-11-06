@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.3.3}"
+: "${CAPBOX_VERSION:=0.3.4}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -192,6 +192,10 @@ _daemon_bwrap_args() {
         log_err "logs 必须是普通目录，拒绝启动: $_logs"
         return 1
       fi
+      if [[ -L "$_logs/audit.jsonl" || -d "$_logs/audit.jsonl" ]]; then
+        log_err "logs/audit.jsonl 必须是普通文件，拒绝启动: $_logs/audit.jsonl"
+        return 1
+      fi
       [[ -d "$_logs" ]] || mkdir -p "$_logs" 2>/dev/null || true
       if [[ -d "$_logs" && ! -L "$_logs" ]]; then
         a+=(--ro-bind "$_logs" "$_gp")
@@ -274,6 +278,10 @@ _daemon_bwrap_args() {
       a+=(--setenv HTTP_PROXY "$CAPBOX_PROXY" --setenv HTTPS_PROXY "$CAPBOX_PROXY")
       a+=(--setenv ALL_PROXY "$CAPBOX_PROXY" --setenv NO_PROXY "$np")
     fi
+  fi
+
+  if declare -F _capbox_ro_protect_logs >/dev/null 2>&1; then
+    _capbox_ro_protect_logs a || return $?
   fi
 
   printf '%s\n' "${a[@]}"
@@ -1337,7 +1345,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.3.3}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.4}")"
     return 0
   fi
 
@@ -1370,7 +1378,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.3}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.4}"
   return 0
 }
 

@@ -205,10 +205,11 @@ capbox down
 在 `.capbox/services/<name>.env` 写纯 `KEY=value`（不会被 source）：
 
 ```sh
-CMD='nginx -g "daemon off;"'
-USER=www-data          # 或 UID=/GID=
+CMD='nginx -g "daemon off;"'   # 要执行的命令，不进环境变量
+USER=www-data                  # 或 UID=/GID=；USER 与 CWD 会 --setenv
 CWD=/
-REQUIRE_IDMAP=0        # sshd 等需要 setgroups 时设 1
+MY_VAR=hello                   # 其它键在 --clearenv 之后注入 guest
+REQUIRE_IDMAP=0                # sshd 等需要 setgroups 时设 1
 ```
 
 ```sh
@@ -263,6 +264,7 @@ CAPBOX_EXEC_GID=0
 - 写 `/` 写的是 `.capbox/os/<distro>/`，不是宿主根。
 - 工作区整树 RW bind 到 `/workspace` —— **工作区是信任边界**；不要把 `$HOME` 当工作区。
 - `bin/`、`lib/`、`config.env` 对 guest **只读**，防止容器改写 CLI 导致下次宿主执行变成 RCE。
+- `logs/`（含 `audit.jsonl`）对 guest **只读**。`FS_BINDS` 不能挂到这个目录上；`FS_BINDS` 和 `CAPBOX_BWRAP_EXTRA` 之后还会再挂一次只读，避免后挂的 bind 把它盖成可写。`audit.jsonl` 是符号链接或目录时拒绝启动、拒绝写入。guest 可以读，不能改。
 - `capbox cp` 的 guest 路径会做 `realpath` 越界检查，拒绝 `..` 逃出 rootfs。
 - 设计前提常常是：宿主本身已在受限沙箱中（工作区外只读、无额外 capability）。
 - `CAPBOX_NET=none` 可断网。

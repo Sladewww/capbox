@@ -186,6 +186,10 @@ _fsguard_append_binds() {
     part="${part%"${part##*[![:space:]]}"}"
     [[ -n "$part" ]] || continue
     _fsguard_parse_bind_spec "$part" || die 2 "FS_BINDS 非法: $part"
+    if declare -F _capbox_guest_covers_logs >/dev/null 2>&1 && _capbox_guest_covers_logs "$_fs_bind_guest"; then
+      log_err "FS_BINDS 不能挂到 logs/ 上（审计日志必须保持只读）: $_fs_bind_guest"
+      return 2
+    fi
     local abs
     abs="$(resolve_path "$_fs_bind_host")" || die 2 "无法规范化 FS_BINDS 宿主路径: $_fs_bind_host"
     if [[ "$_fs_bind_mode" == "ro" ]]; then
@@ -200,7 +204,7 @@ _fsguard_append_bwrap_args() {
   local -n _fa="$1"
   _fsguard_validate_config || return $?
   _fsguard_append_default_hides _fa
-  _fsguard_append_binds _fa
+  _fsguard_append_binds _fa || return $?
 }
 
 # ---------- 快照 / 回滚 -------------------------------------------------------
