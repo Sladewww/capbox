@@ -241,6 +241,8 @@ CapBox —— 工作区内持久化的 root Linux 容器
   open (host)  共享宿主网络（默认；host 为兼容别名）
   restricted   --unshare-net + 域名 allowlist 代理（需 python3/nsenter 与 CAPBOX_NET_ALLOW）
                不假装 bwrap 能过滤域名；原始 TCP 无路由，仅 HTTP(S)_PROXY 出站
+  当次声明     exec|shell|up --net MODE（不写 config.env）。shell/exec --daemon 改不了已在跑的网络
+  pkg          会话为 none 时，install 与 update 仍出网；remove 与 list 不出网
 
 安全档（CAPBOX_SECURITY_PROFILE / exec --profile）
   compat       默认兼容：全量 capability、无 seccomp（不削弱现有行为）

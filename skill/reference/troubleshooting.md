@@ -136,7 +136,7 @@ ls .capbox/run/daemon/               # daemon.json / req/ / out/ 是否在
 .capbox/bin/capbox config list          # CAPBOX_NET 是否为 none
 ```
 
-`CAPBOX_NET=none` 时容器被 `--unshare-net`，没有网络是预期。`restricted`（`init --agent` 的档）同样没有原始路由：先看 `CAPBOX_NET_ALLOW` 是否盖住目标主机和端口（没写端口只有 80/443；非 global 地址，含 CGNAT `100.64.0.0/10` 和 IPv4-mapped，默认拒绝）。不要为了排障把 `CAPBOX_NET` 改成 `open`。只有这次任务就是要共享宿主网络时，才改。
+`init --agent` 把 `CAPBOX_NET` 设成 `none`，`exec` 没有网络是预期。`pkg install` 和 `pkg update` 这次仍会出网。其它命令要当次加 `--net restricted`（先看 `CAPBOX_NET_ALLOW` 是否盖住目标主机和端口：没写端口只有 80/443；非 global 地址，含 CGNAT `100.64.0.0/10` 和 IPv4-mapped，默认拒绝）或 `--net open`。不要为了排障把配置里的 `CAPBOX_NET` 改成 `open`。
 
 ---
 

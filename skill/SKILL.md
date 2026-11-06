@@ -1,6 +1,6 @@
 ---
 name: capbox
-description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱动。要装系统软件包、要 root 或 mount、要跑不宜污染宿主的命令、要跨调用保留状态的系统环境、要长期存活的容器服务时用它。不可信命令用 capbox init --agent（untrusted + restricted）。常驻进程用 capbox up --systemd，没有用户 systemd 时才放进活过工具调用的后台任务。只读查看、文件编辑、宿主一条命令能做完的事直接用 bash，不要绕道。
+description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱动。要装系统软件包、要 root 或 mount、要跑不宜污染宿主的命令、要跨调用保留状态的系统环境、要长期存活的容器服务时用它。不可信命令用 capbox init --agent（untrusted + NET=none）。pkg install 和 pkg update 会出网；其它出网要在当次命令加 --net。常驻进程用 capbox up --systemd，没有用户 systemd 时才放进活过工具调用的后台任务。只读查看、文件编辑、宿主一条命令能做完的事直接用 bash，不要绕道。
 ---
 
 # CapBox
@@ -12,7 +12,7 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 入口：把 CapBox 装到 PATH（一份模板），或用项目内 `.capbox/bin/capbox`。
 **状态永远在当前会话/项目目录的 `.capbox/`**，不是 PATH 上那份模板。
 
-- 会话里还没有 `.capbox` 时：`capbox init --agent`（脚手架到当前目录的 `.capbox/`，下载 rootfs，并写成 untrusted + restricted）。
+- 会话里还没有 `.capbox` 时：`capbox init --agent`（脚手架到当前目录的 `.capbox/`，下载 rootfs，并写成 untrusted + NET=none）。
 - 也可先 `capbox bootstrap` 只脚手架、不下载。
 - 不要把仓库克隆进每个项目当作唯一安装方式；也不要把模板树本身当成工作区（尤其不要装在 `$HOME` 下当全局状态目录）。
 
@@ -68,22 +68,23 @@ capbox init --agent --distro alpine
 capbox doctor
 ```
 
-`init --agent` 会脚手架（如需）、下载 rootfs，并写入 `CAPBOX_SECURITY_PROFILE=untrusted`、`CAPBOX_NET=restricted`。
-出网前还要设 allowlist，否则 `exec` 会失败（这是故意的）：
+`init --agent` 会脚手架（如需）、下载 rootfs，并写入 `CAPBOX_SECURITY_PROFILE=untrusted`、`CAPBOX_NET=none`。
+`pkg install` 和 `pkg update` 会出网。`exec`、`shell`、`up`、`service` 默认没有网。需要出网时在当次命令声明，不根据 `pip`、`npm`、`git` 这些名字自动打开：
 
 ```sh
 capbox config set CAPBOX_NET_ALLOW 'example.com,*.python.org,github.com:22'
+capbox exec --net restricted -- pip install -q requests
+capbox up --net restricted
 ```
 
-规则：没写端口只放行 80/443；子域要显式写 `*.example.com`（`example.com` 不再连带子域）；任意端口加 `:*`。显式网段放行后，端口规则仍然生效。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在 allowlist 里才放行。
-`restricted` 对一次性 `exec` 和 `capbox up` 都生效：原始 TCP 没有路由，只有走注入的 `http_proxy` 才能出去。
+`--net open` 是当次共享宿主网络。`--net restricted` 用上面的 allowlist：没写端口只放行 80/443；子域要显式写 `*.example.com`；任意端口加 `:*`。显式网段放行后，端口规则仍然生效。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在 allowlist 里才放行。原始 TCP 没有路由，只有走注入的 `http_proxy` 才能出去。`--net` 不写进 config.env。`shell --daemon` 改不了已经起来的守护容器的网络。
 
 人工调试可以 `capbox init --distro alpine`（默认 `compat` + `NET=open`）。不要把这个默认档当成 agent 的档。
 
 `init` 会：① 若缺 `.capbox/bin`/`lib`，从 PATH 上的 CapBox 模板脚手架到 `$PWD/.capbox`；② 下载并解包 rootfs。
 不要先手动 `git clone` 进项目——那只是可选的开发/离线安装方式。
 
-**完成判据**：`doctor` 没有 FAIL（WARN 可以有）。`init --agent` 且还没写 `CAPBOX_NET_ALLOW` 时，restricted 那一行是 WARN，这是预期，补上 allowlist 再跑需要出网的命令。`capbox status --json` 里 `rootfs_bytes` 大于 0。
+**完成判据**：`doctor` 没有 FAIL（WARN 可以有）。`CAPBOX_NET=none` 时 doctor 报告容器内无网络，这是预期。要出网再写 allowlist 并用 `--net restricted`。`capbox status --json` 里 `rootfs_bytes` 大于 0。
 
 `init` 幂等，rootfs 已存在时再跑不会重复下载。`ubuntu` 更大更慢，非必要不用；用 `--distro ubuntu` 换。
 缺 rootfs 时 `exec`/`pkg` 默认退出 4 并提示 init；若设置 `CAPBOX_AUTO_INIT=1` 才会在首次 exec 时自动 init（默认关，避免惊喜下载）。
@@ -110,6 +111,8 @@ capbox exec --cwd /root -- pwd                # 指定容器内工作目录
 capbox pkg update
 capbox pkg install curl git python3
 capbox exec -- curl --version
+# curl 访问网络要当次声明；装包本身不用
+capbox exec --net restricted -- curl -fsS --max-time 10 https://example.com/
 ```
 
 **完成判据**：`exec -- <cmd> --version`（或等价命令）能跑通。

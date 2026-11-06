@@ -57,7 +57,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 ## Network / recipe / resources
 
 - `CAPBOX_NET=none|restricted|open`（`host`=`open`）。未知值失败，不回退 open。`restricted` 需 `CAPBOX_NET_ALLOW` + python3/nsenter；原始网络被 unshare，仅代理出站。oneshot 与 `capbox up` 都挂 allowlist 桥。无端口=仅 80/443；子域写 `*.host`。
-- `capbox init --agent`：`untrusted` + `restricted`。人类默认仍是 `compat` + `open`。
+- `capbox init --agent`：`untrusted` + `NET=none`。`pkg install` / `pkg update` 仍出网；其它出网要当次 `--net`。人类默认仍是 `compat` + `open`。
 - `capbox up --systemd`：交给 systemd --user。没有 user bus 时才依赖外层后台任务。`--die-with-parent` 会杀掉 `nohup`/`setsid`。
 - `capbox recipe apply`：KEY=value only，never source.
 - Resource limits prefer cgroup v2 (`CAPBOX_CGROUP_ROOT` optional strict parent); otherwise WARN (no fake enforcement).

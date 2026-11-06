@@ -280,6 +280,58 @@ PY
     echo "service still ignores security wrap failure" >&2
     exit 1
   fi
+
+  # shellcheck disable=SC1091
+  . "$REPO/lib/sandbox.sh"
+  seen_net="$policy_tmp/seen-net"
+  exec_in_guest() { printf '%s\n' "${CAPBOX_NET}" >"$seen_net"; return 0; }
+  log_info() { :; }
+  config_writes=0
+  config_set() { config_writes=$((config_writes + 1)); return 0; }
+  CAPBOX_NET=none
+  CAPBOX_NET_ALLOW=
+  _pkg_run_guest install true 5
+  [[ "$(cat "$seen_net")" == "open" ]]
+  [[ "$CAPBOX_NET" == "none" ]]
+  [[ "$config_writes" -eq 0 ]]
+  _pkg_run_guest update true 5
+  [[ "$(cat "$seen_net")" == "open" ]]
+  [[ "$CAPBOX_NET" == "none" ]]
+  _pkg_run_guest remove true 5
+  [[ "$(cat "$seen_net")" == "none" ]]
+  _pkg_run_guest list true 5
+  [[ "$(cat "$seen_net")" == "none" ]]
+  CAPBOX_NET=restricted
+  _pkg_run_guest install true 5
+  [[ "$(cat "$seen_net")" == "restricted" ]]
+  [[ "$CAPBOX_NET" == "restricted" ]]
+  _capbox_declare_net host t40
+  [[ "$CAPBOX_NET" == "open" ]]
+  CAPBOX_NET_ALLOW=example.com
+  _capbox_declare_net restricted t40
+  [[ "$CAPBOX_NET" == "restricted" ]]
+  rc=0
+  ( CAPBOX_NET_ALLOW=; _capbox_declare_net restricted t40 ) || rc=$?
+  [[ "$rc" -eq 2 ]]
+  rc=0
+  ( _capbox_declare_net weird t40 ) || rc=$?
+  [[ "$rc" -eq 2 ]]
+  rc=0
+  ( cmd_exec --daemon --net open -- true ) || rc=$?
+  [[ "$rc" -eq 2 ]]
+  rc=0
+  ( cmd_shell --daemon --net open ) || rc=$?
+  [[ "$rc" -eq 2 ]]
+  # shellcheck disable=SC1091
+  . "$REPO/lib/daemon.sh"
+  rc=0
+  ( cmd_up --net ) || rc=$?
+  [[ "$rc" -eq 2 ]]
+  keys=()
+  config_set() { keys+=("$1=$2"); return 0; }
+  _apply_agent_preset
+  printf '%s\n' "${keys[@]}" | grep -qx 'NET=none'
+  printf '%s\n' "${keys[@]}" | grep -qx 'SECURITY_PROFILE=untrusted'
 ) >"$QA_TMP/t40-policy.out" 2>"$QA_TMP/t40-policy.err"
 policy_rc=$?
 set -e
