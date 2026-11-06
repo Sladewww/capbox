@@ -8,7 +8,7 @@
   - **强制语义**：原始套接字到公网不可达；出站依赖 `http_proxy`/`https_proxy`（CapBox 自动注入 `http://127.0.0.1:18787`）。
   - **不是** bwrap 域名过滤。
   - 前置：`python3`、`nsenter`、非空 `CAPBOX_NET_ALLOW`。
-  - allow 语法：`example.com`（仅 80/443，不含子域）、`*.example.com`、`github.com:22`、`host:*`、CIDR。解析到回环 / 链路本地 / 私网会被拒绝，除非该地址自己在名单里。
+  - allow 语法：`example.com`（仅 80/443，不含子域）、`*.example.com`、`github.com:22`、`host:*`、CIDR。显式网段仍受端口约束。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在名单里才放行。
   - 未知的 `CAPBOX_NET` 直接失败，不会当成 `open`。
 
 `capbox init --agent` 写入 `untrusted` + `restricted`。agent 用这个，不要用默认的 `compat` + `open`。
@@ -18,7 +18,7 @@ CLI 覆盖：`capbox exec --net none|restricted|open -- CMD`
 ## recipe
 
 `capbox.recipe` 或 `.capbox/recipe.env`：白名单 KEY=value，绝不 `source`。
-`capbox recipe apply [FILE]` 写入配置、按需 `init`、安装 `PACKAGES`。
+`capbox recipe apply [FILE]` 把配方里出现的已知键写入配置（`PACKAGES` 和 `INIT` 除外），按需 `init`，再安装 `PACKAGES`。`INIT=0` 跳过 init，包仍会装。
 
 ## 资源限额
 

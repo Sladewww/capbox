@@ -227,6 +227,29 @@ PY
     exit 1
   fi
   [[ ! -e "$policy_tmp/evil" ]]
+  python3 - "$policy_tmp" <<'PY'
+import os, sys, tarfile
+base = sys.argv[1]
+abs_tar = os.path.join(base, "abs.tar.gz")
+with tarfile.open(abs_tar, "w:gz") as tf:
+    info = tarfile.TarInfo("usr/sbin/add-shell")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "/bin/busybox"
+    tf.addfile(info)
+badlink = os.path.join(base, "badlink.tar.gz")
+with tarfile.open(badlink, "w:gz") as tf:
+    info = tarfile.TarInfo("usr/sbin/escape")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "/tmp/../../etc/passwd"
+    tf.addfile(info)
+PY
+  mkdir -p "$policy_tmp/absstage"
+  _image_extract_archive "$policy_tmp/abs.tar.gz" "$policy_tmp/absstage"
+  [[ "$(readlink -- "$policy_tmp/absstage/usr/sbin/add-shell")" == "/bin/busybox" ]]
+  if _image_extract_archive "$policy_tmp/badlink.tar.gz" "$policy_tmp/absstage"; then
+    echo "absolute link with .. should fail" >&2
+    exit 1
+  fi
   _image_extract_archive "$policy_tmp/good.tar.gz" "$policy_tmp/goodstage"
   _image_install_tree "$policy_tmp/goodstage/var/cache/apk" "var/cache/apk"
   [[ -f "$(realpath -m -- "$rt")/var/cache/apk/pkg.apk" ]]

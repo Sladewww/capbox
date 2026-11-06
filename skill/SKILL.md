@@ -5,7 +5,7 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 
 # CapBox
 
-工作区里的一台 Linux。`init --agent` 之后是加固档：容器内仍是 root，但 capability 被丢掉、seccomp 挡住 mount/unshare/io_uring，工作区里的 `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.docker` 被遮住。
+工作区里的一台 Linux。`init --agent` 之后是加固档：容器内仍是 root。`untrusted` 保留 `CAP_SYS_ADMIN`，靠 seccomp 挡住 mount/unshare/io_uring；工作区里的 `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.docker` 被遮住。
 状态落在 `.capbox/os/<distro>/`，是工作区里的普通目录，所以跨调用、跨会话都在。
 人工调试可以不带 `--agent`（默认 `compat` + `NET=open`，全 capability、无 seccomp）。不要用默认档跑来路不明的命令。
 
@@ -41,7 +41,8 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 |---|---|
 | 跑完就走的命令 | `capbox exec -- CMD` |
 | 活过这次工具调用的容器 | `capbox up --systemd`（用户 systemd 在工具沙箱外面）。没有 user bus 时，把 `capbox up` 放进该工具提供的后台任务（例如 `run_in_background: true`），不要在前台调用里 `&` |
-| 活过多次调用的服务 | 先让 `up` 活着，再 `capbox exec --daemon -- …` 或 `capbox service start` |
+| 活过多次调用的单个服务 | `capbox service start`（独立 bwrap，不依赖 `up`） |
+| 多次 `exec --daemon` 共享同一台机 | 先让 `up` 活着，再 `capbox exec --daemon -- …` |
 
 判据不是"能不能用 `&`"，而是**进程挂在谁的树上**。一次性 `exec` 里的 `nohup CMD &` 挂在这次调用上，调用结束就没了。`exec --daemon` 里的后台进程挂在守护容器上，守护容器还在就还在。
 
@@ -74,7 +75,7 @@ capbox doctor
 capbox config set CAPBOX_NET_ALLOW 'example.com,*.python.org,github.com:22'
 ```
 
-规则：没写端口只放行 80/443；子域要显式写 `*.example.com`（`example.com` 不再连带子域）；任意端口加 `:*`。解析到回环、链路本地、私网地址会被拒绝，除非那个地址自己在 allowlist 里。
+规则：没写端口只放行 80/443；子域要显式写 `*.example.com`（`example.com` 不再连带子域）；任意端口加 `:*`。显式网段放行后，端口规则仍然生效。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在 allowlist 里才放行。
 `restricted` 对一次性 `exec` 和 `capbox up` 都生效：原始 TCP 没有路由，只有走注入的 `http_proxy` 才能出去。
 
 人工调试可以 `capbox init --distro alpine`（默认 `compat` + `NET=open`）。不要把这个默认档当成 agent 的档。
@@ -190,7 +191,7 @@ capbox cp ./data.csv guest:/root/data.csv
 
 这两份按需读，不要一开始就全读：
 
-- `reference/recipes.md` —— 要**做成某个东西**时读：起 nginx / python 服务（完整四步序列 + 三条配套约束）、装 Node/Python/Go 工具链、长任务与超时策略、选 alpine 还是 ubuntu、构建产物带回工作区、投入真实任务前的一次性环境验证。
+- `reference/recipes.md` —— 要**做成某个东西**时读：起 nginx / python 服务（优先 `service`；共享守护容器时才 `up`）、装 Node/Python/Go 工具链、长任务与超时策略、选 alpine 还是 ubuntu、构建产物带回工作区、投入真实任务前的一次性环境验证。
 - `reference/troubleshooting.md` —— 命令**出了意外**时读：装包的 chown 警告、CA 证书、apt 沙箱、bwrap 参数坑、代理与镜像源、网络不通、root 权限到底能到哪、`doctor`/`status`/`logs` 逐项怎么读、清理磁盘。
 
 其余命令（`shell` / `ls` / `ps` / `distros` / `config` / `clean`）用得少，需要时跑 `capbox --help` 看当前选项，不要凭记忆写。
