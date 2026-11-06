@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.3.2}"
+: "${CAPBOX_VERSION:=0.3.3}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -733,6 +733,9 @@ _daemon_build_up_argv() {
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
     _security_wrap_argv _out || return $?
   fi
+  if declare -F _landlock_apply_argv >/dev/null 2>&1; then
+    _landlock_apply_argv _out || return $?
+  fi
 }
 
 _daemon_systemd_unit_name() {
@@ -788,6 +791,9 @@ _daemon_up_via_systemd() {
   done
   envargs+=(--setenv="CAPBOX_ROOT=${CAPBOX_WORKSPACE}")
   envargs+=(--setenv="CAPBOX_UP_SYSTEMD_CHILD=1")
+  if [[ "${CAPBOX_LANDLOCK:-}" == "on" || "${CAPBOX_LANDLOCK:-}" == "off" ]]; then
+    envargs+=(--setenv="CAPBOX_LANDLOCK=${CAPBOX_LANDLOCK}")
+  fi
   log_info "交给 systemd --user 单元 ${unit}.service（脱离当前进程树）"
   if ! systemd-run --user --collect --unit="$unit" \
     -p "WorkingDirectory=${CAPBOX_WORKSPACE}" \
@@ -1331,7 +1337,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.3.2}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.3}")"
     return 0
   fi
 
@@ -1364,7 +1370,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.2}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.3}"
   return 0
 }
 

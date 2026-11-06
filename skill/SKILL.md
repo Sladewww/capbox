@@ -5,7 +5,7 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 
 # CapBox
 
-工作区里的一台 Linux。`init --agent` 之后是加固档：容器内仍是 root。`untrusted` 保留 `CAP_SYS_ADMIN`，靠 seccomp 挡住 mount/unshare/io_uring；工作区里的 `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.docker` 被遮住。
+工作区里的一台 Linux。`init --agent` 之后是加固档：容器内仍是 root。`untrusted` 保留 `CAP_SYS_ADMIN`，靠 seccomp 挡住 mount/unshare/io_uring；工作区里的 `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.docker` 被遮住。`strict` 在此之上默认开启 Landlock（`CAPBOX_LANDLOCK` 未设置时；`on`/`off` 可显式覆盖），在挂载完成之后限制 VFS，不限制 TCP 端口。
 状态落在 `.capbox/os/<distro>/`，是工作区里的普通目录，所以跨调用、跨会话都在。
 人工调试可以不带 `--agent`（默认 `compat` + `NET=open`，全 capability、无 seccomp）。不要用默认档跑来路不明的命令。
 

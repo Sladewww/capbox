@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-T01–T40-informational.svg)](test/run.sh)
+[![Tests](https://img.shields.io/badge/tests-T01–T41-informational.svg)](test/run.sh)
 [![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
 
 工作区里的一台 Linux。不需要 Docker、不需要 sudo。`capbox init` 之后，你就有了一个
@@ -49,6 +49,8 @@ capbox exec --net none -- curl -I https://example.com/   # 仅本次覆盖为无
 ```
 
 给 coding agent 用 `capbox init --agent`：写入 `CAPBOX_SECURITY_PROFILE=untrusted` 和 `CAPBOX_NET=none`。`pkg install` 与 `pkg update` 仍出网；其它出网在当次命令声明（`exec --net restricted`，需 `CAPBOX_NET_ALLOW`，或 `--net open`）。默认档仍是 `compat` + `open`，那是兼容，不是加固。
+
+`CAPBOX_LANDLOCK=on|off`。未设置时只有 `strict` 开启。Landlock 在挂载完成之后限制容器能访问的路径，不限制 TCP 端口。允许目录下面不能再挖洞。构建 helper 需要宿主 `gcc -static`；内核没有 Landlock 时已启用的启动失败，`doctor` 记 FAIL。
 
 ## 声明式配方（recipe）
 

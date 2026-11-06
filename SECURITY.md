@@ -69,6 +69,21 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 - `compat`：`--cap-add ALL`，无 seccomp。
 - `untrusted`/`strict`：显式 `--cap-drop` + 真实 seccomp BPF；多 UID idmap 启用时跳过 `--disable-userns`（与 bwrap `userns-block-fd` 不兼容，属 Linux/bwrap 边界，见 `doctor`）。
 
+## Landlock
+
+`CAPBOX_LANDLOCK=on|off`。没写的时候，`strict` 默认开启，`compat` 和 `untrusted` 默认关闭。显式的 `on` 或 `off` 覆盖这个默认。空值仍然走默认。
+
+开启之后，每次 `exec` / `shell` / `service start` / `up` 都会在 **bwrap 挂载完成之后** 把容器内命令放进 Landlock。静态 helper `capbox-landlock` 用宿主 `gcc -static` 构建，放在工作区外面（`$XDG_RUNTIME_DIR/capbox-landlock/`，否则 `/run/user/UID` 或 `/tmp`），再只读绑到 guest 的 `/run/capbox-landlock`。挂载点放在已经准备好的 `/run` 上，避免 bwrap 在可写 rootfs 里留下空文件。不能把 Landlock 套在 bwrap 进程外面：规则集一旦处理文件系统，内核就拒绝这个进程 `mount` / `pivot_root`，bwrap 的 setup 会直接失败。
+
+规则按挂载后的 guest 路径写：
+
+- 可写：`/workspace`、`/tmp`、`/run`、`/dev`、`/proc`，以及磁盘配额的 guest 路径（若配置了 `CAPBOX_DISK_MAX`）
+- rootfs 顶层目录：只读挂载时只读；`ROOTFS_RO=0` 或 overlay 合并层可写时，规则同样给写，否则装包和写 `/etc` 会被这一层挡住
+
+允许目录的子路径不能再单独拒绝。`FS_HIDE` 仍然靠 tmpfs 遮盖。绑到允许目录里面的内容，Landlock 沿父目录放行。规则没有覆盖的路径（例如被跳过的 `/sys`）会被拒绝。这一层不限制 TCP 端口。
+
+内核不支持 Landlock，或宿主没有 `gcc -static` 时，已启用的启动 **失败**（退出码 5），`doctor` 记 **FAIL**。不会假装已经限制。
+
 ## 网络
 
 | `CAPBOX_NET` | 含义 |

@@ -194,6 +194,8 @@ source "$_capbox_lib_dir/common.sh" || {
 # shellcheck source=/dev/null
 [ -f "$_capbox_lib_dir/security.sh" ] && source "$_capbox_lib_dir/security.sh"
 # shellcheck source=/dev/null
+[ -f "$_capbox_lib_dir/landlock.sh" ] && source "$_capbox_lib_dir/landlock.sh"
+# shellcheck source=/dev/null
 [ -f "$_capbox_lib_dir/fsguard.sh" ] && source "$_capbox_lib_dir/fsguard.sh"
 # shellcheck source=/dev/null
 [ -f "$_capbox_lib_dir/image.sh" ] && source "$_capbox_lib_dir/image.sh"
@@ -261,7 +263,8 @@ CapBox —— 工作区内持久化的 root Linux 容器
 安全档（CAPBOX_SECURITY_PROFILE / exec --profile）
   compat       默认兼容：全量 capability、无 seccomp（不削弱现有行为）
   untrusted    显式收紧：capability drop + 真实 seccomp BPF + disable-userns
-  strict       更严 seccomp + 默认 rootfs 只读（需 overlay 才可写根）
+  strict       更严 seccomp + 默认 rootfs 只读（需 overlay 才可写根）+ 默认 Landlock
+  Landlock     CAPBOX_LANDLOCK=on|off。未设置时仅 strict 开启。挂载完成之后限制 VFS，不限制 TCP
 
 常用示例
   capbox bootstrap                       # 仅在当前目录生成 .capbox/

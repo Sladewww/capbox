@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates
+          sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates gcc
           ver="$(bwrap --version 2>/dev/null | head -n 1 || true)"
           echo "distro bwrap: ${ver:-missing} ($(command -v bwrap || echo none))"
           ok=0

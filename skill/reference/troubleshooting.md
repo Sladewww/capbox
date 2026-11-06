@@ -187,6 +187,7 @@ rootfs 是工作区里的真实目录，会占工作区空间。
 1. 看是否缺 `python3` / `libseccomp`（`seccomp-gen.py` 必须能导出真实 BPF；**不会**伪实现）。
 2. 多 UID（`CAPBOX_IDMAP=auto/on` 且 multi）时，bwrap **不能**同时用 `--disable-userns` 与 `--userns-block-fd`。CapBox 会跳过 `disable-userns` 并在 doctor 标明该 Linux 边界。
 3. 用户没有显式写过 `ROOTFS_RO` 时，`strict` 默认 `ROOTFS_RO=1`。overlay 探测失败则写入 `/` 失败，可 `capbox config set CAPBOX_ROOTFS_RO 0`，或回到 `untrusted`/`compat`。
+4. `strict` 默认开启 Landlock（`CAPBOX_LANDLOCK` 未设置时）。内核没有 Landlock，或宿主没有 `gcc -static`，启动失败，`doctor` 记 FAIL。暂时关掉：`capbox config set CAPBOX_LANDLOCK off`。这一层在挂载完成之后限制路径，不限制 TCP；允许目录里面不能再单独拒绝。
 
 验证：
 
