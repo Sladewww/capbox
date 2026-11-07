@@ -174,7 +174,7 @@ _idmap_probe() {
   }
   detail="$(
     python3 - "$uid_spec" "$gid_spec" "$probe_file" <<'PY' 2>&1
-import os, subprocess, sys
+import ctypes, os, subprocess, sys
 uid_spec, gid_spec, probe_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def parse(spec):
@@ -191,7 +191,14 @@ pr, pw = os.pipe(); gr, gw = os.pipe()
 pid=os.fork()
 if pid==0:
     os.close(pr); os.close(gw)
-    os.unshare(CLONE_NEWUSER)
+    # os.unshare only exists in newer Python releases; libc is the Linux ABI.
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.unshare.argtypes = [ctypes.c_int]
+    libc.unshare.restype = ctypes.c_int
+    if libc.unshare(CLONE_NEWUSER) != 0:
+        err = ctypes.get_errno()
+        print('FAIL user namespace:', os.strerror(err), flush=True)
+        os._exit(1)
     os.write(pw, b'R'); os.close(pw)
     os.read(gr, 1)
     # verify chown + setgroups + setuid against host-provided private path
@@ -214,7 +221,9 @@ if pid==0:
         os._exit(1)
 
 os.close(pw); os.close(gr)
-assert os.read(pr,1)==b'R'
+if os.read(pr,1) != b'R':
+    os.waitpid(pid, 0)
+    sys.exit('FAIL user namespace child exited before mapping handshake')
 ua=['newuidmap', str(pid)] + parse(uid_spec)
 ga=['newgidmap', str(pid)] + parse(gid_spec)
 subprocess.check_call(ua)
