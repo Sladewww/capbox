@@ -135,6 +135,18 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.3.6')
         self.assert_data_preserved()
 
+    def test_corrupt_transaction_record_is_refused_without_traceback(self):
+        result = self.upgrade()
+        result.check_returncode()
+        backups = Path(json.loads(result.stdout)['backup_directory'])
+        (backups / 'transaction.json').write_text('{"id":"../outside"}')
+        result = self.upgrade('rollback')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('事务记录格式无效', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.3.6')
+        self.assert_data_preserved()
+
     def test_missing_backup_is_an_error(self):
         result = self.upgrade('rollback')
         self.assertNotEqual(result.returncode, 0)

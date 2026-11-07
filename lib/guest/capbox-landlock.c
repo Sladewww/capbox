@@ -24,6 +24,17 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+/* Stable UAPI bits: compile with older headers, enable only after ABI probing. */
+#ifndef LANDLOCK_ACCESS_FS_REFER
+#define LANDLOCK_ACCESS_FS_REFER (1ULL << 13)
+#endif
+#ifndef LANDLOCK_ACCESS_FS_TRUNCATE
+#define LANDLOCK_ACCESS_FS_TRUNCATE (1ULL << 14)
+#endif
+#ifndef LANDLOCK_ACCESS_FS_IOCTL_DEV
+#define LANDLOCK_ACCESS_FS_IOCTL_DEV (1ULL << 15)
+#endif
+
 static int ll_create(const struct landlock_ruleset_attr *attr, size_t size, __u32 flags) {
   return (int)syscall(__NR_landlock_create_ruleset, attr, size, flags);
 }

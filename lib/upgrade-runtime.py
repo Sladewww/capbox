@@ -66,6 +66,22 @@ def version(root: Path) -> str:
     return 'unknown'
 
 
+def sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def sync_tree(root: Path) -> None:
+    for folder, _, files in os.walk(root, topdown=False):
+        for name in files:
+            with (Path(folder) / name).open('rb') as f:
+                os.fsync(f.fileno())
+        sync_directory(Path(folder))
+
+
 def write_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix('.tmp')
     with temporary.open('w') as f:
@@ -74,11 +90,7 @@ def write_json(path: Path, value: dict) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(temporary, path)
-    fd = os.open(path.parent, os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    sync_directory(path.parent)
 
 
 def copy_runtime(source: Path, dest: Path) -> None:
@@ -88,6 +100,8 @@ def copy_runtime(source: Path, dest: Path) -> None:
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     if inventory(source) != inventory(dest):
         raise ValueError('复制后的运行文件哈希不一致')
+    sync_tree(dest)
+    sync_directory(dest.parent)
 
 
 def smoke(root: Path, workspace: Path) -> None:
@@ -144,7 +158,7 @@ def main() -> None:
     project_data.mkdir(mode=0o700, exist_ok=True)
     if project_data.stat().st_uid != os.getuid() or stat.S_IMODE(project_data.stat().st_mode) != 0o700:
         raise ValueError('项目备份目录所有者或权限不安全')
-    backups = project_data / 'upgrades' 
+    backups = project_data / 'upgrades'
     if backups.is_symlink():
         raise ValueError('备份目录不能是符号链接')
     backups.mkdir(mode=0o700, exist_ok=True)
@@ -154,12 +168,23 @@ def main() -> None:
     if journal.is_symlink():
         raise ValueError('事务记录不能是符号链接')
     record = json.loads(journal.read_text()) if journal.exists() else None
+    if record is not None:
+        fields = {'id', 'phase', 'old_inventory', 'new_inventory', 'old_version', 'new_version'}
+        if (not isinstance(record, dict) or set(record) != fields
+                or not re.fullmatch(r'[a-f0-9]{32}', str(record['id']))
+                or record['phase'] not in ('prepared', 'promoting', 'complete', 'rolled_back')
+                or not isinstance(record['old_inventory'], dict)
+                or not isinstance(record['new_inventory'], dict)):
+            raise ValueError('升级事务记录格式无效，拒绝修改运行文件')
     marker = target / '.upgrade-in-progress'
 
     def begin_maintenance():
         if marker.is_symlink() or (marker.exists() and not marker.is_file()):
             raise ValueError('升级维护标记不安全')
         marker.touch(mode=0o600, exist_ok=True)
+        with marker.open('rb') as f:
+            os.fsync(f.fileno())
+        sync_directory(target)
 
 
     def recover() -> None:
@@ -179,17 +204,21 @@ def main() -> None:
             if pending.exists():
                 shutil.rmtree(pending)
             shutil.copytree(backup / part, pending)
+            sync_tree(pending)
+            sync_directory(target)
             existing = target / part
             if existing.is_symlink():
                 raise ValueError('运行目录不能是符号链接')
             if existing.exists():
                 shutil.rmtree(existing)
             os.replace(pending, existing)
+            sync_directory(target)
         if inventory(target) != record['old_inventory']:
             raise ValueError('回滚后的运行文件校验失败')
         record['phase'] = 'rolled_back'
         write_json(journal, record)
         marker.unlink(missing_ok=True)
+        sync_directory(target)
 
     if args.action == 'rollback':
         recover()
@@ -229,12 +258,15 @@ def main() -> None:
                 displaced = stage / ('old-' + part)
                 os.replace(target / part, displaced)
                 os.replace(stage / part, target / part)
+                sync_directory(stage)
+                sync_directory(target)
             if inventory(target) != new:
                 raise ValueError('升级后的文件校验失败')
             smoke(target, workspace)
             record['phase'] = 'complete'
             write_json(journal, record)
             marker.unlink(missing_ok=True)
+            sync_directory(target)
         except BaseException:
             recover()
             raise
@@ -250,4 +282,6 @@ if __name__ == '__main__':
         main()
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as exc:
         print(f'[capbox] 升级失败: {exc}', file=sys.stderr)
+        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+            print(exc.stderr[-2000:], file=sys.stderr)
         sys.exit(1)
