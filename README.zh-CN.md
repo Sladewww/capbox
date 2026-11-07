@@ -2,115 +2,117 @@
 
 [English](README.md) | 中文
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Bash](https://img.shields.io/badge/bash-4.4%2B-green.svg)](bin/capbox)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#依赖)
-[![Tests](https://img.shields.io/badge/tests-T01–T41-informational.svg)](test/run.sh)
-[![CI](https://github.com/Sladewww/capbox/actions/workflows/ci.yml/badge.svg)](https://github.com/Sladewww/capbox/actions/workflows/ci.yml)
+使用 bubblewrap 和用户命名空间，在独立项目目录中提供持久化 Linux 环境，供 coding agent 或可信开发任务装包、运行命令和服务。
 
-项目目录里的一台 root Linux。不用 Docker，不用 sudo。`capbox init` 之后容器里是 uid 0，全部状态就是 `.capbox/`。
+<!-- generated:version -->
+开发中的 CLI：**0.3.6**。正式版本与迁移说明见 [Releases](https://github.com/Sladewww/capbox/releases)。
+<!-- /generated:version -->
 
-AI agent 经常要装系统包、改 `/etc`、编译进 `/usr`。直接在宿主做，要么没权限，要么弄脏系统。外层沙箱里又常常没有 Docker。CapBox 用 [bubblewrap](https://github.com/containers/bubblewrap) 和 user namespace：`os/<distro>/` 是容器的 `/`，工作区挂到 `/workspace`。
+guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项目的可写视图，guest 能修改项目代码。无关密钥留在工作区外，宿主执行修改后的代码前仍需审查。[安全模型](SECURITY.md)。
 
-- 容器里的 root 不是宿主 root。写 `/` 写的是 `.capbox/os/<distro>/`。
-- 每个项目一份 `.capbox/`。Alpine 3.24.4 或 Ubuntu，官方 tarball 按 SHA256 钉扎，x86_64 与 aarch64。
-- `capbox init --agent` 设置 `untrusted`、`CAPBOX_NET=none`、`CAPBOX_IDMAP=off` 和 `CAPBOX_RESOURCES_MODE=require`。`pkg install` 与 `pkg update` 仍出网；其它出网必须在当次命令上写 `--net`。
-- `.capbox/logs/`（含 `audit.jsonl`）对 guest 只读。
+## 宿主要求
 
-这是共享内核，不是虚拟机。
+Linux、Bash 4.4+、bubblewrap **≥ 0.12.0**。安装后检查 `bwrap --version`；发行版自带的旧版本可能不满足要求。宿主还必须允许相应用户命名空间。
 
-## 快速开始
+Alpine 包安装脚本需要宿主 Python 3 和 libseccomp。升级、严格包锁及部分辅助功能也使用 Python 3。Landlock 和身份辅助程序需要可用的 `gcc -static` 工具链。`doctor` 用来核对实际能力。
 
-需要 Linux 和 `bwrap` **>= 0.12.0**。Alpine 的 `pkg install/remove` 还需要宿主 `python3` 与 `libseccomp`，以兼容宿主禁止匿名脚本执行的策略。更旧的版本直接拒绝（退出码 6），`compat` 也不豁免。
+普通运行无需宿主 root；磁盘配额另需宿主 loop/mount 授权，仅覆盖指定 guest 数据目录。CPU、内存和进程限额依赖 cgroup 委派；`require` 会拒绝无法兑现的已配置额度。
+
+## 安装模板
+
+模板应在所有业务工作区之外。下面目标不存在时执行：
 
 ```sh
-git clone https://github.com/Sladewww/capbox.git ~/.agents/capbox
-ln -s ~/.agents/capbox/bin/capbox ~/.local/bin/capbox
-
-cd /path/to/your-project
-capbox init --distro alpine          # 或 capbox init --agent --distro alpine
-capbox doctor
-capbox exec -- id -u                 # 0
+mkdir -p "$HOME/.local/share"
+git clone https://github.com/Sladewww/capbox.git "$HOME/.local/share/capbox"
+export PATH="$HOME/.local/share/capbox/bin:$PATH"
+capbox version
+bwrap --version
 ```
 
-不要把工作区设成 `$HOME` 或 `/`。整棵树会以读写方式挂到 `/workspace`。
+需要跨终端保留时，将 PATH 设置加入自己的 shell 配置。安装正式版时选择对应 tag 或发行包，并校验提供的 SHA256。
 
-要让进程活过本次调用：优先 `capbox up --systemd`。没有 systemd --user 时，用会活下去的后台任务跑 `capbox up`，然后 `capbox exec --daemon -- …`。
+## 分开选择运行预设
 
-## 文档
+在独立项目目录执行，不能把 `$HOME` 或 `/` 当工作区。
 
-| | |
-|---|---|
-| [Wiki](https://github.com/Sladewww/capbox/wiki) | 运维手册：服务、网络、备份 |
-| [快速开始](https://github.com/Sladewww/capbox/wiki/快速开始) | bootstrap、init、doctor、第一个 service |
-| [SECURITY.md](SECURITY.md) | 威胁模型 |
-| [skill/SKILL.md](skill/SKILL.md) | Agent skill |
-| [AGENTS.md](AGENTS.md) | 在本仓库里给 agent 的说明 |
+**Agent / 不可信任务：**
 
-## 网络
+```sh
+cd /path/to/project
+capbox init --agent --distro alpine
+capbox doctor
+capbox exec -- id -u
+```
+
+`--agent` 设置 `untrusted`、`NET=none`、`IDMAP=off`、`RESOURCES_MODE=require`。预设不会替你选择资源数值。宿主具备 cgroup 委派后，按任务设置额度并核实：
+
+```sh
+capbox config set MEMORY_MAX 512M
+capbox config set CPU_MAX 50%
+capbox config set PIDS_MAX 256
+capbox doctor
+capbox metrics --json
+```
+
+**可信开发，需要共享宿主网络：**
+
+```sh
+capbox init --trusted --distro alpine
+capbox pkg install curl
+capbox exec -- curl --version
+```
+
+`--trusted` 设置 `compat/open`、自动 ID 映射及资源模式 `warn`。两个显式预设都会覆盖各自的四项设置。裸 `init` 保留已有配置；全新裸初始化沿用历史 compat/open 默认值。需要 Ubuntu 时使用 `--distro ubuntu`。
+
+## 网络、服务与状态
 
 | 模式 | 行为 |
 |---|---|
-| `open`（别名 `host`） | 共享宿主网络。人在键盘前时的默认。 |
-| `none` | `bwrap --unshare-net`。容器内无网络。 |
-| `restricted` | `--unshare-net` 加域名 allowlist 的 HTTP 代理。原始 TCP/UDP 没有路由。不假装 bwrap 能按域名过滤。 |
+| `none` | 独立网络命名空间，无通用网络访问 |
+| `restricted` | 独立网络空间加 HTTP(S) 白名单代理，需要 `NET_ALLOW` |
+| `open`（`host`） | 共享宿主网络 |
 
-未知取值直接失败，不会当成 `open`。名字解析到回环、链路本地（含云元数据）或私网地址时拒绝，除非那个地址自己写在 allowlist 里。
+`pkg install/update` 即使在 none 下也可为本次装包出网。Alpine 优先使用 `capbox pkg`，直接运行 apk 不经过安装脚本兼容封装。其它命令的出网按次声明，例如 `capbox exec --net restricted -- CMD`。
 
-语法和 agent 预设见 [网络与端口](https://github.com/Sladewww/capbox/wiki/网络与端口)。
+服务定义为 `.capbox/services/NAME.env`，`service start` 无需先 `up`。日志使用 `service logs NAME`。rootfs、配置、业务数据在项目中；宿主启动器、进程身份、过滤器和辅助程序在工作区外的私有 `0700` 目录。
 
-## 配方
+需要跨调用共享整机时用 `capbox up --systemd`，随后 `capbox exec --daemon -- CMD`。无 systemd 用户总线时，使用能够跨调用存活的后台托管。
 
-项目根的 `capbox.recipe` 是 `KEY=value`，不会被 source。
-
-```sh
-capbox recipe apply    # 写配置，按需 init，再 pkg install
-capbox recipe show
-```
-
-## 资源限额
-
-`CAPBOX_MEMORY_MAX`、`CAPBOX_CPU_MAX`、`CAPBOX_PIDS_MAX`、`CAPBOX_DISK_MAX` 优先走 cgroup v2。`CAPBOX_RESOURCES_MODE=warn`（默认）在限额落不下去时警告。`require` 失败即关闭。`DISK_MAX` 只覆盖 `/var/lib/capbox-data`，要宿主能挂载，不是 rootless。细节见 [资源限额](https://github.com/Sladewww/capbox/wiki/资源限额)。
-
-`CAPBOX_SECURITY_PROFILE` 为 `compat`（默认）、`untrusted` 或 `strict`。`CAPBOX_LANDLOCK=on|off`；不写时只有 `strict` 开启。Landlock 在挂载之后限制路径，不过滤 TCP 端口。
-
-## 命令
-
-| 命令 | |
-|---|---|
-| `init [--distro D] [--agent]` | 安装 rootfs。`--agent` 写 untrusted + `NET=none`。 |
-| `exec [--daemon] [--net MODE] [--timeout N] -- CMD` | 在容器内执行。 |
-| `pkg install`、`update`、`remove`、`list` | apk / apt。会话是 `none` 时，install 和 update 仍会出网。 |
-| `up [--systemd] [--net MODE]` / `down` | 常驻容器。 |
-| `service start`、`stop`、`status`、`logs`、`list` | `.capbox/services/*.env` 里的服务。 |
-| `doctor` | 有 FAIL 则退出 1。bwrap 低于 0.12.0 时退出 6。放行也不会变成 PASS。 |
-
-退出码：`0` 成功，`1` 错误，`2` 用法，`3` 常驻容器未运行，`4` 没有 rootfs，`5` 缺依赖，`6` bwrap 基线，`124` 超时。其余是容器内退出码。
-
-## 服务
-
-`.capbox/services/<name>.env` 是 `KEY=value`，不会被 source。宿主服务控制文件保存在工作区外的私有目录；日志用 `capbox service logs NAME` 读取。`CMD` 是要执行的命令，不是环境变量。`USER`、`CWD` 和其它键在 `--clearenv` 之后 `--setenv`。`service start` 是独立的 bwrap，不依赖 `capbox up`。
-
-见 [服务运维](https://github.com/Sladewww/capbox/wiki/服务运维)。
-
-## 边界
-
-- 工作区是信任边界。不要把 `$HOME` 当工作区。
-- `bin/`、`lib/`、`config.env` 对 guest 只读，避免容器改写宿主下次会执行的 CLI。
-- `logs/` 对 guest 只读。`FS_BINDS` 不能挂到这个目录上。`audit.jsonl` 是符号链接或目录时拒绝启动。
-- `capbox cp` 拒绝用 `..` 逃出 rootfs。
-- 常见前提是：宿主自己已经在沙箱里。
-
-## 测试
+## 配置校验与包锁
 
 ```sh
-bash -n bin/capbox lib/*.sh lib/guest/*.sh
-bash test/selftest/run-selftest.sh
-./test/run.sh
+capbox recipe check capbox.recipe
+capbox recipe apply capbox.recipe
+capbox image lock save
+capbox image lock verify
+capbox recipe apply --locked /path/to/package.lock capbox.recipe
 ```
 
-CI：[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+配方中的未知键、重复键及无效行会报错；全部配置值校验通过后才加锁一次写回，并保留配置文件 inode。后续 rootfs 初始化和装包仍可能失败，它们不属于可统一回滚的配置提交。
 
-## License
+包锁记录发行版、架构和完整已安装版本集合。精确版本不可用或恢复后集合不符时失败，不替换成其它版本。长期复现还需要保留 rootfs 镜像或软件源快照。[包锁说明](docs/package-locks.md)。
 
-MIT — 见 [LICENSE](LICENSE)。
+## 更新已有项目
+
+先用旧 CLI 停止全部 service、daemon 和其它 exec。再从新模板调用：
+
+```sh
+"$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade check --from "$HOME/.local/share/capbox"
+"$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade apply --from "$HOME/.local/share/capbox"
+"$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade rollback
+```
+
+升级会比较运行文件、验证整套 bin/lib、保存私有备份并在替换失败后恢复；中断后普通命令拒绝启动，先回滚恢复。操作需要停机维护，无法协调仍在并发执行的旧版 CLI。[升级说明](docs/upgrades.md)。
+
+## 文档与验证
+
+- [CLI 参考](docs/cli-reference.md) 和 [配置默认值](docs/configuration.md)：自动从运行代码生成，CI 检查漂移。
+- [架构](docs/architecture.md) · [测试范围](docs/testing.md) · [贡献指南](CONTRIBUTING.md)。
+- [Wiki](https://github.com/Sladewww/capbox/wiki)：按版本维护的运维与应用手册。
+
+<!-- generated:tests -->
+验收用例：**41**（T01–T41）。框架自测验证测试工具；真实 guest 与宿主边界回归单独运行。
+<!-- /generated:tests -->
+
+MIT — [LICENSE](LICENSE)。

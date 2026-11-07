@@ -31,12 +31,17 @@ assert_rc 0 "recipe show 退出 0"
 assert_out_contains "MEMORY_MAX=128M" "show 含配方内容"
 
 run_cmd "$CAPBOX_BIN" recipe apply "$recipe"
-assert_rc 0 "recipe apply 退出 0"
+assert_rc 2 "无效 shell 行使 recipe apply 失败"
 if [ -e "$pwn" ]; then
   _fail "recipe 中的 shell 片段被执行（应只做 KEY=value 解析）"
 else
   _ok "recipe 恶意 shell 未被执行"
 fi
+
+# Remove the invalid line before applying the valid recipe.
+sed '/^\$(touch /d' "$recipe" >"$recipe.valid"
+run_cmd "$CAPBOX_BIN" recipe apply "$recipe.valid"
+assert_rc 0 "完整合法 recipe 才提交配置"
 
 run_cmd "$CAPBOX_BIN" config get CAPBOX_MEMORY_MAX
 assert_rc 0 "apply 后可读取 MEMORY_MAX"

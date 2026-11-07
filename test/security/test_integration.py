@@ -66,6 +66,14 @@ class SandboxIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "protected")
 
+    def test_upgrade_refuses_running_service(self):
+        self.service('upgrade-guard', 'CMD=sleep 60\n')
+        self.run_cli('service', 'start', 'upgrade-guard', check=True)
+        result = self.run_cli('upgrade', 'apply', '--from', str(REPO))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('service stop upgrade-guard', result.stderr)
+        self.assertIn('state=running', self.run_cli('service', 'status', 'upgrade-guard').stdout)
+
     def test_seccomp_service_survives_restart(self):
         self.service("restart", "CMD=sh -c 'echo RUN; sleep 1'\n"
                      "RESTART=always\nRESTART_MAX=10\nRESTART_BACKOFF=0\n")
@@ -157,6 +165,9 @@ class SandboxIntegrationTests(unittest.TestCase):
             result = self.run_cli("exec", "--daemon", "--", "id", "-u")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "0")
+            refusal = self.run_cli('upgrade', 'apply', '--from', str(REPO))
+            self.assertNotEqual(refusal.returncode, 0)
+            self.assertIn('capbox down', refusal.stderr)
             result = self.run_cli("down")
             self.assertEqual(result.returncode, 0, result.stderr)
             proc.wait(timeout=15)

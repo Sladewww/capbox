@@ -46,8 +46,14 @@ jobs:
       - name: Framework selftest (fake CLI)
         run: ./test/selftest/run-selftest.sh
 
-      - name: Host boundary regressions
-        run: python3 test/security/test_host_boundary.py
+      - name: Host boundary and engineering regressions
+        run: |
+          python3 test/security/test_host_boundary.py
+          python3 test/security/test_configuration.py
+          python3 test/security/test_upgrade.py
+          python3 test/security/test_package_lock.py
+      - name: Generated documentation and examples
+        run: python3 tools/generate-docs.py --check
 
       - name: ShellCheck errors
         run: |
@@ -64,47 +70,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install bubblewrap >= 0.12.0
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates gcc
-          ver="$(bwrap --version 2>/dev/null | head -n 1 || true)"
-          echo "distro bwrap: ${ver:-missing} ($(command -v bwrap || echo none))"
-          ok=0
-          if [[ "$ver" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-            maj=$((10#${BASH_REMATCH[1]}))
-            min=$((10#${BASH_REMATCH[2]}))
-            if (( maj > 0 || min >= 12 )); then
-              ok=1
-            fi
-          fi
-          if (( ok == 1 )); then
-            echo "bwrap already >= 0.12.0"
-            exit 0
-          fi
-          echo "distro bwrap is below 0.12.0; building upstream 0.13.1"
-          sudo apt-get install -y -qq meson ninja-build gcc pkg-config libcap-dev python3
-          work="${RUNNER_TEMP:-/tmp}/bubblewrap-build"
-          rm -rf "$work"
-          mkdir -p "$work"
-          tarball="$work/bubblewrap-0.13.1.tar.xz"
-          curl -fsSL -o "$tarball" \
-            https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz
-          echo "0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  $tarball" | sha256sum -c -
-          tar -xJf "$tarball" -C "$work"
-          meson setup "$work/bubblewrap-0.13.1/build" "$work/bubblewrap-0.13.1" -Dselinux=disabled
-          ninja -C "$work/bubblewrap-0.13.1/build" bwrap
-          dest="$(command -v bwrap || true)"
-          if [[ -z "$dest" ]]; then
-            dest=/usr/bin/bwrap
-          fi
-          sudo install -m 0755 "$work/bubblewrap-0.13.1/build/bwrap" "$dest"
-          if [[ "$dest" != /usr/bin/bwrap ]]; then
-            sudo install -m 0755 "$work/bubblewrap-0.13.1/build/bwrap" /usr/bin/bwrap
-          fi
-          hash -r
-          echo "installed: $(command -v bwrap): $(bwrap --version)"
+      - uses: ./.github/actions/setup-runtime
 
       - name: Enable unprivileged userns (best effort)
         run: |
@@ -124,7 +90,7 @@ jobs:
         run: |
           # Repo itself acts as CapBox dir when not named .capbox
           ./bin/capbox init --distro alpine
-          ./bin/capbox doctor || true
+          ./bin/capbox doctor
 
       - name: Run acceptance (skip slow / daemon)
         env:
@@ -160,3 +126,70 @@ jobs:
           name: capbox-test-tmp
           path: test/tmp/
           if-no-files-found: ignore
+
+  compatibility:
+    name: Compatibility (${{ matrix.runner }}, ${{ matrix.distro }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+        distro: [alpine, ubuntu]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-runtime
+      - name: Real guest, service, profile and package-lock smoke tests
+        env:
+          CAPBOX_SMOKE_DISTRO: ${{ matrix.distro }}
+        run: python3 test/compatibility/runtime_smoke.py
+
+  multi-uid:
+    name: Multi-UID mapping (required)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-runtime
+      - name: Delegate a subordinate range to this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_user="$(id -un)"
+          for range_file in /etc/subuid /etc/subgid; do
+            if ! grep -q "^${runner_user}:" "$range_file"; then
+              next_range="$(awk -F: 'BEGIN {end=100000} {if ($2+$3>end) end=$2+$3} END {print end+65536}' "$range_file")"
+              printf '%s:%s:65536\n' "$runner_user" "$next_range" | sudo tee -a "$range_file"
+            fi
+          done
+      - name: Require successful mapping, chown, exec and service identity
+        run: python3 test/compatibility/runtime_smoke.py --require-multi
+
+  default-policy:
+    name: Default host policy
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-runtime
+      - name: Verify execution or explicit refusal under unchanged host policy
+        run: python3 test/compatibility/default_policy.py
+
+  compatibility-gate:
+    name: Compatibility coverage
+    if: always()
+    needs: [compatibility, multi-uid, default-policy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every compatibility job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          assert all(job['result'] == 'success' for job in results.values()), results
+          PYTHON

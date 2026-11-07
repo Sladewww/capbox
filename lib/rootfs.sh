@@ -515,7 +515,7 @@ run_bootstrap() {
   guest_root="$(_guest_workspace_path "$CAPBOX_DIR")"
   guest_script="$guest_root/lib/guest/bootstrap.sh"
   local rc=0
-  exec_in_guest "sh $(_shq "$guest_script")" /workspace 300
+  exec_in_guest "CAPBOX_VERSION=$(_shq "$CAPBOX_VERSION") sh $(_shq "$guest_script")" /workspace 300
   rc=$?
   if (( rc != 0 )); then
     log_warn "bootstrap 返回 $rc（不致命，rootfs 仍可使用）"
@@ -532,6 +532,7 @@ cmd_init() {
   local force=0
   local from=""
   local agent=0
+  local trusted=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -545,6 +546,10 @@ cmd_init() {
         ;;
       --force)
         force=1
+        shift
+        ;;
+      --trusted)
+        trusted=1
         shift
         ;;
       --agent)
@@ -561,7 +566,7 @@ cmd_init() {
         ;;
       -h | --help)
         cat <<'EOF'
-用法: capbox init [--distro alpine|ubuntu] [--force] [--from URL|本地路径] [--agent]
+用法: capbox init [--distro alpine|ubuntu] [--force] [--from URL|本地路径] [--agent|--trusted]
 
   若当前工作区还没有完整的 .capbox/，会先从已安装的 CapBox 模板脚手架
   bin/、lib/、skill/ 到 $PWD/.capbox（不覆盖已有文件，不复制 cache/os/run）。
@@ -569,7 +574,9 @@ cmd_init() {
   --distro D   选择发行版（默认取 CAPBOX_DISTRO，初始 alpine）
   --force      忽略缓存重新下载，并覆盖已有 rootfs
   --from P     指定镜像来源：http(s) URL 或本地 tarball 路径
-  --agent      给 coding agent 的预设：SECURITY_PROFILE=untrusted，NET=none
+  --trusted    可信开发预设：compat + open + IDMAP=auto + RESOURCES_MODE=warn
+  --agent      agent 预设：untrusted + none + IDMAP=off + RESOURCES_MODE=require
+               MEMORY_MAX/CPU_MAX/PIDS_MAX 需按任务单独配置；空值表示未设置额度。
                pkg install / pkg update 仍出网。其它出网在当次命令声明：
                exec|shell|up --net restricted（需 CAPBOX_NET_ALLOW）或 --net open
 EOF
@@ -581,6 +588,8 @@ EOF
     esac
   done
 
+  (( agent + trusted <= 1 )) || die 2 '--agent 与 --trusted 不能同时使用'
+
   case "$distro" in
     alpine | ubuntu) ;;
     *) die 2 "不支持的发行版: $distro（支持: alpine / ubuntu）" ;;
@@ -591,6 +600,9 @@ EOF
     capbox_scaffold_project || return 1
   fi
 
+  if (( trusted == 1 )); then
+    config_apply SECURITY_PROFILE compat NET open IDMAP auto RESOURCES_MODE warn || return $?
+  fi
   need_cmd tar
   with_lock init -- _do_init "$distro" "$force" "$from" "$agent"
 }
@@ -623,10 +635,7 @@ EOF
 }
 
 _apply_agent_preset() {
-  config_set SECURITY_PROFILE untrusted || return $?
-  config_set NET none || return $?
-  config_set IDMAP off || return $?
-  config_set RESOURCES_MODE require || return $?
+  config_apply SECURITY_PROFILE untrusted NET none IDMAP off RESOURCES_MODE require || return $?
   log_info "agent 预设: SECURITY_PROFILE=untrusted NET=none IDMAP=off RESOURCES_MODE=require"
   log_info "资源限额需另设 MEMORY_MAX/CPU_MAX/PIDS_MAX；配置的限额无法兑现时拒绝启动"
   log_info "untrusted 会遮盖工作区内的 .ssh .gnupg .aws .azure .kube .docker"

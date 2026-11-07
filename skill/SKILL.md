@@ -10,7 +10,7 @@ description: 工作区内持久化的 root Linux 系统，用 capbox 命令驱�
 人工调试可以不带 `--agent`（默认 `compat` + `NET=open`，全 capability、无 seccomp）。不要用默认档跑来路不明的命令。
 
 入口：把 CapBox 装到 PATH（一份模板），或用项目内 `.capbox/bin/capbox`。
-**状态永远在当前会话/项目目录的 `.capbox/`**，不是 PATH 上那份模板。
+**项目数据在当前会话/项目的 `.capbox/`**；宿主控制文件在工作区外，升级备份在持久宿主私有状态目录。PATH 上的模板负责为各项目提供运行文件。
 
 - 会话里还没有 `.capbox` 时：`capbox init --agent`（脚手架到当前目录的 `.capbox/`，下载 rootfs，并写成 untrusted + NET=none）。
 - 也可先 `capbox bootstrap` 只脚手架、不下载。
@@ -68,7 +68,7 @@ capbox init --agent --distro alpine
 capbox doctor
 ```
 
-`init --agent` 会脚手架（如需）、下载 rootfs，并写入 `CAPBOX_SECURITY_PROFILE=untrusted`、`CAPBOX_NET=none`。
+`init --agent` 会脚手架（如需）、下载 rootfs，并写入 `untrusted`、`NET=none`、`IDMAP=off`、`RESOURCES_MODE=require`。内存、CPU、进程额度需单独设置，并用 doctor/metrics 核对兑现。
 `pkg install` 和 `pkg update` 会出网。`exec`、`shell`、`up`、`service` 默认没有网。需要出网时在当次命令声明，不根据 `pip`、`npm`、`git` 这些名字自动打开：
 
 ```sh
@@ -79,7 +79,7 @@ capbox up --net restricted
 
 `--net open` 是当次共享宿主网络。`--net restricted` 用上面的 allowlist：没写端口只放行 80/443；子域要显式写 `*.example.com`；任意端口加 `:*`。显式网段放行后，端口规则仍然生效。解析到非 global 地址会被拒绝：回环、链路本地、私网、CGNAT（`100.64.0.0/10`）、IPv4-mapped。那个地址自己在 allowlist 里才放行。原始 TCP 没有路由，只有走注入的 `http_proxy` 才能出去。`--net` 不写进 config.env。`shell --daemon` 改不了已经起来的守护容器的网络。
 
-人工调试可以 `capbox init --distro alpine`（默认 `compat` + `NET=open`）。不要把这个默认档当成 agent 的档。
+可信的人工调试可用 `capbox init --trusted --distro alpine`（`compat` + `NET=open`）。不要把这个默认档当成 agent 的档。
 
 `init` 会：① 若缺 `.capbox/bin`/`lib`，从 PATH 上的 CapBox 模板脚手架到 `$PWD/.capbox`；② 下载并解包 rootfs。
 不要先手动 `git clone` 进项目——那只是可选的开发/离线安装方式。
@@ -216,3 +216,9 @@ capbox cp ./data.csv guest:/root/data.csv
 
 （路径相对本 skill 目录。）
 
+
+## 运行文件升级与配置检查
+
+升级项目之前，先用旧 CLI 停止所有 service/daemon 和其它 exec；再从完整且位于工作区外的新模板调用 `capbox --root PROJECT upgrade check|apply --from TEMPLATE`。不要只更新模板后假定项目副本已升级。apply 会成套替换 bin/lib（包含自定义修改）；先检查差异。失败或中断后可从完整模板运行 `upgrade rollback`，备份在持久宿主状态目录。rootfs 与业务数据需单独迁移。
+
+使用 `recipe check` 校验配方。未知键、重复键、无效行或非法值会导致失败，校验失败不写回部分配置。严格包锁用 `image lock save|verify|restore`；`recipe apply --locked FILE` 按精确版本重建并校验。上游版本不可用时明确失败，不做无版本回退。

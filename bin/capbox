@@ -159,6 +159,12 @@ fi
 unset _capbox_force_local_state _ws _want
 unset _capbox_self _capbox_bin_dir
 
+# Interrupted upgrades must be recovered through a complete external template.
+if [[ -e "$CAPBOX_DIR/.upgrade-in-progress" && "${1:-}" != upgrade ]]; then
+  printf '[capbox] 错误: 运行文件升级未完成；请用完整模板运行 upgrade rollback\n' >&2
+  exit 1
+fi
+
 # ---------- 1. source 各库（契约 §4 固定顺序，缺文件则跳过） ------------------
 # 优先从「当前 CAPBOX_DIR」加载；若该树尚不完整（仅有空 .capbox），回退到 CLI 自带的 lib。
 _capbox_lib_dir="$CAPBOX_DIR/lib"
@@ -168,37 +174,24 @@ if [ ! -f "$_capbox_lib_dir/common.sh" ]; then
   fi
 fi
 
+if [[ "${1:-}" == upgrade ]]; then
+  _capbox_lib_dir="$(cd -- "$_CAPBOX_CLI_BIN_DIR/../lib" && pwd)"
+fi
+
 # shellcheck source=/dev/null
 source "$_capbox_lib_dir/common.sh" || {
   printf '[capbox] 错误: 无法加载 %s/common.sh\n' "$_capbox_lib_dir" >&2
   exit 1
 }
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/rootfs.sh" ] && source "$_capbox_lib_dir/rootfs.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/sandbox.sh" ] && source "$_capbox_lib_dir/sandbox.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/daemon.sh" ] && source "$_capbox_lib_dir/daemon.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/net.sh" ] && source "$_capbox_lib_dir/net.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/resources.sh" ] && source "$_capbox_lib_dir/resources.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/recipe.sh" ] && source "$_capbox_lib_dir/recipe.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/idmap.sh" ] && source "$_capbox_lib_dir/idmap.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/service.sh" ] && source "$_capbox_lib_dir/service.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/audit.sh" ] && source "$_capbox_lib_dir/audit.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/security.sh" ] && source "$_capbox_lib_dir/security.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/landlock.sh" ] && source "$_capbox_lib_dir/landlock.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/fsguard.sh" ] && source "$_capbox_lib_dir/fsguard.sh"
-# shellcheck source=/dev/null
-[ -f "$_capbox_lib_dir/image.sh" ] && source "$_capbox_lib_dir/image.sh"
+for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade; do
+  if [[ ! -f "$_capbox_lib_dir/$_capbox_module.sh" ]]; then
+    printf '[capbox] 错误: 安装不完整，缺少 %s/%s.sh\n' "$_capbox_lib_dir" "$_capbox_module" >&2
+    exit 5
+  fi
+  # shellcheck source=/dev/null
+  source "$_capbox_lib_dir/$_capbox_module.sh" || exit $?
+done
+unset _capbox_module
 unset _capbox_lib_dir
 
 # ---------- 2. 帮助 -----------------------------------------------------------
@@ -215,8 +208,10 @@ CapBox —— 工作区内持久化的 root Linux 容器
   --allow-old-bwrap                 仅本次接受低于 0.12.0 的 bwrap（不写配置，写入审计）
 
 系统生命周期
+  upgrade check|apply --from TEMPLATE / upgrade rollback
+                                    比较/更新项目运行文件；私有备份、失败回退
   bootstrap                         在当前工作区脚手架 .capbox/（从 PATH 上的模板复制）
-  init [--distro alpine|ubuntu] [--force] [--from URL|路径]
+  init [--distro alpine|ubuntu] [--agent|--trusted] [--force] [--from URL|路径]
                                     脚手架（如需）+ 下载解包 rootfs，注入镜像源，跑首次引导
   status [--json]                   查看 distro / rootfs / daemon / 网络状态
   doctor                            逐项自检（bwrap、userns 全权限、rootfs、镜像源…）
@@ -231,8 +226,8 @@ CapBox —— 工作区内持久化的 root Linux 容器
   ls [PATH]                         列出容器内目录（默认 /workspace）
   ps                                列出容器内进程
 
-常驻容器（必须用 DSH 后台任务运行 capbox up，前台阻塞）
-  up                                启动守护容器
+常驻容器（优先 systemd 用户服务；普通 up 需要外层后台托管）
+  up [--systemd]                    启动守护容器
   down                              停止守护容器
   logs [-f] [-n N]                  查看守护容器日志
 
@@ -244,9 +239,9 @@ CapBox —— 工作区内持久化的 root Linux 容器
 信息与配置
   distros                           列出支持的发行版与镜像 URL
   config get|set|list               读取 / 修改 config.env
-  recipe apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
+  recipe check|apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
   snapshot create|list|restore|rm   rootfs 快照 / 回滚
-  image export|import|lock|cache    镜像导出导入、包锁、离线缓存
+  image export|import|lock|cache    镜像与离线缓存；lock save|verify|restore
   audit tail|path|clear             JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
@@ -268,12 +263,12 @@ CapBox —— 工作区内持久化的 root Linux 容器
 
 常用示例
   capbox bootstrap                       # 仅在当前目录生成 .capbox/
-  capbox init --distro alpine            # 脚手架 + 首次准备（约 3.4MB 镜像）
+  capbox init --agent --distro alpine    # agent：untrusted/none，额度需另设
+  capbox init --trusted --distro alpine  # 可信开发：compat/open
   capbox recipe apply                    # 按 capbox.recipe 写配置/init/装包
   capbox exec --net none -- id -u        # 无网络一次性执行
   capbox exec -- id -u                   # 容器内应为 0
-  capbox exec -- sh -c 'apk add --no-cache curl'
-  capbox pkg install curl                # 等价且自动处理镜像源
+  capbox pkg install curl                # 镜像源及 APK 安装脚本兼容封装
   echo 'echo hi' | capbox shell          # 无 tty 时可用
 
 退出码
@@ -287,10 +282,11 @@ CapBox —— 工作区内持久化的 root Linux 容器
   124 容器内命令超时
 
 要点
-  * 容器内默认 uid 0 且拥有全量 capability，可 mount / 装包 / 起服务。
+  * compat 档默认 uid 0 + 全量 capability；agent 入口使用显式 --agent 预设。
+  * --agent 的 require 仅约束已配置限额；空 MEMORY_MAX/CPU_MAX/PIDS_MAX 表示未设额度。
   * CAPBOX_IDMAP=auto 时尝试 newuidmap 多 UID 映射；失败则诚实回退单 UID（见 doctor）。
-  * 所有状态持久化在 .capbox/ 内；容器内 /workspace 就是宿主工作区。
-  * 常驻容器不能 nohup & 启动（DSH 会杀进程树），只能用后台任务跑 capbox up。
+  * rootfs/配置在项目 .capbox；宿主控制文件在工作区外的 0700 私有目录。
+  * 常驻环境使用 up --systemd，或能跨调用存活的后台托管；外层 die-with-parent 会影响 nohup。
 EOF
 }
 
@@ -370,7 +366,7 @@ capbox_main() {
 
   # 危险操作：禁止把 $HOME 或 / 当成工作区 RW bind 进容器
   case "$cmd" in
-    bootstrap | init | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
+    bootstrap | init | upgrade | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
       if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
         _capbox_require_safe_workspace || return 1
       fi
@@ -382,6 +378,9 @@ capbox_main() {
     bootstrap)
       _require_decl cmd_bootstrap bootstrap || return 1
       cmd_bootstrap "$@"
+      ;;
+    upgrade)
+      cmd_upgrade "$@"
       ;;
     init)
       _require_decl cmd_init init || return 1

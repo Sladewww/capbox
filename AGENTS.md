@@ -2,8 +2,8 @@
 
 ## Layout
 
-1. **Template (once per machine)**  
-   `~/.agents/capbox` — full tree (`bin/`, `lib/`, `skill/`).  
+1. **Template (once per machine)**
+   `~/.agents/capbox` — full tree (`bin/`, `lib/`, `skill/`).
    Symlink the skill into your agent skills dir:
    ```sh
    ln -s ~/.agents/capbox/skill ~/.agents/skills/capbox
@@ -11,8 +11,8 @@
    ```
    Put `~/.agents/capbox/bin` (or a link to `bin/capbox`) on `PATH`.
 
-2. **Per session / project**  
-   State lives in **`$PWD/.capbox/`** (rootfs, `config.env`, daemon).  
+2. **Per session / project**
+   Project data lives in **`$PWD/.capbox/`** (rootfs, config, guest IPC). Host control files live outside the workspace; persistent upgrade backups use XDG_STATE_HOME.
    First use in an empty project:
    ```sh
    capbox bootstrap          # copy template → ./.capbox/ (no download)
@@ -22,7 +22,7 @@
 
 ## When to use CapBox
 
-Use for guest root needs: install system packages, edit `/etc`, mount, long-running services.  
+Use for guest root needs: install system packages, edit `/etc`, mount, long-running services.
 Prefer host tools for ordinary file edits. Daemon: run `capbox up` in a job that outlives the tool call (`die-with-parent` kills `nohup &`).
 
 ## Safety rules (do not weaken)
@@ -57,7 +57,7 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 ## Network / recipe / resources
 
 - `CAPBOX_NET=none|restricted|open`（`host`=`open`）。未知值失败，不回退 open。`restricted` 需 `CAPBOX_NET_ALLOW` + python3/nsenter；原始网络被 unshare，仅代理出站。oneshot 与 `capbox up` 都挂 allowlist 桥。无端口=仅 80/443；子域写 `*.host`。
-- `capbox init --agent`：`untrusted` + `NET=none`。`pkg install` / `pkg update` 仍出网；其它出网要当次 `--net`。人类默认仍是 `compat` + `open`。
+- `capbox init --agent`：`untrusted` + `NET=none` + `IDMAP=off` + `RESOURCES_MODE=require`（额度需另设）。`pkg install` / `pkg update` 仍出网；其它出网要当次 `--net`。人类默认仍是 `compat` + `open`。
 - `capbox up --systemd`：交给 systemd --user。没有 user bus 时才依赖外层后台任务。`--die-with-parent` 会杀掉 `nohup`/`setsid`。
 - `capbox recipe apply`：KEY=value only，never source.
 - Resource limits prefer cgroup v2 (`CAPBOX_CGROUP_ROOT` optional strict parent); otherwise WARN (no fake enforcement).
@@ -83,4 +83,11 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 
 ## Environment isolation
 
-- All bwrap launches use unconditional `--clearenv` then a minimal `--setenv` whitelist (`lib/common.sh` `build_bwrap_args`, `lib/daemon.sh` fallback). See `SECURITY.md`.
+- All bwrap launches use unconditional `--clearenv` then a minimal `--setenv` whitelist (`lib/launch.sh` shared `build_bwrap_args`; daemon delegates to it). See `SECURITY.md`.
+
+## Configuration, upgrades and documentation
+
+- Recipes reject unknown/duplicate keys and invalid lines. Use `recipe check` before apply; validated configuration batches commit once and preserve the config inode.
+- Stop all services/daemon and other exec calls with the old CLI before upgrading. Use the new template's CLI: `capbox --root PROJECT upgrade check|apply --from TEMPLATE`; recover with `upgrade rollback`. Inspect differences first; apply replaces the complete bin/lib bundle, including custom files.
+- `image lock save|verify|restore` uses strict package versions. `recipe apply --locked FILE` never falls back to unpinned versions. Version availability still depends on repositories.
+- Update generated CLI/default references and verify versions with `python3 tools/generate-docs.py --check`; behavioral and compatibility checks are listed in `docs/testing.md`.

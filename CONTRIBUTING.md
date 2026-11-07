@@ -1,56 +1,45 @@
 # 贡献指南
 
-## 跑起来再说
+CapBox 的正确性依赖运行时属性。修改启动、身份、网络或文件系统逻辑后，运行真实沙箱回归，并记录宿主与 guest 环境。
 
-**改 `lib/` 下任何脚本后，不要只看 diff。** 这个项目的正确性高度依赖运行时属性，
-代码里看不出来。本项目开发期间修复的 bug 里，**没有一个**是靠通读代码发现的。
-
-典型陷阱：
-
-| 看起来对 | 实际 |
-|---|---|
-| `[ -e "$rootfs/bin/sh" ]` 判 rootfs 就绪 | alpine 的 `sh` 是容器内绝对符号链接，宿主侧解析会跟随到宿主路径 → 误判缺失 |
-| `kill -0 "$pid"` 判守护进程存活 | 每次调用是独立 PID namespace，容器内 pid 恒为 2，会命中无关进程 → 恒假阳性 |
-| `while ...; _waited++; [ $_waited -ge 30 ]` 等 30 秒 | 每轮 `sleep 0.2`，实际只等 6 秒，而日志还写着「上限 30s」 |
-
-最低验证线：
+## 提交前检查
 
 ```sh
-./bin/capbox doctor                 # 全部 PASS
-./bin/capbox exec -- id -u          # 0
-./bin/capbox exec -- sh -c 'mount -t tmpfs none /mnt && echo ok'
-./bin/capbox exec -- sh -c 'exit 42'; echo $?    # 42
-```
-
-涉及 daemon 的改动再加一轮：`up` → `exec --daemon -- id -u` → `down`，并检查
-`run/daemon/` 无残留。
-
-## 跑测试
-
-```sh
-./test/run.sh                # 全部 22 个用例
-./test/run.sh T05 T06        # 指定用例
-./test/run.sh --list         # 列出用例
-```
-
-两个用例有额外前提：
-
-- **T15 / T16**（daemon）：需要先起常驻容器，再带 `CAPBOX_TEST_DAEMON=1` 重跑。
-  容器就绪后**立刻跑**，别 `sleep`：宿主可能在数秒内回收它。
-- **T19**（ubuntu）：较慢，需 `CAPBOX_TEST_SLOW=1`。
-
-框架自身有自测（假 CLI 桩 + 缺陷注入），改测试后请跑：
-
-```sh
+bash -n bin/capbox
+python3 tools/generate-docs.py --check
+python3 test/security/test_configuration.py
+python3 test/security/test_upgrade.py
+python3 test/security/test_package_lock.py
+python3 test/security/test_host_boundary.py
 ./test/selftest/run-selftest.sh
 ```
 
-## 提交
+ShellCheck 的 error 级别必须通过；CI 也验证关键入口的 Git 可执行模式。
 
-- shell 脚本保持 `bash -n` / `sh -n` 通过；容器内脚本用 POSIX sh，不要用 bash 扩展。
-- 注释写「为什么」，不写「做了什么」。
-- 修 bug 的提交请附上能复现它的命令，而不只是结论。
+<!-- generated:tests -->
+验收用例：**41**（T01–T41）。以 `./test/run.sh --list` 的实际清单为准，不硬编码旧数量。
+<!-- /generated:tests -->
 
-## 不要提交
+```sh
+./test/run.sh
+./test/run.sh T05 T06
+# 已有 Alpine rootfs 后，独立执行真实安全回归：
+CAPBOX_TEST_ROOTFS=/path/to/alpine python3 test/security/test_integration.py
+```
 
-`os/`、`cache/`、`run/`、`state/`、`logs/`、`config.env`、`test/tmp/` —— 已在 `.gitignore` 中。
+T15/T16 的框架用例需要 `CAPBOX_TEST_DAEMON=1` 和外层长期托管；CI 的真实集成另行覆盖 daemon 生命周期。T19 的旧框架用例需要 `CAPBOX_TEST_SLOW=1`；Ubuntu guest 已由独立兼容矩阵常规测试。多 UID 的必需 CI 不允许回退成 single，也不允许跳过。
+
+## 文档、模块与版本
+
+- 公共版本来源为 `lib/version.sh`。版本变化时同步测试桩及 guest/daemon 的独立加载兜底；生成器会核对。
+- 修改帮助、配置默认值或用例数后运行 `python3 tools/generate-docs.py`，提交生成差异。
+- 配置解析/校验/提交在 `lib/config.sh`；启动参数只有 `lib/launch.sh` 一份。daemon 不再维护独立安全策略。
+- `config.env` 和 recipe 都是数据，禁止 source。配置写回保留 inode，避免破坏已有 guest 的只读覆盖绑定。
+- 新的运行文件要能通过 `upgrade apply` 成套安装、验证及回退；业务数据和 rootfs 不属于 CLI 运行文件。
+- shell 引号、路径检查、进程身份的修复必须附行为回归，不能只验证命令字符串长相。
+
+## 提交内容
+
+保持 Bash/Python/C 的检查通过；guest 脚本使用 POSIX sh。说明具体问题、改动后的行为和实际验证范围。不要提交 rootfs、缓存、运行状态、真实凭据或测试临时文件。
+
+完整 CI 范围与宿主策略区别见 [docs/testing.md](docs/testing.md)。
