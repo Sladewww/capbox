@@ -54,22 +54,16 @@ assert_out_not_matches 'unrecognized option|BusyBox.*setpriv|reuid' "不得把 G
 assert_stdout_matches 'uid=33' "id 显示 uid=33"
 assert_stdout_matches 'gid=33' "id 显示 gid=33"
 
-# 静态 drop helper：宿主 gcc -static 构建，装入 alpine rootfs（无 passwd 条目也能降权）
+# 静态 drop helper：宿主私有目录构建，只读挂到 /run，不写 rootfs。
 repo_lib="$(cd "$(dirname "$CAPBOX_BIN")/../lib" && pwd)"
 [[ -f "$repo_lib/idmap.sh" ]] || repo_lib="$CAPBOX_DIR/lib"
-helper_bin="$CAPBOX_DIR/run/helpers/capbox-drop-priv"
-guest_helper="$CAPBOX_DIR/os/${CAPBOX_DISTRO:-alpine}/usr/libexec/capbox-drop-priv"
-# 若 distro 路径不同，用 CAPBOX_ROOTFS 探测
-if [[ ! -e "$guest_helper" ]]; then
-  # derive from status/config if needed
-  guest_helper=""
-fi
 set +e
 (
   set -euo pipefail
   log_warn(){ :; }; log_err(){ printf 'ERR %s\n' "$*" >&2; }; log_debug(){ :; }
   have_cmd(){ command -v "$1" >/dev/null 2>&1; }
   # shellcheck source=/dev/null
+  source "$repo_lib/common.sh"
   source "$repo_lib/idmap.sh"
   export CAPBOX_DIR="${CAPBOX_DIR}"
   export CAPBOX_ROOTFS="${CAPBOX_ROOTFS:-$CAPBOX_DIR/os/alpine}"
@@ -80,11 +74,7 @@ set +e
   hb="$(_idmap_drop_priv_host_bin)"
   [[ -x "$hb" ]] || { echo "FAIL host helper missing $hb"; exit 1; }
   echo "OK host helper $hb"
-  if [[ -n "${CAPBOX_ROOTFS:-}" ]]; then
-    gh="${CAPBOX_ROOTFS}$(_idmap_drop_priv_guest_bin)"
-    [[ -x "$gh" ]] || { echo "FAIL guest helper missing $gh"; exit 1; }
-    echo "OK guest helper $gh"
-  fi
+  [[ "$hb" != "$CAPBOX_WORKSPACE"/* ]] || { echo "FAIL guest-visible helper"; exit 1; }
 ) >"$QA_TMP/drop-helper-unit.out" 2>&1
 hrc=$?
 set -e
@@ -93,7 +83,7 @@ assert_file_contains "$QA_TMP/drop-helper-unit.out" "OK host helper" "宿主 hel
 
 # Alpine BusyBox-only 模拟：遮住 /usr/bin/setpriv，确认仍能 --uid（走 helper，不依赖 passwd）
 # 通过把 busybox 绑到 /usr/bin/setpriv 上方——用 CAPBOX 一次 exec 验证 helper 直接可用
-run_cmd "$CAPBOX_BIN" exec --timeout 15 -- /usr/libexec/capbox-drop-priv 33 33 id
+run_cmd "$CAPBOX_BIN" exec --timeout 15 --uid 33 --gid 33 -- id
 assert_rc 0 "rootfs helper 直接降权"
 assert_stdout_matches 'uid=33' "helper → uid=33"
 assert_out_not_matches 'cannot drop privileges' "helper 路径无 cannot drop"
@@ -115,6 +105,7 @@ set +e
   log_debug() { :; }
   have_cmd() { command -v "$1" >/dev/null 2>&1; }
   # shellcheck source=/dev/null
+  source "$repo_lib/common.sh"
   source "$repo_lib/idmap.sh"
   export CAPBOX_DIR="${CAPBOX_DIR}"
   export CAPBOX_ROOTFS="${CAPBOX_ROOTFS:-$CAPBOX_DIR/os/alpine}"
@@ -131,7 +122,7 @@ set +e
   # 不得直接出现「裸」setpriv --reuid= 作为 guest 入口（必须经 /bin/sh -c 选择器）
   joined="${local_argv[*]}"
   case "$joined" in
-    */usr/libexec/capbox-drop-priv*|*/bin/sh*-c*) echo "OK wrap uses helper or sh -c" ;;
+    */run/capbox-drop-priv*|*/bin/sh*-c*) echo "OK wrap uses helper or sh -c" ;;
     *) echo "FAIL expected helper or sh -c: $joined"; exit 1 ;;
   esac
   case "$joined" in
@@ -147,14 +138,14 @@ set +e
     [[ "$a" == -- ]] && saw_dd=1
   done
   case "$first_prog" in
-    /usr/libexec/capbox-drop-priv|/bin/sh)
+    /run/capbox-drop-priv|/bin/sh)
       echo "OK first guest prog is $first_prog"
       ;;
     *)
       echo "FAIL unexpected first prog after --: $first_prog"; exit 1
       ;;
   esac
-  if [[ "$first_prog" == /usr/libexec/capbox-drop-priv ]]; then
+  if [[ "$first_prog" == /run/capbox-drop-priv ]]; then
     echo "OK wrap uses static drop helper"
   else
     case "$joined" in

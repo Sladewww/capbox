@@ -50,7 +50,27 @@ _net_proxy_py() {
 }
 
 _net_dir() {
-  printf '%s' "${CAPBOX_RUN_DIR:-$CAPBOX_DIR/run}/net"
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  printf '%s/net' "$private"
+}
+
+_net_shared_dir() { local nd; nd="$(_net_dir)" || return 1; printf '%s/shared' "$nd"; }
+
+_net_guest_path() {
+  local shared
+  shared="$(_net_shared_dir)" || return 1
+  case "$1" in "$shared"/*) printf '/run/capbox-net/%s' "${1##*/}" ;; *) return 1 ;; esac
+}
+
+# Only host-written readiness signals are visible to the guest; never argv/PIDs/sockets.
+_net_append_ready_bind() {
+  local -n _ready_args="$1"
+  [[ "$(_net_mode)" == restricted ]] || return 0
+  local shared
+  shared="$(_net_shared_dir)" || return 1
+  mkdir -p "$shared" || return 1
+  _ready_args+=(--ro-bind "$shared" /run/capbox-net)
 }
 
 # oneshot 与 daemon 使用不同的 sock/pid，避免一次性 exec 的清理杀掉常驻代理。
@@ -66,11 +86,16 @@ _net_session_tag() {
   esac
 }
 
-_net_proxy_sock() { printf '%s/%s-proxy.sock' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_proxy_sock() {
+  local nd key
+  nd="$(_net_dir)" || return 1
+  key="$(printf '%s' "$(_net_session_tag)" | sha256sum)" || return 1
+  printf '%s/%s.sock' "$nd" "${key:0:32}"
+}
 _net_proxy_ready() { printf '%s/%s-proxy.ready' "$(_net_dir)" "$(_net_session_tag)"; }
 _net_proxy_pidf() { printf '%s/%s-proxy.pid' "$(_net_dir)" "$(_net_session_tag)"; }
 _net_proxy_log() { printf '%s/%s-proxy.log' "$(_net_dir)" "$(_net_session_tag)"; }
-_net_bridge_ready() { printf '%s/%s-bridge.ready' "$(_net_dir)" "$(_net_session_tag)"; }
+_net_bridge_ready() { printf '%s/%s-bridge.ready' "$(_net_shared_dir)" "$(_net_session_tag)"; }
 _net_bridge_pidf() { printf '%s/%s-bridge.pid' "$(_net_dir)" "$(_net_session_tag)"; }
 _net_bridge_log() { printf '%s/%s-bridge.log' "$(_net_dir)" "$(_net_session_tag)"; }
 
@@ -130,7 +155,7 @@ _net_append_bwrap_args() {
       _nb_arr+=(--unshare-net)
       # 工作区已 RW bind；run/net 在工作区内，guest 可见 ready 文件
       local nd
-      nd="$(_net_dir)"
+      nd="$(_net_dir)" || return 1
       mkdir -p "$nd" 2>/dev/null || true
       # 强制代理环境：只有走桥接端口才能出站
       local px="http://127.0.0.1:${CAPBOX_NET_BRIDGE_PORT}"
@@ -155,8 +180,9 @@ _net_append_bwrap_args() {
 # 启动宿主 unix 代理；写出 pid/sock/ready 到 net 目录
 _net_start_host_proxy() {
   local nd py sock ready pidf
-  nd="$(_net_dir)"
+  nd="$(_net_dir)" || return 1
   mkdir -p "$nd"
+  mkdir -p "$(_net_shared_dir)" || return 1
   py="$(_net_proxy_py)" || return 5
   sock="$(_net_proxy_sock)"
   ready="$(_net_proxy_ready)"
@@ -182,7 +208,7 @@ _net_start_host_proxy() {
 
 _net_stop_host_proxy() {
   local nd pidf pid
-  nd="$(_net_dir)"
+  nd="$(_net_dir)" || return 1
   pidf="$(_net_proxy_pidf)"
   if [[ -f "$pidf" ]]; then
     pid="$(cat "$pidf" 2>/dev/null || true)"
@@ -197,7 +223,7 @@ _net_stop_host_proxy() {
 
 _net_stop_bridge() {
   local nd pidf pid
-  nd="$(_net_dir)"
+  nd="$(_net_dir)" || return 1
   pidf="$(_net_bridge_pidf)"
   if [[ -f "$pidf" ]]; then
     pid="$(cat "$pidf" 2>/dev/null || true)"
@@ -218,7 +244,7 @@ _net_start_bridge_for_child() {
     log_err "无法进入容器 netns（child=$child）"
     return 1
   }
-  nd="$(_net_dir)"
+  nd="$(_net_dir)" || return 1
   py="$(_net_proxy_py)" || return 5
   sock="$(_net_proxy_sock)"
   ready="$(_net_bridge_ready)"
@@ -231,7 +257,7 @@ _net_start_bridge_for_child() {
   # 不带 -t：配合 --preserve-credentials 进入 user+net ns。
   # bwrap 在放行后用 NLM_F_EXCL 添加 127.0.0.1。这里不能先改 lo，否则地址已存在，
   # RTM_NEWADDR 失败（报错里的 errno 经常是残留值，看起来像 No child processes）。
-  nohup nsenter --user="/proc/$child/ns/user" --net="/proc/$child/ns/net" --preserve-credentials -- \
+  nohup python3 "$py" enter-net --child "$child" -- \
     /bin/sh -c "
       i=0
       while [ \"\$i\" -lt 200 ]; do
@@ -321,13 +347,12 @@ _net_run_bwrap_oneshot() {
   _net_restricted_prereqs >/dev/null || return $?
 
   local nd info go guest_go
-  nd="$(_net_dir)"
+  nd="$(_net_dir)" || return 1
   mkdir -p "$nd"
   info="$nd/info-$$.json"
-  go="$nd/go-$$"
+  go="$(_net_shared_dir)/go-$$"
   rm -f "$info" "$go" 2>/dev/null || true
-  guest_go="$(_guest_workspace_path "$go")"
-  [[ -n "$guest_go" ]] || guest_go="/workspace/.capbox/run/net/$(basename "$go")"
+  guest_go="$(_net_guest_path "$go")" || return 1
 
   _net_start_host_proxy || return 1
   # 注意：用固定清理函数，避免 trap 捕获过期路径
@@ -507,6 +532,7 @@ _net_publish_start() {
 import os, sys, time, socket, select, subprocess, threading
 host_port=int(sys.argv[1]); guest_addr=sys.argv[2]; guest_port=int(sys.argv[3])
 child_pid_file=sys.argv[4]; ready_file=sys.argv[5]
+net_helper=sys.argv[6]
 
 def wait_child():
     for _ in range(300):
@@ -557,8 +583,8 @@ def handle(client):
         )
         sp_h, sp_c = socket.socketpair()
         proc=subprocess.Popen(
-            ["nsenter", f"--net=/proc/{child}/ns/net", "--preserve-credentials", "--",
-             "python3", "-c", helper],
+            [sys.executable, net_helper, "enter-net", "--child", str(child), "--",
+             sys.executable, "-c", helper],
             stdin=sp_c, stdout=sp_c, stderr=subprocess.DEVNULL,
             pass_fds=(sp_c.fileno(),),
         )
@@ -591,9 +617,9 @@ PYF
     local ready pidf child_pid_file
     ready="$pd/ready-${_pub_host_port}"
     pidf="$pd/pid-${_pub_host_port}"
-    child_pid_file="${CAPBOX_RUN_DIR}/services/${name}/supervisor.pid.child"
+    child_pid_file="$(_service_run_dir "$name")/sandbox.pid"
     rm -f "$ready"
-    nohup python3 "$pyf" "$_pub_host_port" "$_pub_guest_addr" "$_pub_guest_port" "$child_pid_file" "$ready" \
+    nohup python3 "$pyf" "$_pub_host_port" "$_pub_guest_addr" "$_pub_guest_port" "$child_pid_file" "$ready" "$(_net_proxy_py)" \
       >>"$pd/forward.log" 2>&1 &
     echo $! >"$pidf"
     local j

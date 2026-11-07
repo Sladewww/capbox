@@ -8,7 +8,7 @@
 # ---------- 1. 发行版镜像表 ---------------------------------------------------
 
 # 各发行版的固定版本与 tarball 名。校验和见 lib/rootfs-sha256.txt（官方发布文件）。
-_capbox_alpine_version() { printf '3.20.3'; }
+_capbox_alpine_version() { printf '3.24.4'; }
 _capbox_ubuntu_version() { printf '24.04.3'; }
 
 # x86_64 | aarch64。失败时返回 1，不猜测。
@@ -92,7 +92,7 @@ _distro_tarball_url() {
   name="$(_distro_tarball_name "$1")" || return 1
   case "${1:-}" in
     alpine)
-      printf 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/%s/%s' "$arch" "$name"
+      printf 'https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/%s/%s' "$arch" "$name"
       ;;
     ubuntu)
       printf 'https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/%s' "$name"
@@ -109,9 +109,9 @@ _distro_tarball_urls() {
   case "$d" in
     alpine)
       printf '%s\n' \
-        "https://mirrors.aliyun.com/alpine/v3.20/releases/${arch}/$name" \
-        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/${arch}/$name" \
-        "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/${arch}/$name"
+        "https://mirrors.aliyun.com/alpine/v3.24/releases/${arch}/$name" \
+        "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/releases/${arch}/$name" \
+        "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/${arch}/$name"
       ;;
     ubuntu)
       printf '%s\n' \
@@ -373,10 +373,10 @@ inject_mirrors() {
   case "$distro" in
     alpine)
       {
-        printf '%s/v3.20/main\n' "$url"
-        printf '%s/v3.20/community\n' "$url"
+        printf '%s/v3.24/main\n' "$url"
+        printf '%s/v3.24/community\n' "$url"
       } | _rootfs_write_file "$rootfs/etc/apk/repositories" || return 1
-      log_info "已写入 apk 镜像源: $url/v3.20/{main,community}"
+      log_info "已写入 apk 镜像源: $url/v3.24/{main,community}"
       ;;
     ubuntu)
       local suite="noble"
@@ -625,7 +625,10 @@ EOF
 _apply_agent_preset() {
   config_set SECURITY_PROFILE untrusted || return $?
   config_set NET none || return $?
-  log_info "agent 预设: CAPBOX_SECURITY_PROFILE=untrusted CAPBOX_NET=none"
+  config_set IDMAP off || return $?
+  config_set RESOURCES_MODE require || return $?
+  log_info "agent 预设: SECURITY_PROFILE=untrusted NET=none IDMAP=off RESOURCES_MODE=require"
+  log_info "资源限额需另设 MEMORY_MAX/CPU_MAX/PIDS_MAX；配置的限额无法兑现时拒绝启动"
   log_info "untrusted 会遮盖工作区内的 .ssh .gnupg .aws .azure .kube .docker"
   log_info "pkg install 与 pkg update 会出网。其它命令默认无网络"
   log_info "当次要出网: capbox exec --net restricted -- CMD（需先写 CAPBOX_NET_ALLOW）或 --net open"

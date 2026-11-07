@@ -259,8 +259,8 @@ EOF
     if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1; then
       _idmap_ensure_drop_priv_helper || true
     fi
-    _helper="/usr/libexec/capbox-drop-priv"
-    if [[ -n "${CAPBOX_ROOTFS:-}" && -x "${CAPBOX_ROOTFS}${_helper}" ]]; then
+    _helper="$(_idmap_drop_priv_guest_bin)"
+    if [[ -x "$(_idmap_drop_priv_host_bin)" ]]; then
       cmdstr="$(_shq "$_helper") ${_du} ${_dg} /bin/sh -c ${_qcmd}"
     else
       _py=$(printf 'import os,sys\nos.setgid(%s)\ntry:\n os.setgroups([%s])\nexcept Exception:\n pass\nos.setuid(%s)\nos.execvp("/bin/sh",["sh","-c",sys.argv[1]])' "$_du" "$_dg" "$_du")

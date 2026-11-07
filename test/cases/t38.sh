@@ -85,8 +85,9 @@ E
 run_cmd run_leak_env "$CAPBOX_BIN" service start "$svc_name"
 assert_rc 0 "service start t38env 退出码"
 ok_log=0
-logf="$CAPBOX_DIR/run/services/$svc_name/service.log"
+logf="$CASE_OUT/service.log"
 for _i in $(seq 1 50); do
+  "$CAPBOX_BIN" service logs "$svc_name" -n 200 >"$logf" 2>/dev/null || true
   if [ -f "$logf" ] && grep -q 'S=clean' "$logf" 2>/dev/null; then
     ok_log=1
     break

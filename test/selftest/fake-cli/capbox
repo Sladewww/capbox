@@ -55,7 +55,7 @@ ROOTFS="$CAPBOX_DIR/os/$DISTRO"
 PROXY="$(cfg CAPBOX_PROXY '')"
 MIRROR="$(cfg CAPBOX_MIRROR cn)"
 BWRAP="${CAPBOX_BWRAP:-/usr/bin/bwrap}"
-VERSION="0.3.4"
+VERSION="0.3.5"
 
 log() { printf '[capbox] %s\n' "$*" >&2; }
 die() { local c="$1"; shift; printf '[capbox] 错误：%s\n' "$*" >&2; exit "$c"; }
@@ -82,14 +82,20 @@ daemon_pid() {
 #   2) 再替换会插入宿主路径的规则
 #   3) 最后把哨兵换成真实 SIM_TMP（此后不再有替换，宿主路径里的 /tmp 安全）
 rewrite() {
-  printf '%s' "$1" | sed \
-    -e 's#/tmp/#@@CAPBOX_GTMP@@/#g' \
-    -e "s#/workspace#${WS}#g" \
-    -e "s#/root/#${ROOTFS}/root/#g" \
-    -e "s#/root\$#${ROOTFS}/root#g" \
-    -e "s#/etc/#${ROOTFS}/etc/#g" \
-    -e "s#/mnt#${ROOTFS}/mnt#g" \
-    -e "s#@@CAPBOX_GTMP@@#${SIM_TMP:-/tmp}#g"
+  # Replace guest paths with placeholders before inserting any host paths.
+  # Otherwise /mnt or /tmp in an inserted host path gets translated a second time.
+  local text="$1"
+  text="${text//\/workspace/@@CB_WS@@}"
+  text="${text//\/root/@@CB_ROOT@@}"
+  text="${text//\/etc/@@CB_ETC@@}"
+  text="${text//\/mnt/@@CB_MNT@@}"
+  text="${text//\/tmp/@@CB_TMP@@}"
+  text="${text//@@CB_WS@@/$WS}"
+  text="${text//@@CB_ROOT@@/$ROOTFS/root}"
+  text="${text//@@CB_ETC@@/$ROOTFS/etc}"
+  text="${text//@@CB_MNT@@/$ROOTFS/mnt}"
+  text="${text//@@CB_TMP@@/${SIM_TMP:-/tmp}}"
+  printf '%s' "$text"
 }
 
 prep_guest_env() {
@@ -151,8 +157,8 @@ exec_guest() {
     return 0
   fi
   if [ "${cmd[0]}" = "apk" ] && [ "${cmd[1]:-}" = "update" ]; then
-    printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main/x86_64/APKINDEX.tar.gz\n'
-    printf 'v3.20.3-0-g6a1c4b3 [https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main]\nOK: 9 MiB in 21 packages\n'
+    printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/main/x86_64/APKINDEX.tar.gz\n'
+    printf 'v3.24.4-0-g6a1c4b3 [https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/main]\nOK: 9 MiB in 21 packages\n'
     return 0
   fi
   if [ "${cmd[0]}" = "apt-get" ] && [ "${cmd[1]:-}" = "-v" ]; then
@@ -280,7 +286,7 @@ cmd_init() {
   chmod +x "$rf/bin/sh"
 
   # 模拟镜像源注入（契约 §6）
-  printf 'https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main\nhttps://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/community\n' \
+  printf 'https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/main\nhttps://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/community\n' \
     >"$rf/etc/apk/repositories"
   printf 'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble main universe\n' \
     >"$rf/etc/apt/sources.list"
@@ -290,7 +296,7 @@ cmd_init() {
   # 缓存占位 tarball：用于验证 T04「第二次 init 不重新下载」（mtime 不变）
   local tb
   if [ "$distro" = "alpine" ]; then
-    tb="$cache/alpine-minirootfs-3.20.3-x86_64.tar.gz"
+    tb="$cache/alpine-minirootfs-3.24.4-x86_64.tar.gz"
   else
     tb="$cache/ubuntu-base-24.04.3-base-amd64.tar.gz"
   fi
@@ -465,7 +471,7 @@ cmd_pkg() {
       for p in "$@"; do
         touch "$ROOTFS/.pkg-$p"
       done
-      printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/main/x86_64/APKINDEX.tar.gz\n'
+      printf 'fetch https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/main/x86_64/APKINDEX.tar.gz\n'
       printf 'OK: %s packages installed\n' "${#:-0}"
       return 0
       ;;
@@ -517,7 +523,7 @@ cmd_logs() {
 }
 
 cmd_distros() {
-  printf 'alpine  https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz\n'
+  printf 'alpine  https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.4-x86_64.tar.gz\n'
   printf 'ubuntu  https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz\n'
 }
 

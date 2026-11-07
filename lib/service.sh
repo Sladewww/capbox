@@ -10,11 +10,16 @@
 #   MY_VAR=hello                     # 其它 KEY=value 原样注入 guest
 #   REQUIRE_IDMAP=0                  # 1=需要 multi 映射
 #
-# 状态目录（宿主）：$CAPBOX_RUN_DIR/services/<name>/
+# 宿主控制文件放在工作区外；只有 guest-run/ 会挂到 guest /run。
 # =============================================================================
 
 _service_dir() { printf '%s' "${CAPBOX_DIR}/services"; }
-_service_run_dir() { printf '%s' "${CAPBOX_RUN_DIR}/services/${1:-}"; }
+_service_run_dir() {
+  _service_valid_name "${1:-}" || { log_err "服务名非法: ${1:-}"; return 2; }
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  printf '%s/services/%s' "$private" "${1:-}"
+}
 
 _service_valid_name() {
   [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._@+-]*$ ]]
@@ -91,7 +96,7 @@ _service_append_env_args() {
 _service_diagnose() {
   local name="${1:-}" reason="${2:-}"
   local rd rootfs
-  rd="$(_service_run_dir "$name")"
+  rd="$(_service_run_dir "$name")" || return 1
   rootfs="${CAPBOX_ROOTFS:-}"
   log_err "服务 '$name' 诊断: $reason"
   if declare -F _idmap_probe >/dev/null 2>&1; then
@@ -168,10 +173,13 @@ HELP
 
 _service_is_running() {
   local name="${1:-}" rd pid
-  rd="$(_service_run_dir "$name")"
+  rd="$(_service_run_dir "$name")" || return 1
   [[ -f "$rd/supervisor.pid" ]] || return 1
   pid="$(cat "$rd/supervisor.pid" 2>/dev/null || true)"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  local identity
+  identity="$(_capbox_process_identity "$pid")" || return 1
+  [[ "$identity" == "$(cat "$rd/supervisor.pid.identity" 2>/dev/null)" ]] || return 1
   kill -0 "$pid" 2>/dev/null
 }
 
@@ -218,7 +226,7 @@ _service_check_id() {
   while [[ "$n" == 0* && ${#n} -gt 1 ]]; do
     n="${n#0}"
   done
-  if (( ${#n} > 10 )) || { (( ${#n} == 10 )) && [[ "$n" > "4294967295" ]]; }; then
+  if (( ${#n} > 10 )) || (( 10#$n > 4294967295 )); then
     log_err "服务 ${who}: ${label} 超出 32 位范围: $v"
     return 2
   fi
@@ -255,7 +263,7 @@ _service_abort() {
 
 _service_release_net() {
   local who="${1:-}" rd meta net="" sess="" line saved=""
-  rd="$(_service_run_dir "$who")"
+  rd="$(_service_run_dir "$who")" || return 1
   meta="$rd/meta.env"
   if [[ -f "$meta" ]]; then
     while IFS= read -r line; do
@@ -315,6 +323,7 @@ _service_start() {
 
   [[ "$stop_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]] || die 2 "STOP_TIMEOUT 非法"
   [[ "$restart_max" =~ ^[0-9]+$ ]] || die 2 "RESTART_MAX 非法"
+  [[ "$ready_timeout" =~ ^[0-9]+$ ]] || die 2 "READY_TIMEOUT 非法"
   case "$restart" in no|on-failure|always) ;; *) die 2 "RESTART 只能是 no|on-failure|always" ;; esac
 
   if [[ -n "$user" ]]; then
@@ -375,7 +384,7 @@ _service_start() {
       }
     fi
     if declare -F _guest_workspace_path >/dev/null 2>&1 && declare -F _net_bridge_ready >/dev/null 2>&1; then
-      ready_guest="$(_guest_workspace_path "$(_net_bridge_ready)")"
+      ready_guest="$(_net_guest_path "$(_net_bridge_ready)")"
     fi
     [[ -n "$ready_guest" ]] || {
       _service_abort 1 "guest 看不到 bridge ready 路径" || return $?
@@ -385,7 +394,7 @@ _service_start() {
   fi
 
   local rd
-  rd="$(_service_run_dir "$name")"
+  rd="$(_service_run_dir "$name")" || return 1
   mkdir -p "$rd" || {
     _service_abort 1 "无法创建 $rd" || return $?
   }
@@ -434,6 +443,7 @@ _service_start() {
   _service_append_env_args args svc svc_env
   mkdir -p "$rd/guest-run" 2>/dev/null || true
   args+=(--bind "$rd/guest-run" /run)
+  _net_append_ready_bind args || return $?
   full=("$CAPBOX_BWRAP" "${args[@]}" -- /bin/sh -c "$wrap")
 
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
@@ -463,7 +473,11 @@ _service_start() {
   if (( idmap_rc == 2 )); then
     _service_abort 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用" || return $?
   fi
-  if (( _svc_restricted == 1 && idmap_rc != 0 )); then
+  local _svc_info=0
+  if (( _svc_restricted == 1 )) || [[ -n "${svc[PUBLISH]:-}" ]]; then
+    _svc_info=1
+  fi
+  if (( _svc_info == 1 && idmap_rc != 0 )); then
     if declare -F _net_inject_bwrap_info_fd >/dev/null 2>&1; then
       _net_inject_bwrap_info_fd full 3 || {
         _service_abort 1 "无法注入 --info-fd" || return $?
@@ -488,6 +502,7 @@ _service_start() {
   py="$(_service_supervisor_py 2>/dev/null || true)"
   local -a sup_cmd=()
   if [[ -n "$py" ]] && have_cmd python3; then
+    rm -f -- "$rd/startup.status" "$rd/supervisor.pid" "$rd/supervisor.pid.child"
     # 写 child argv（NUL 分隔）。多 UID 时由 run-child 内调用 idmap 包装。
     : >"$rd/child.argv"
     local x
@@ -513,15 +528,17 @@ ARGV_FILE=$(printf %q "$rd")/child.argv
 mapfile -d '' -t args <"\$ARGV_FILE"
 if [[ "\${CAPBOX_NET_SESSION:-}" == svc-* ]]; then
   rm -f -- "\$(_net_bridge_ready)"
-  _idmap_after_map_hook() {
-    printf '%s\n' "\$1" >$(printf %q "$rd")/sandbox.pid
+fi
+_idmap_after_map_hook() {
+  printf '%s\n' "\$1" >$(printf %q "$rd")/sandbox.pid
+  if [[ "\${CAPBOX_NET_SESSION:-}" == svc-* ]]; then
     _net_stop_bridge || true
     _net_start_bridge_for_child "\$1"
-  }
-fi
+  fi
+}
 _idmap_run_bwrap_argv "\${args[@]}"
 EOS
-    elif (( _svc_restricted == 1 )); then
+    elif (( _svc_info == 1 )); then
       cat >"$rd/run-child.sh" <<EOS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -537,7 +554,8 @@ export CAPBOX_NET_SESSION=$(printf %q "${CAPBOX_NET_SESSION:-}")
 cd $(printf %q "$rd")
 ARGV_FILE="\$PWD/child.argv"
 INFO="\$PWD/bwrap-info.json"
-rm -f -- "\$INFO" "\$(_net_bridge_ready)"
+rm -f -- "\$INFO"
+[[ "\$CAPBOX_NET" != restricted ]] || rm -f -- "\$(_net_bridge_ready)"
 mapfile -d '' -t args <"\$ARGV_FILE"
 "\${args[@]}" 3>"\$INFO" &
 bp=\$!
@@ -554,7 +572,12 @@ except Exception:
   kill -0 "\$bp" 2>/dev/null || break
   sleep 0.05
 done
-if [[ -z "\$child" ]] || ! _net_start_bridge_for_child "\$child"; then
+if [[ -z "\$child" ]]; then
+  kill "\$bp" 2>/dev/null || true
+  wait "\$bp" 2>/dev/null || true
+  exit 1
+fi
+if [[ "\$CAPBOX_NET" == restricted ]] && ! _net_start_bridge_for_child "\$child"; then
   kill "\$bp" 2>/dev/null || true
   wait "\$bp" 2>/dev/null || true
   exit 1
@@ -578,6 +601,7 @@ EOS
       --name "$name"
       --log "$rd/service.log"
       --pidfile "$rd/supervisor.pid"
+      --status-file "$rd/startup.status"
       --ready-timeout "$ready_timeout"
       --restart "$restart"
       --restart-max "$restart_max"
@@ -586,6 +610,9 @@ EOS
       --health-interval "$health_interval"
       --health-retries "$health_retries"
     )
+    if [[ -n "${CAPBOX_SECURITY_SECCOMP_FD_HOLD:-}" ]]; then
+      sup_cmd+=(--pass-fd "$CAPBOX_SECURITY_SECCOMP_FD_HOLD")
+    fi
     [[ -n "${svc[READY_CMD]:-}" ]] && sup_cmd+=(--ready-cmd "${svc[READY_CMD]}")
     [[ -n "${svc[READY_TCP]:-}" ]] && sup_cmd+=(--ready-tcp "${svc[READY_TCP]}")
     [[ -n "${svc[READY_HTTP]:-}" ]] && sup_cmd+=(--ready-http "${svc[READY_HTTP]}")
@@ -593,9 +620,6 @@ EOS
     # PUBLISH: open 模式无需转发；none/restricted 记录到 meta（port proxy 由 net 管理）
     if [[ -n "${svc[PUBLISH]:-}" ]]; then
       printf 'PUBLISH=%s\n' "$(_shq "${svc[PUBLISH]}")" >>"$rd/meta.env"
-      if declare -F _net_publish_start >/dev/null 2>&1; then
-        _net_publish_start "$name" "${svc[PUBLISH]}" || log_warn "PUBLISH 启动失败（见日志）"
-      fi
     fi
     setsid "${sup_cmd[@]}" -- "$rd/run-child.sh" >>"$rd/service.log" 2>&1 &
     bp=$!
@@ -633,21 +657,32 @@ EOS
       bp=$!
     fi
     printf '%s\n' "$bp" >"$rd/supervisor.pid"
+    _capbox_process_identity "$bp" >"$rd/supervisor.pid.identity" || return 1
   fi
   unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
 
-  # supervisor 自己写 pidfile；稍等
+  # Only the host supervisor can publish startup.status. A PID alone is not readiness.
   local i
-  for i in $(seq 1 30); do
-    [[ -f "$rd/supervisor.pid" ]] && kill -0 "$(cat "$rd/supervisor.pid")" 2>/dev/null && break
+  local startup_ok=0 startup_state=""
+  for (( i=0; i < (ready_timeout + 5) * 10; i++ )); do
+    if [[ -n "$py" ]] && have_cmd python3; then
+      startup_state="$(cat "$rd/startup.status" 2>/dev/null || true)"
+      [[ "$startup_state" == ready ]] && { startup_ok=1; break; }
+      [[ "$startup_state" == failed || "$startup_state" == stopped ]] && break
+      kill -0 "$bp" 2>/dev/null || break
+    else
+      # No Python supervisor: confirm the sandbox process survives initial setup.
+      kill -0 "$bp" 2>/dev/null || break
+      (( i >= 3 )) && { startup_ok=1; break; }
+    fi
     sleep 0.1
   done
-  if [[ ! -f "$rd/supervisor.pid" ]] || ! kill -0 "$(cat "$rd/supervisor.pid")" 2>/dev/null; then
-    _service_abort 1 "进程启动后立即退出" || return $?
+  if (( startup_ok != 1 )); then
+    kill -TERM "$bp" 2>/dev/null || true
+    _service_abort 1 "服务未就绪或启动失败（见 service logs）" || return $?
   fi
-  # ready 等待（supervisor 内部也会等；这里再给一点时间）
-  if [[ -n "${svc[READY_CMD]:-}${svc[READY_TCP]:-}${svc[READY_HTTP]:-}" ]]; then
-    sleep 0.3
+  if [[ -n "${svc[PUBLISH]:-}" ]]; then
+    _net_publish_start "$name" "${svc[PUBLISH]}" || log_warn "PUBLISH 启动失败（见日志）"
   fi
   unset CAPBOX_NET_SESSION
   _svc_restricted=0
@@ -662,7 +697,7 @@ _service_stop() {
   local name="${1:-}"
   [[ -n "$name" ]] || die 2 "用法: capbox service stop NAME"
   local rd pid stop_timeout=10
-  rd="$(_service_run_dir "$name")"
+  rd="$(_service_run_dir "$name")" || return 1
   if [[ -f "$rd/meta.env" ]]; then
     local line
     while IFS= read -r line; do
@@ -681,13 +716,7 @@ _service_stop() {
     return 0
   fi
   pid="$(cat "$rd/supervisor.pid")"
-  if [[ -f "$rd/sandbox.pid" ]]; then
-    local sp
-    sp="$(tr -d '[:space:]' <"$rd/sandbox.pid" || true)"
-    if [[ "$sp" =~ ^[0-9]+$ ]]; then
-      kill -TERM "$sp" 2>/dev/null || true
-    fi
-  fi
+  # The authenticated supervisor stops its own child group. sandbox.pid may be stale.
   kill -TERM "$pid" 2>/dev/null || true
   local i max
   # 秒 → 100ms 轮询次数
@@ -723,7 +752,7 @@ _service_status() {
   local name="${1:-}"
   [[ -n "$name" ]] || die 2 "用法: capbox service status NAME"
   local rd
-  rd="$(_service_run_dir "$name")"
+  rd="$(_service_run_dir "$name")" || return 1
   if _service_is_running "$name"; then
     printf 'name=%s\nstate=running\nsupervisor_pid=%s\n' "$name" "$(cat "$rd/supervisor.pid")"
     [[ -f "$rd/meta.env" ]] && cat "$rd/meta.env"
@@ -754,7 +783,9 @@ _service_logs() {
     esac
   done
   [[ -n "$name" ]] || die 2 "用法: capbox service logs NAME"
-  local f="$(_service_run_dir "$name")/service.log"
+  local rd f
+  rd="$(_service_run_dir "$name")" || return 1
+  f="$rd/service.log"
   [[ -f "$f" ]] || die 1 "无日志: $f"
   if (( follow == 1 )); then tail -n "$lines" -f -- "$f"
   else tail -n "$lines" -- "$f"; fi

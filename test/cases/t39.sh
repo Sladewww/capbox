@@ -134,8 +134,9 @@ E
 run_cmd "$CAPBOX_BIN" service start t39ok
 assert_rc 0 "宿主 service start 退出码"
 ok_log=0
-logf="$CAPBOX_DIR/run/services/t39ok/service.log"
+logf="$CASE_OUT/service.log"
 for _i in $(seq 1 50); do
+  "$CAPBOX_BIN" service logs t39ok -n 200 >"$logf" 2>/dev/null || true
   if [ -f "$logf" ] && grep -q 'T39_SVC_OK' "$logf" 2>/dev/null; then
     ok_log=1
     break

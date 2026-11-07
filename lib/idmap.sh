@@ -156,7 +156,9 @@ _idmap_probe() {
   # 使用私有 mktemp 目录承载 chown 探测文件，避免 sticky /tmp 固定名留下
   # 无法删除的 subuid 属主文件（也不依赖 sudo 清理）。
   local ok=0 detail="" probe_dir="" probe_file=""
-  probe_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/capbox-idmap.XXXXXX")" || {
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  probe_dir="$(mktemp -d "$private/capbox-idmap.XXXXXX")" || {
     CAPBOX_IDMAP_STATUS="blocked"
     CAPBOX_IDMAP_DETAIL="无法创建 idmap 探测临时目录"
     [[ "$mode" == "on" ]] && return 2
@@ -267,7 +269,7 @@ _idmap_exec_id() {
     n="${n#0}"
   done
   # 按十进制位数比较，避免 bash 算术把超长数字当成 0 或溢出后放行。
-  if (( ${#n} > 10 )) || { (( ${#n} == 10 )) && [[ "$n" > "4294967295" ]]; }; then
+  if (( ${#n} > 10 )) || (( 10#$n > 4294967295 )); then
     return 2
   fi
   printf '%s' "$n"
@@ -417,7 +419,7 @@ _capbox_idmap_decision() {
 # BusyBox setpriv lacks --reuid; su needs a passwd name; alpine often has no
 # python3. Prefer a tiny static helper built from lib/guest/capbox-drop-priv.c
 # with host `gcc -static`, installed into the CapBox rootfs at
-# /usr/libexec/capbox-drop-priv (not a packaged system account change).
+# /run/capbox-drop-priv via a read-only bind (no rootfs writes).
 
 _idmap_drop_priv_src() {
   local here
@@ -434,21 +436,23 @@ _idmap_drop_priv_src() {
 }
 
 _idmap_drop_priv_host_bin() {
-  printf '%s' "${CAPBOX_DIR:-/tmp}/run/helpers/capbox-drop-priv"
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  printf '%s/helpers/capbox-drop-priv' "$private"
 }
 
 _idmap_drop_priv_guest_bin() {
-  printf '%s' /usr/libexec/capbox-drop-priv
+  printf '%s' /run/capbox-drop-priv
 }
 
-# Build (gcc -static) + install into CAPBOX_ROOTFS. Returns 0 if guest can exec it.
+# Build outside the workspace; callers bind the helper after mounting guest /run.
 _idmap_ensure_drop_priv_helper() {
   local src bin guest_abs cc tmp err
   src="$(_idmap_drop_priv_src)" || {
     CAPBOX_IDMAP_DROP_HELPER_DETAIL="missing capbox-drop-priv.c"
     return 1
   }
-  bin="$(_idmap_drop_priv_host_bin)"
+  bin="$(_idmap_drop_priv_host_bin)" || return 1
   mkdir -p "$(dirname "$bin")" 2>/dev/null || true
 
   if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
@@ -461,7 +465,7 @@ _idmap_ensure_drop_priv_helper() {
       CAPBOX_IDMAP_DROP_HELPER_DETAIL="no gcc/cc to build static helper"
       return 1
     fi
-    tmp="$(mktemp "${TMPDIR:-/tmp}/capbox-drop-priv.XXXXXX")"
+    tmp="$(mktemp "$(dirname "$bin")/build.XXXXXX")" || return 1
     err="$("$cc" -static -O2 -s -o "$tmp" "$src" 2>&1)" || {
       rm -f "$tmp"
       CAPBOX_IDMAP_DROP_HELPER_DETAIL="gcc -static failed: ${err:-unknown}"
@@ -471,25 +475,8 @@ _idmap_ensure_drop_priv_helper() {
     chmod 755 "$bin"
   fi
 
-  if [[ -n "${CAPBOX_ROOTFS:-}" && -d "${CAPBOX_ROOTFS}" ]]; then
-    mkdir -p "${CAPBOX_ROOTFS}/usr/libexec" 2>/dev/null || true
-    guest_abs="${CAPBOX_ROOTFS}$(_idmap_drop_priv_guest_bin)"
-    if [[ ! -x "$guest_abs" || "$bin" -nt "$guest_abs" ]]; then
-      cp -f "$bin" "$guest_abs" 2>/dev/null || {
-        CAPBOX_IDMAP_DROP_HELPER_DETAIL="cannot install helper into rootfs: $guest_abs"
-        return 1
-      }
-      chmod 755 "$guest_abs" 2>/dev/null || true
-    fi
-    if [[ -x "$guest_abs" ]]; then
-      CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper ready ($guest_abs)"
-      return 0
-    fi
-  fi
-
-  # rootfs not ready yet — host bin alone is enough for later install
   if [[ -x "$bin" ]]; then
-    CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper built ($bin); rootfs install pending"
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper ready for read-only bind ($bin)"
     return 0
   fi
   CAPBOX_IDMAP_DROP_HELPER_DETAIL="helper missing after build"
@@ -525,13 +512,6 @@ _idmap_wrap_argv_for_uid() {
   if _idmap_ensure_drop_priv_helper; then
     guest_helper="$(_idmap_drop_priv_guest_bin)"
     host_helper="$(_idmap_drop_priv_host_bin)"
-    guest_abs="${CAPBOX_ROOTFS:-}${guest_helper}"
-    if [[ -n "${CAPBOX_ROOTFS:-}" && -x "$guest_abs" ]]; then
-      wrap=("$guest_helper" "$uid" "$gid" "${rest[@]}")
-      _argv=("${_argv[@]:0:$dd}" -- "${wrap[@]}")
-      return 0
-    fi
-    # rootfs 尚未装上：临时 ro-bind 宿主静态二进制
     if [[ -x "$host_helper" ]]; then
       local -a head=("${_argv[@]:0:$dd}")
       _argv=("${head[@]}" --ro-bind "$host_helper" "$guest_helper" -- "$guest_helper" "$uid" "$gid" "${rest[@]}")
@@ -603,8 +583,9 @@ _idmap_run_bwrap_argv() {
   local -a _run_argv=("$@")
   _idmap_wrap_argv_for_uid _run_argv || return $?
   set -- "${_run_argv[@]}"
-  local tmp info_out block_fifo
-  tmp="$(mktemp -d "${CAPBOX_RUN_DIR:-/tmp}/idmap.XXXXXX")" || return 1
+  local tmp info_out block_fifo private
+  private="$(_capbox_host_state_dir)" || return 1
+  tmp="$(mktemp -d "$private/idmap.XXXXXX")" || return 1
   info_out="$tmp/info.json"
   block_fifo="$tmp/block"
   mkfifo "$block_fifo" || return 1
@@ -649,7 +630,7 @@ except Exception:
   if ! _idmap_apply_to_pid "$child"; then
     kill "$bp" 2>/dev/null || true
     # 仍尝试放行，避免永久卡住
-    printf '\n' >&"$block_fd" 2>/dev/null || true
+    printf '\n' 1>&"$block_fd" 2>/dev/null || true
     wait "$bp" 2>/dev/null || true
     exec {block_fd}>&-
     rm -rf "$tmp"
@@ -657,7 +638,7 @@ except Exception:
   fi
 
   # 先放行。bwrap 在这之后才配置 loopback；钩子里的桥必须等地址出现。
-  printf '\n' >&"$block_fd" 2>/dev/null || true
+  printf '\n' 1>&"$block_fd" 2>/dev/null || true
   if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
     _idmap_after_map_hook "$child" || helper_rc=$?
     if (( helper_rc != 0 )); then
@@ -682,8 +663,9 @@ _idmap_spawn_bwrap_argv() {
   local -a _run_argv=("$@")
   _idmap_wrap_argv_for_uid _run_argv || return $?
   set -- "${_run_argv[@]}"
-  local tmp info_out block_fifo logf
-  tmp="$(mktemp -d "${CAPBOX_RUN_DIR:-/tmp}/idmap.XXXXXX")" || return 1
+  local tmp info_out block_fifo logf private
+  private="$(_capbox_host_state_dir)" || return 1
+  tmp="$(mktemp -d "$private/idmap.XXXXXX")" || return 1
   info_out="$tmp/info.json"
   block_fifo="$tmp/block"
   logf="${CAPBOX_IDMAP_SPAWN_LOG:-$tmp/spawn.log}"
@@ -717,13 +699,13 @@ except Exception:
   if [[ -z "$child" ]] || ! _idmap_apply_to_pid "$child"; then
     log_err "idmap：后台启动映射失败（见 $logf）"
     kill "$bp" 2>/dev/null || true
-    printf '\n' >&"$block_fd" 2>/dev/null || true
+    printf '\n' 1>&"$block_fd" 2>/dev/null || true
     exec {block_fd}>&-
     rm -rf "$tmp"
     return 1
   fi
   # 先放行再跑钩子，避免桥抢在 bwrap 的 loopback 配置之前改 lo。
-  printf '\n' >&"$block_fd" 2>/dev/null || true
+  printf '\n' 1>&"$block_fd" 2>/dev/null || true
   if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
     _idmap_after_map_hook "$child" || {
       log_err "idmap：after_map hook 失败"

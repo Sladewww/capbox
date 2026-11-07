@@ -59,10 +59,15 @@ def ready_cmd(cmd: str, cwd: Optional[str] = None) -> bool:
         return False
 
 
-def wait_ready(args: argparse.Namespace, log: str, deadline: float) -> bool:
+def wait_ready(args: argparse.Namespace, log: str, deadline: float,
+               proc: subprocess.Popen) -> bool:
     if not (args.ready_cmd or args.ready_tcp or args.ready_http):
-        return True
+        # Let setup/exec errors reach the supervisor before reporting success.
+        time.sleep(0.25)
+        return proc.poll() is None
     while time.time() < deadline:
+        if proc.poll() is not None:
+            return False
         ok = True
         if args.ready_tcp and not ready_tcp(args.ready_tcp):
             ok = False
@@ -112,6 +117,8 @@ def main() -> int:
     ap.add_argument("--name", required=True)
     ap.add_argument("--log", required=True)
     ap.add_argument("--pidfile", required=True)
+    ap.add_argument("--pass-fd", type=int, action="append", default=[])
+    ap.add_argument("--status-file")
     ap.add_argument("--ready-cmd")
     ap.add_argument("--ready-tcp")
     ap.add_argument("--ready-http")
@@ -125,6 +132,19 @@ def main() -> int:
     ap.add_argument("--stop-timeout", type=float, default=10.0)
     ap.add_argument("child", nargs=argparse.REMAINDER)
     args = ap.parse_args()
+
+    def status(value: str) -> None:
+        if args.status_file:
+            tmp = args.status_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(value + "\n")
+            os.replace(tmp, args.status_file)
+
+    status("starting")
+    for fd in args.pass_fd:
+        if fd < 3:
+            ap.error("--pass-fd must be a descriptor above stderr")
+        os.fstat(fd)  # Fail closed before reporting a running supervisor.
     child: List[str] = list(args.child)
     if child and child[0] == "--":
         child = child[1:]
@@ -142,13 +162,22 @@ def main() -> int:
 
     with open(args.pidfile, "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
+    with open("/proc/self/stat", encoding="utf-8") as f:
+        start_time = f.read().rpartition(") ")[2].split()[19]
+    with open(args.pidfile + ".identity", "w", encoding="utf-8") as f:
+        f.write(os.readlink("/proc/self/ns/pid") + " " + start_time)
 
     restarts = 0
     backoff = args.restart_backoff
     while not stop["flag"]:
         _log(args.log, f"supervisor: start {' '.join(child[:3])}...")
+        # bwrap consumes BPF bytes. The inherited open-file offset is shared with
+        # the supervisor, so every restart must read the filter from its beginning.
+        for fd in args.pass_fd:
+            os.lseek(fd, 0, os.SEEK_SET)
         proc = subprocess.Popen(
             child,
+            pass_fds=tuple(args.pass_fd),
             start_new_session=True,
             stdout=open(args.log, "a"),
             stderr=subprocess.STDOUT,
@@ -157,7 +186,8 @@ def main() -> int:
         with open(child_pid_path, "w", encoding="utf-8") as f:
             f.write(str(proc.pid))
 
-        if not wait_ready(args, args.log, time.time() + args.ready_timeout):
+        if not wait_ready(args, args.log, time.time() + args.ready_timeout, proc):
+            status("failed")
             terminate_tree(proc, args.stop_timeout, args.log)
             proc.wait(timeout=args.stop_timeout + 2)
             if args.restart == "no":
@@ -170,6 +200,7 @@ def main() -> int:
             backoff = min(backoff * 2, 60)
             continue
 
+        status("ready")
         fails = 0
         while proc.poll() is None and not stop["flag"]:
             if args.health_interval > 0:
@@ -187,12 +218,14 @@ def main() -> int:
                 time.sleep(0.5)
 
         if stop["flag"]:
+            status("stopped")
             terminate_tree(proc, args.stop_timeout, args.log)
             proc.wait(timeout=args.stop_timeout + 2)
             _log(args.log, "supervisor: stopped")
             return 0
 
         rc = proc.wait()
+        status("stopped")
         _log(args.log, f"child exited rc={rc}")
         should = args.restart == "always" or (args.restart == "on-failure" and rc != 0)
         if not should:
