@@ -14,7 +14,7 @@ guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项
 
 Linux、Bash 4.4+、bubblewrap **≥ 0.12.0**。安装后检查 `bwrap --version`；发行版自带的旧版本可能不满足要求。宿主还必须允许相应用户命名空间。
 
-Alpine 包安装脚本需要宿主 Python 3 和 libseccomp。升级、严格包锁及部分辅助功能也使用 Python 3。Landlock 和身份辅助程序需要可用的 `gcc -static` 工具链。`doctor` 用来核对实际能力。
+Alpine 包安装脚本需要宿主 Python 3.10+ 和 libseccomp。升级、严格包锁及部分辅助功能也使用 Python 3.10+。Landlock 和身份辅助程序需要可用的 `gcc -static` 工具链。`doctor` 用来核对实际能力。
 
 普通运行无需宿主 root；磁盘配额另需宿主 loop/mount 授权，仅覆盖指定 guest 数据目录。CPU、内存和进程限额依赖 cgroup 委派；`require` 会拒绝无法兑现的已配置额度。
 

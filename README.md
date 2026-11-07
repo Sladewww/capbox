@@ -14,7 +14,7 @@ CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and
 
 Linux, Bash 4.4+, and **bubblewrap >= 0.12.0**. Package installation may require updating the distro's bubblewrap package or building a supported upstream version. Check `bwrap --version` after installation.
 
-Alpine package scripts require host Python 3 and libseccomp. Upgrades, strict package locks and some runtime helpers also require host Python 3. Landlock and identity helpers need a working `gcc -static` toolchain. The host must permit the requested user namespaces. `doctor` reports capabilities; CI's compatibility scope is documented in [Testing](docs/testing.md).
+Alpine package scripts require host Python 3.10+ and libseccomp. Upgrades, strict package locks and some runtime helpers also require host Python 3.10+. Landlock and identity helpers need a working `gcc -static` toolchain. The host must permit the requested user namespaces. `doctor` reports capabilities; CI's compatibility scope is documented in [Testing](docs/testing.md).
 
 Normal sandbox execution is rootless. `DISK_MAX` additionally needs host loop/mount authorization and covers only the configured guest data directory. CPU, memory and PID enforcement requires cgroup delegation; `require` refuses configured limits that cannot be applied.
 

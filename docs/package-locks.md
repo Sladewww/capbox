@@ -1,5 +1,7 @@
 # Strict package locks
 
+Requires host Python **3.10+**.
+
 `image lock save` creates a JSON schema-1 lock with distro, architecture and the complete installed package/version set. It refuses an empty inventory, failed package query or incomplete dpkg package state.
 
 ```sh

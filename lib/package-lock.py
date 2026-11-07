@@ -6,6 +6,11 @@ from pathlib import Path
 import re
 import sys
 
+if sys.version_info < (3, 10):
+    print('[capbox] 此功能需要宿主 Python 3.10 或更新版本', file=sys.stderr)
+    sys.exit(5)
+
+
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9.+_:-]*\Z')
 VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9.+_:~-]*\Z')
 
