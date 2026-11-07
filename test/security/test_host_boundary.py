@@ -87,6 +87,19 @@ class HostBoundaryTests(unittest.TestCase):
             result = self.bash('_capbox_host_state_dir')
         self.assertNotEqual(result.returncode, 0)
 
+    def test_blocked_uid_mapping_is_reported_without_traceback(self):
+        tools = self.base / 'tools'
+        tools.mkdir()
+        for name in ('newuidmap', 'newgidmap'):
+            command = tools / name
+            command.write_text('#!/bin/sh\nexit 1\n')
+            command.chmod(0o755)
+        self.env['PATH'] = str(tools) + os.pathsep + self.env['PATH']
+        result = self.bash('CAPBOX_IDMAP=on; rc=0; _idmap_probe || rc=$?; '
+                           'printf "%s\\n" "$CAPBOX_IDMAP_DETAIL"; exit "$rc"')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertNotIn('Traceback', result.stdout + result.stderr)
+
     def test_supervisor_retains_filter_fd_across_restarts(self):
         data = self.base / "filter-fixture"
         data.write_bytes(b"filter sentinel")
