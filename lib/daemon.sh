@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.3.4}"
+: "${CAPBOX_VERSION:=0.3.5}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -665,11 +665,13 @@ _daemon_build_up_argv() {
     CAPBOX_BWRAP_BASELINE_CMD="up"
   fi
   if declare -F sandbox_bwrap_cmd >/dev/null 2>&1; then
-    local x errf outf
-    errf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-bwrap.XXXXXX")" || return 1
-    outf="$(mktemp "${TMPDIR:-/tmp}/capbox-up-argv.XXXXXX")" || { rm -f "$errf"; return 1; }
-    if ! sandbox_bwrap_cmd daemon "" "/workspace" >"$outf" 2>"$errf"; then
-      local brc=$?
+    local x errf outf private
+    private="$(_capbox_host_state_dir)" || return 1
+    errf="$(mktemp "$private/capbox-up-bwrap.XXXXXX")" || return 1
+    outf="$(mktemp "$private/capbox-up-argv.XXXXXX")" || { rm -f "$errf"; return 1; }
+    local brc=0
+    sandbox_bwrap_cmd daemon "" "/workspace" >"$outf" 2>"$errf" || brc=$?
+    if (( brc != 0 )); then
       if (( brc != 6 )); then
         log_err "无法构造守护容器 bwrap 参数（rc=$brc）"
       fi
@@ -711,6 +713,12 @@ _daemon_build_up_argv() {
   # 常驻容器的 /tmp 与 /run 必须持久化（后挂载覆盖前面的 --tmpfs）
   _out+=(--bind "$CAPBOX_TMP_DIR" /tmp)
   _out+=(--bind "$CAPBOX_RUN_DIR/guest-run" /run)
+  if declare -F _net_append_ready_bind >/dev/null 2>&1; then
+    _net_append_ready_bind _out || return $?
+  fi
+  if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1 && _idmap_ensure_drop_priv_helper; then
+    _out+=(--ro-bind "$(_idmap_drop_priv_host_bin)" "$(_idmap_drop_priv_guest_bin)")
+  fi
 
   # 服务端需要的环境（base 已 --clearenv；此处仅白名单注入 daemon/guest 必需项）
   _out+=(--setenv CAPBOX_DAEMON_DIR "$guest_daemon_dir")
@@ -727,8 +735,7 @@ _daemon_build_up_argv() {
   # restricted 常驻容器：先等桥的 ready 文件再跑服务端，避免桥还没听就去访问网络。
   if [[ "${CAPBOX_NET_SESSION:-}" == "daemon" ]] && declare -F _net_bridge_ready >/dev/null 2>&1; then
     local ready_guest
-    ready_guest="$(_daemon_guest_path "$(_net_bridge_ready)")"
-    [[ -n "$ready_guest" ]] || ready_guest="/workspace/.capbox/run/net/daemon-bridge.ready"
+    ready_guest="$(_net_guest_path "$(_net_bridge_ready)")" || return 1
     _out+=(
       -- /bin/sh -c
       'f=$1; i=0; while [ ! -f "$f" ]; do i=$((i+1)); [ "$i" -gt 400 ] && exit 1; sleep 0.05; done; shift; exec /bin/sh "$1"'
@@ -768,7 +775,8 @@ _daemon_up_via_systemd() {
   if ! systemctl --user show-environment >/dev/null 2>&1; then
     die 5 "用户 systemd 不可用（systemctl --user 没有 bus）。改用活得更久的任务跑 capbox up，或在登录会话里启用 lingering"
   fi
-  local unit cli
+  local unit cli private
+  private="$(_capbox_host_state_dir)" || return 1
   unit="$(_daemon_systemd_unit_name)"
   if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
     local wd
@@ -778,7 +786,7 @@ _daemon_up_via_systemd() {
     fi
     log_info "systemd 单元 ${unit}.service 已在运行"
     mkdir -p "$CAPBOX_RUN_DIR"
-    printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
+    printf '%s\n' "$unit" >"$private/systemd.unit"
     return 0
   fi
   cli="${_CAPBOX_CLI_BIN_DIR:-}/capbox"
@@ -789,7 +797,7 @@ _daemon_up_via_systemd() {
     child_cmd+=(--allow-old-bwrap)
   fi
   mkdir -p "$CAPBOX_RUN_DIR"
-  printf '%s\n' "$unit" >"$CAPBOX_RUN_DIR/systemd.unit"
+  printf '%s\n' "$unit" >"$private/systemd.unit"
   local -a envargs=()
   local k
   for k in CAPBOX_NET CAPBOX_NET_ALLOW CAPBOX_SECURITY_PROFILE CAPBOX_DISTRO CAPBOX_PROXY CAPBOX_IDMAP CAPBOX_MIRROR CAPBOX_DEBUG; do
@@ -902,7 +910,9 @@ EOF
   # 「status 报 running=true，紧接着 exec --daemon 却返回 3」——状态文件在两次
   # 读取之间被人删了。容器内虽有 lock.d 防重入，但那只管"服务端"，
   # 管不到"客户端的启动前清理"。
-  local lockf="$CAPBOX_RUN_DIR/daemon-up.lock"
+  local private lockf
+  private="$(_capbox_host_state_dir)" || return 1
+  lockf="$private/daemon-up.lock"
   local have_lock=0
   mkdir -p "$CAPBOX_RUN_DIR" 2>/dev/null || true
   if command -v flock >/dev/null 2>&1; then
@@ -1155,13 +1165,15 @@ cmd_down() {
     esac
   done
 
-  if [[ -f "${CAPBOX_RUN_DIR:-}/systemd.unit" ]] && command -v systemctl >/dev/null 2>&1; then
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  if [[ -f "$private/systemd.unit" ]] && command -v systemctl >/dev/null 2>&1; then
     local unit
-    unit="$(tr -d '[:space:]' <"$CAPBOX_RUN_DIR/systemd.unit" 2>/dev/null || true)"
+    unit="$(tr -d '[:space:]' <"$private/systemd.unit" 2>/dev/null || true)"
     if [[ -n "$unit" ]] && systemctl --user is-active --quiet "$unit" 2>/dev/null; then
       log_info "停止 systemd 单元 ${unit}.service"
       systemctl --user stop "$unit" || return 1
-      rm -f "$CAPBOX_RUN_DIR/systemd.unit"
+      rm -f "$private/systemd.unit"
       return 0
     fi
   fi
@@ -1345,7 +1357,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.3.4}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.5}")"
     return 0
   fi
 
@@ -1378,7 +1390,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.4}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.5}"
   return 0
 }
 

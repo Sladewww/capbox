@@ -552,7 +552,9 @@ _resources_apply_disk_wrap() {
     return 1
   fi
   img="$base/disk.img"
-  ops="$(mktemp "${TMPDIR:-/tmp}/capbox-disk-ops.XXXXXX")" || {
+  local private
+  private="$(_capbox_host_state_dir)" || return 1
+  ops="$(mktemp "$private/capbox-disk-ops.XXXXXX")" || {
     rmdir -- "$base" 2>/dev/null || true
     return 1
   }

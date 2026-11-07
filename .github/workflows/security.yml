@@ -1,0 +1,108 @@
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: manual
+          - language: python
+            build-mode: none
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Build static helpers
+        if: matrix.language == 'c-cpp'
+        run: |
+          mkdir -p /tmp/capbox-codeql
+          gcc -static -O2 -Wall -Wextra lib/guest/capbox-drop-priv.c -o /tmp/capbox-codeql/drop-priv
+          gcc -static -O2 -Wall -Wextra lib/guest/capbox-landlock.c -o /tmp/capbox-codeql/landlock
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  secrets:
+    name: Repository secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          exit-code: '1'
+          cache: 'false'
+
+  rootfs:
+    name: Alpine package vulnerabilities and SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fetch the pinned rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CAPBOX_DIR="$PWD" CAPBOX_WORKSPACE="$PWD"
+          source lib/common.sh
+          source lib/rootfs.sh
+          archive="$(fetch_tarball alpine)"
+          mkdir -p os/alpine
+          tar -xzf "$archive" -C os/alpine
+      - name: Check fixable high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: rootfs
+          scan-ref: os/alpine
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          cache: 'false'
+      - name: Export package inventory
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: rootfs
+          scan-ref: os/alpine
+          format: cyclonedx
+          output: rootfs-sbom.json
+          exit-code: '0'
+          cache: 'false'
+      - name: Save SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: alpine-rootfs-sbom
+          path: rootfs-sbom.json
+          if-no-files-found: ignore

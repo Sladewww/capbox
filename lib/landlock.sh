@@ -28,28 +28,11 @@ _landlock_src() {
 
 # 二进制放在工作区外面。guest 可写的 run/、state/ 不能当宿主执行体。
 _landlock_private_dir() {
-  local base d
-  base="${XDG_RUNTIME_DIR:-}"
-  if [[ -z "$base" || ! -d "$base" || ! -w "$base" ]]; then
-    base="/run/user/$(id -u)"
-  fi
-  if [[ ! -d "$base" || ! -w "$base" ]]; then
-    base="${TMPDIR:-/tmp}"
-  fi
-  d="$base/capbox-landlock"
-  if [[ -L "$d" ]]; then
-    log_err "Landlock 目录是符号链接: $d"
-    return 1
-  fi
-  mkdir -p "$d" 2>/dev/null || {
-    log_err "无法创建 Landlock 目录: $d"
-    return 1
-  }
-  if [[ -L "$d" || ! -d "$d" ]]; then
-    log_err "Landlock 目录不可用: $d"
-    return 1
-  fi
-  chmod 700 "$d" 2>/dev/null || true
+  local private d
+  private="$(_capbox_host_state_dir)" || return 1
+  d="$private/landlock"
+  mkdir -p "$d" || return 1
+  [[ ! -L "$d" && -d "$d" ]] || return 1
   printf '%s' "$d"
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # T10 — 镜像源：/etc/apk/repositories 含 cn 镜像；apk update 成功
-# 契约 §6：alpine 写 <MIRROR_ALPINE>/v3.20/main 与 community。
+# 契约 §6：alpine 写 <MIRROR_ALPINE>/v3.24/main 与 community。
 set -u
 CASE_TITLE="镜像源：repositories 含 cn 镜像且 apk update 成功"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
@@ -18,8 +18,8 @@ if printf '%s' "$RUN_STDOUT" | grep -qiE 'aliyun|tuna|ustc|huaweicloud|tsinghua|
 else
   _fail "repositories 未包含预期镜像主机" "实际: $(_short "$RUN_STDOUT")"
 fi
-assert_stdout_contains "v3.20/main" "repositories 含 v3.20/main"
-assert_stdout_contains "v3.20/community" "repositories 含 v3.20/community"
+assert_stdout_contains "v3.24/main" "repositories 含 v3.24/main"
+assert_stdout_contains "v3.24/community" "repositories 含 v3.24/community"
 
 run_cmd "$CAPBOX_BIN" exec -- apk update
 assert_rc 0 "apk update 退出码"

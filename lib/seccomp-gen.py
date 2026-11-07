@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import errno
 import os
 import sys
 
@@ -58,6 +59,7 @@ _FALLBACK_NR = {
         "io_uring_setup": 425,
         "io_uring_enter": 426,
         "io_uring_register": 427,
+        "memfd_create": 319,
     },
     "aarch64": {
         "mount": 40,
@@ -95,6 +97,7 @@ _FALLBACK_NR = {
         "io_uring_setup": 425,
         "io_uring_enter": 426,
         "io_uring_register": 427,
+        "memfd_create": 279,
     },
 }
 
@@ -145,13 +148,15 @@ def _resolve_nr(lib, name: str, arch: str) -> int | None:
     return _FALLBACK_NR.get(arch, {}).get(name)
 
 
-def generate(profile: str, out_path: str) -> int:
+def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
     arch = _arch()
-    names = list(UNTRUSTED)
+    names = [] if profile == "compat" else list(UNTRUSTED)
     if profile == "strict":
         names += STRICT_EXTRA
-    elif profile != "untrusted":
+    elif profile not in ("untrusted", "compat"):
         raise SystemExit(f"unknown profile for seccomp: {profile}")
+    if profile == "compat" and not deny_exec_memfd:
+        raise SystemExit("compat requires an explicit additional restriction")
 
     lib = _load_lib()
     lib.seccomp_init.restype = ctypes.c_void_p
@@ -166,6 +171,22 @@ def generate(profile: str, out_path: str) -> int:
 
     added = 0
     missing = []
+    if deny_exec_memfd:
+        # APK 3 uses executable memfds for scripts. AppArmor can deny their exec
+        # even when creation succeeds. ENOSYS makes APK use its on-disk fallback;
+        # this adds a restriction and leaves every profile's existing rules intact.
+        class ArgCmp(ctypes.Structure):
+            _fields_ = [("arg", ctypes.c_uint), ("op", ctypes.c_uint),
+                        ("datum_a", ctypes.c_uint64), ("datum_b", ctypes.c_uint64)]
+
+        nr = _resolve_nr(lib, "memfd_create", arch)
+        rc = -1 if nr is None else lib.seccomp_rule_add(
+            ctx, SCMP_ACT_ERRNO(errno.ENOSYS), nr, 1,
+            ArgCmp(1, 7, 0x10, 0x10))  # SCMP_CMP_MASKED_EQ, MFD_EXEC
+        if rc:
+            missing.append(f"memfd_create(add={rc})")
+        else:
+            added += 1
     for name in names:
         nr = _resolve_nr(lib, name, arch)
         if nr is None:
@@ -203,10 +224,11 @@ def generate(profile: str, out_path: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--profile", choices=("untrusted", "strict"), required=True)
+    ap.add_argument("--profile", choices=("compat", "untrusted", "strict"), required=True)
+    ap.add_argument("--deny-exec-memfd", action="store_true")
     ap.add_argument("--out", required=True, help="BPF output path")
     args = ap.parse_args()
-    return generate(args.profile, args.out)
+    return generate(args.profile, args.out, args.deny_exec_memfd)
 
 
 if __name__ == "__main__":

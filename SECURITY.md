@@ -63,6 +63,16 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 - `CAPBOX_FS_BINDS` 拒绝工作区外的任意 bind。
 - 符号链接形式的受保护路径无法作为 bwrap 挂载目标；`doctor` 会警告，请改为普通文件/目录。
 
+## 宿主控制面（0.3.5 起）
+
+服务启动脚本、NUL 分隔的启动参数、PID 身份记录、systemd 单元记录、锁、网络代理脚本/套接字、UID 映射握手、seccomp BPF 和静态 helper 都放在工作区之外的宿主私有目录。优先使用安全且路径足够短的 `$XDG_RUNTIME_DIR` 或 `/run/user/UID`，否则使用 sticky `/tmp`。目录形态为 `capbox-UID/<项目路径的 SHA256 前 32 位>/`；父目录和项目目录必须由当前用户拥有、权限为 `0700`，符号链接或不安全权限直接拒绝。找不到安全目录时失败，不回退到 guest 可写的 `.capbox/run`。
+
+`run/` 仍可承载 guest 数据与 daemon IPC，但宿主不再从中执行服务脚本或读取服务 PID。guest 只获得服务 `/run` 子目录，以及只读的 `/run/capbox-net` 就绪信号目录；宿主控制文件和代理 socket 不挂入 guest。服务日志通过 `capbox service logs NAME` 读取，不再依赖 `.capbox/run/services/` 路径。
+
+`capbox-drop-priv` 仅在宿主私有目录构建，再只读绑定到 guest `/run/capbox-drop-priv`。宿主不向 guest 可修改的 rootfs 复制或 chmod 该 helper，因此安装不会跟随 rootfs 中的符号链接写到宿主。daemon 启动时绑定 helper，升级后必须重启已有 daemon。
+
+服务 supervisor 显式保留 seccomp FD，并在每次重启前重置 BPF 文件偏移。实际启动失败或 readiness 失败会让 `service start` 返回非零。停止服务前核对宿主进程的 PID namespace 和启动时间，避免仅凭复用的 PID 操作其它进程。
+
 ## 用户命名空间与 capability
 
 - guest uid 0 ≠ 宿主 uid 0；权限来自 user namespace 映射。
@@ -73,7 +83,7 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 
 `CAPBOX_LANDLOCK=on|off`。没写的时候，`strict` 默认开启，`compat` 和 `untrusted` 默认关闭。显式的 `on` 或 `off` 覆盖这个默认。空值仍然走默认。
 
-开启之后，每次 `exec` / `shell` / `service start` / `up` 都会在 **bwrap 挂载完成之后** 把容器内命令放进 Landlock。静态 helper `capbox-landlock` 用宿主 `gcc -static` 构建，放在工作区外面（`$XDG_RUNTIME_DIR/capbox-landlock/`，否则 `/run/user/UID` 或 `/tmp`），再只读绑到 guest 的 `/run/capbox-landlock`。挂载点放在已经准备好的 `/run` 上，避免 bwrap 在可写 rootfs 里留下空文件。不能把 Landlock 套在 bwrap 进程外面：规则集一旦处理文件系统，内核就拒绝这个进程 `mount` / `pivot_root`，bwrap 的 setup 会直接失败。
+开启之后，每次 `exec` / `shell` / `service start` / `up` 都会在 **bwrap 挂载完成之后** 把容器内命令放进 Landlock。静态 helper `capbox-landlock` 用宿主 `gcc -static` 构建，放在工作区外的上述宿主私有项目目录的 `landlock/`，再只读绑到 guest 的 `/run/capbox-landlock`。挂载点放在已经准备好的 `/run` 上，避免 bwrap 在可写 rootfs 里留下空文件。不能把 Landlock 套在 bwrap 进程外面：规则集一旦处理文件系统，内核就拒绝这个进程 `mount` / `pivot_root`，bwrap 的 setup 会直接失败。
 
 规则按挂载后的 guest 路径写：
 
@@ -108,3 +118,21 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 ## 报告问题
 
 请在 GitHub Issues 描述复现步骤、`capbox doctor` 输出与相关配置（可打码）。不要在公开 issue 里粘贴真实密钥。
+
+## 基础镜像与持续检查
+
+新建 Alpine rootfs 固定为 **3.24.4 / v3.24**，x86_64 与 aarch64 各自校验官方 SHA256。已有 rootfs 不自动覆盖或跨版本升级；需先备份，并在新工作区初始化受支持版本后迁移必要数据。发行版支持周期见 [Alpine 官方发布表](https://alpinelinux.org/releases/)。
+
+`capbox init --agent` 设置 `untrusted`、`NET=none`、`IDMAP=off` 和 `RESOURCES_MODE=require`。资源限额需显式配置；设置后若无法兑现，则拒绝启动。普通交互初始化仍保留 compat/open 的兼容语义，不适合直接运行不可信负载。
+
+CI 包含 T41 Landlock、宿主边界回归、加固服务重启、daemon 和网络桥测试。Security 工作流检查 C/Python、仓库密钥、固定基础镜像的可修复 HIGH/CRITICAL 包漏洞，并导出 CycloneDX SBOM；每周重新检查。Actions 使用完整 SHA，工作流默认只有 contents:read，CodeQL job 单独获得 security-events:write。
+
+升级部署前，使用旧版 CLI 停止所有 service 和 daemon，再更新模板及每个项目的 `.capbox/bin`、`.capbox/lib`，然后重新启动。旧运行目录中的脚本、PID 和缓存不会导入新的宿主控制面。私有运行目录属于该宿主，移动整个项目到另一台机器后需重新启动服务；不要复制运行记录。
+
+本仓库 main 已配置 PR、六项必需 CI/Security 检查、讨论解决、管理员约束，并禁止强推与删除。个人维护场景不强制另一位维护者审批。Dependabot 漏洞告警和自动安全修复已启用，密钥扫描与推送保护保持启用。仓库设置与工作流需共同维护。
+
+## Alpine APK 安装脚本与宿主 AppArmor
+
+Ubuntu 26 等宿主可能允许创建可执行 memfd，却由 AppArmor 拒绝执行匿名脚本。APK 3 在这种情况下会让安装触发器失败，即使软件文件已经解包。
+
+`capbox pkg install/remove` 在 Alpine 下需要宿主 `python3` 和 `libseccomp`，并在所选安全档已有规则之外追加一条限制：显式请求可执行 memfd 的创建返回 ENOSYS，让 APK 使用自身的磁盘脚本回退路径。普通非可执行 memfd 不受这条规则影响。安装脚本仍会运行，错误码仍透传；宿主 AppArmor、已有 seccomp 规则和 capability 限制都保留。直接在 shell 内运行 apk 不经过这个兼容封装，仍可能受宿主匿名脚本策略影响。

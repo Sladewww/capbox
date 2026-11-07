@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import ipaddress
 import os
 import select
@@ -14,6 +15,19 @@ from typing import Iterable, List, Optional, Tuple
 
 BUF = 65536
 BRIDGE_PORT_DEFAULT = 18787
+
+
+def enter_network_namespace(child: int, command: List[str]) -> None:
+    # --disable-userns gives the guest a nested user namespace. Its network
+    # namespace can belong to the parent, so /proc/PID/ns/user is not authoritative.
+    # NS_GET_USERNS from linux/nsfs.h returns the network namespace's actual owner.
+    net_fd = os.open(f"/proc/{child}/ns/net", os.O_RDONLY)
+    owner_fd = fcntl.ioctl(net_fd, 0xB701)
+    os.set_inheritable(net_fd, True)
+    os.set_inheritable(owner_fd, True)
+    os.execvp("nsenter", ["nsenter", f"--user=/proc/self/fd/{owner_fd}",
+                         f"--net=/proc/self/fd/{net_fd}", "--preserve-credentials",
+                         "--", *command])
 
 
 def _norm_host(h: str) -> str:
@@ -448,6 +462,19 @@ def cmd_check_allow(args: argparse.Namespace) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="capbox-net")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    p_enter = sub.add_parser("enter-net")
+    p_enter.add_argument("--child", required=True, type=int)
+    p_enter.add_argument("command", nargs=argparse.REMAINDER)
+
+    def enter(args: argparse.Namespace) -> int:
+        cmd = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if args.child <= 0 or not cmd:
+            p.error("enter-net needs a positive child PID and a command")
+        enter_network_namespace(args.child, cmd)
+        return 1
+
+    p_enter.set_defaults(func=enter)
 
     p_proxy = sub.add_parser("proxy")
     p_proxy.add_argument("--sock", required=True)

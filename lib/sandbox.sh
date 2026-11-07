@@ -259,8 +259,8 @@ EOF
     if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1; then
       _idmap_ensure_drop_priv_helper || true
     fi
-    _helper="/usr/libexec/capbox-drop-priv"
-    if [[ -n "${CAPBOX_ROOTFS:-}" && -x "${CAPBOX_ROOTFS}${_helper}" ]]; then
+    _helper="$(_idmap_drop_priv_guest_bin)"
+    if [[ -x "$(_idmap_drop_priv_host_bin)" ]]; then
       cmdstr="$(_shq "$_helper") ${_du} ${_dg} /bin/sh -c ${_qcmd}"
     else
       _py=$(printf 'import os,sys\nos.setgid(%s)\ntry:\n os.setgroups([%s])\nexcept Exception:\n pass\nos.setuid(%s)\nos.execvp("/bin/sh",["sh","-c",sys.argv[1]])' "$_du" "$_dg" "$_du")
@@ -677,12 +677,17 @@ EOF
 _pkg_run_guest() {
   local sub="${1:-}" cmdstr="${2:-}" timeout_s="${3:-}"
   local saved="${CAPBOX_NET:-}" granted=0 rc=0
+  local CAPBOX_APK_SCRIPT_FILTER=0
+  if [[ "$CAPBOX_DISTRO" == alpine && ( "$sub" == install || "$sub" == remove ) ]]; then
+    CAPBOX_APK_SCRIPT_FILTER=1
+  fi
   if [[ "$sub" == "install" || "$sub" == "update" ]] && [[ "${CAPBOX_NET:-open}" == "none" ]]; then
     CAPBOX_NET=open
     granted=1
     log_info "pkg ${sub}: 会话网络是 none，本次命令单独出网"
   fi
   exec_in_guest "$cmdstr" /workspace "$timeout_s" || rc=$?
+  _security_close_fd
   if (( granted == 1 )); then
     CAPBOX_NET="$saved"
   fi

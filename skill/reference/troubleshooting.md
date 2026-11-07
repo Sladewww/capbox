@@ -210,7 +210,7 @@ capbox exec --profile untrusted -- sh -c 'mount -t tmpfs none /mnt; echo RC=$?'
 
 ## exec --uid 报 BusyBox setpriv / cannot drop privileges
 
-Alpine 默认只有 BusyBox `setpriv`（无 `--reuid`），且 `/etc/passwd` 常无 uid 33，`su 33` 会失败。CapBox 在宿主用 `gcc -static` 从 `lib/guest/capbox-drop-priv.c` 构建数字 uid helper，装入 rootfs 的 `/usr/libexec/capbox-drop-priv`（不改系统包、不加账户）。`capbox init` / 首次 `--uid` 会构建；doctor 会报告 helper 状态。回退仍保留 GNU setpriv / python3 / chpst / su。
+Alpine 默认只有 BusyBox `setpriv`（无 `--reuid`），且 `/etc/passwd` 常无 uid 33，`su 33` 会失败。CapBox 在宿主用 `gcc -static` 从 `lib/guest/capbox-drop-priv.c` 构建数字 uid helper，保存在工作区外的宿主私有目录，只读绑定到 guest `/run/capbox-drop-priv`（不改系统包、不加账户）。`capbox init` / 首次 `--uid` 会构建；doctor 会报告 helper 状态。回退仍保留 GNU setpriv / python3 / chpst / su。
 
 ---
 

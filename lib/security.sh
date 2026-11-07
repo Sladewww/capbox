@@ -47,8 +47,10 @@ _security_seccomp_py() {
 }
 
 _security_bpf_path() {
-  local profile="${1:-untrusted}"
-  printf '%s/seccomp-%s.bpf' "${CAPBOX_STATE_DIR:-$CAPBOX_DIR/state}" "$profile"
+  local profile="${1:-untrusted}" private suffix=""
+  private="$(_capbox_host_state_dir)" || return 1
+  [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]] || suffix=-apk
+  printf '%s/security/seccomp-%s%s.bpf' "$private" "$profile" "$suffix"
 }
 
 # 生成（或复用）BPF；成功时把绝对路径打到 stdout
@@ -56,6 +58,7 @@ _security_ensure_bpf() {
   local profile="${1:-}"
   case "$profile" in
     untrusted | strict) ;;
+    compat) [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" == 1 ]] || return 1 ;;
     *) return 1 ;;
   esac
   have_cmd python3 || {
@@ -67,21 +70,28 @@ _security_ensure_bpf() {
     log_err "缺少 lib/seccomp-gen.py"
     return 5
   }
-  mkdir -p "${CAPBOX_STATE_DIR:-$CAPBOX_DIR/state}" 2>/dev/null || true
-  out="$(_security_bpf_path "$profile")"
+  out="$(_security_bpf_path "$profile")" || return 5
+  mkdir -p "$(dirname "$out")" || return 5
   # 源比产物新或产物空则重建
   if [[ -s "$out" && "$out" -nt "$py" ]]; then
     printf '%s' "$out"
     return 0
   fi
-  if ! python3 "$py" --profile "$profile" --out "$out" 2>"${CAPBOX_STATE_DIR:-/tmp}/seccomp-gen.err"; then
-    log_err "seccomp BPF 生成失败（见 ${CAPBOX_STATE_DIR:-/tmp}/seccomp-gen.err）；拒绝伪实现"
+  local tmp
+  tmp="$(mktemp "${out}.XXXXXX")" || return 5
+  local -a gen_args=(--profile "$profile" --out "$tmp")
+  [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]] || gen_args+=(--deny-exec-memfd)
+  if ! python3 "$py" "${gen_args[@]}" 2>"${out}.err"; then
+    rm -f -- "$tmp"
+    log_err "seccomp BPF 生成失败（见 ${out}.err）；拒绝伪实现"
     return 5
   fi
-  [[ -s "$out" ]] || {
+  [[ -s "$tmp" ]] || {
+    rm -f -- "$tmp"
     log_err "seccomp BPF 为空，拒绝继续"
     return 5
   }
+  mv -f -- "$tmp" "$out" || return 5
   printf '%s' "$out"
   return 0
 }
@@ -166,9 +176,7 @@ _security_append_bwrap_args() {
 
   # seccomp：真实 BPF，禁止伪实现
   local bpf
-  if ! bpf="$(_security_ensure_bpf "$profile")"; then
-    return $?
-  fi
+  bpf="$(_security_ensure_bpf "$profile")" || return $?
   # 调用方必须在 bwrap 生命周期内保持 FD；这里只记录路径
   CAPBOX_SECURITY_BPF="$bpf"
   export CAPBOX_SECURITY_BPF
@@ -186,14 +194,13 @@ _security_append_bwrap_args() {
 # 通过 CAPBOX_SECURITY_SECCOMP_FD_HOLD 全局保存 FD，避免提前关闭
 _security_wrap_argv() {
   local -n _sw_cmd="$1"
-  _security_is_hardened || return 0
-  local bpf="${CAPBOX_SECURITY_BPF:-}"
-  [[ -n "$bpf" && -s "$bpf" ]] || {
-    local profile
-    profile="$(_security_profile)"
-    bpf="$(_security_ensure_bpf "$profile")" || return $?
-    CAPBOX_SECURITY_BPF="$bpf"
-  }
+  if ! _security_is_hardened && [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]]; then
+    return 0
+  fi
+  local bpf profile
+  profile="$(_security_profile)" || return $?
+  bpf="$(_security_ensure_bpf "$profile")" || return $?
+  CAPBOX_SECURITY_BPF="$bpf"
 
   # 打开只读 FD
   local fd
@@ -237,7 +244,7 @@ _security_wrap_argv() {
 
 _security_close_fd() {
   if [[ -n "${CAPBOX_SECURITY_SECCOMP_FD_HOLD:-}" ]]; then
-    eval "exec ${CAPBOX_SECURITY_SECCOMP_FD_HOLD}<&-" 2>/dev/null || true
+    exec {CAPBOX_SECURITY_SECCOMP_FD_HOLD}<&- 2>/dev/null || true
     unset CAPBOX_SECURITY_SECCOMP_FD_HOLD
   fi
 }

@@ -14,7 +14,7 @@ Coding agents often need to install packages, edit `/etc`, or compile into `/usr
 
 - Guest root is not host root. Writes to `/` land in `.capbox/os/<distro>/`.
 - One `.capbox/` per project. Alpine or Ubuntu, SHA256-pinned tarballs, x86_64 and aarch64.
-- `capbox init --agent` sets `untrusted` and `CAPBOX_NET=none`. `pkg install` and `pkg update` still use the network. Anything else must say `--net` on that command.
+- `capbox init --agent` sets `untrusted`, `CAPBOX_NET=none`, `CAPBOX_IDMAP=off`, and `CAPBOX_RESOURCES_MODE=require`. `pkg install` and `pkg update` still use the network. Anything else must say `--net` on that command.
 - `.capbox/logs/` (including `audit.jsonl`) is read-only inside the guest.
 
 This is a shared kernel, not a VM.
@@ -114,3 +114,14 @@ CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Security update: Alpine now pins 3.24.4. Host service launchers, process records,
+network controls, BPF filters, and helpers live in private directories outside the
+workspace. Read service output with `capbox service logs NAME`. Stop services and
+daemons with the old CLI before upgrading existing project-local copies; restart
+them after updating `bin/` and `lib/`. Existing rootfs data is not overwritten.
+See [SECURITY.md](SECURITY.md) for migration and resource-limit requirements.
+
+Alpine `pkg install/remove` also requires host Python 3 and libseccomp. It adds
+an executable-memfd restriction so APK can use its disk-script fallback under
+AppArmor, while keeping package scripts and existing profile rules enabled.
