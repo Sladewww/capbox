@@ -13,15 +13,15 @@
 AI agent 经常要装系统包、改 `/etc`、编译进 `/usr`。直接在宿主做，要么没权限，要么弄脏系统。外层沙箱里又常常没有 Docker。CapBox 用 [bubblewrap](https://github.com/containers/bubblewrap) 和 user namespace：`os/<distro>/` 是容器的 `/`，工作区挂到 `/workspace`。
 
 - 容器里的 root 不是宿主 root。写 `/` 写的是 `.capbox/os/<distro>/`。
-- 每个项目一份 `.capbox/`。Alpine 或 Ubuntu，官方 tarball 按 SHA256 钉扎，x86_64 与 aarch64。
-- `capbox init --agent` 写成 `untrusted` 和 `CAPBOX_NET=none`。`pkg install` 与 `pkg update` 仍出网；其它出网必须在当次命令上写 `--net`。
+- 每个项目一份 `.capbox/`。Alpine 3.24.4 或 Ubuntu，官方 tarball 按 SHA256 钉扎，x86_64 与 aarch64。
+- `capbox init --agent` 设置 `untrusted`、`CAPBOX_NET=none`、`CAPBOX_IDMAP=off` 和 `CAPBOX_RESOURCES_MODE=require`。`pkg install` 与 `pkg update` 仍出网；其它出网必须在当次命令上写 `--net`。
 - `.capbox/logs/`（含 `audit.jsonl`）对 guest 只读。
 
 这是共享内核，不是虚拟机。
 
 ## 快速开始
 
-需要 Linux 和 `bwrap` **>= 0.12.0**。更旧的版本直接拒绝（退出码 6），`compat` 也不豁免。
+需要 Linux 和 `bwrap` **>= 0.12.0**。Alpine 的 `pkg install/remove` 还需要宿主 `python3` 与 `libseccomp`，以兼容宿主禁止匿名脚本执行的策略。更旧的版本直接拒绝（退出码 6），`compat` 也不豁免。
 
 ```sh
 git clone https://github.com/Sladewww/capbox.git ~/.agents/capbox
@@ -89,7 +89,7 @@ capbox recipe show
 
 ## 服务
 
-`.capbox/services/<name>.env` 是 `KEY=value`，不会被 source。`CMD` 是要执行的命令，不是环境变量。`USER`、`CWD` 和其它键在 `--clearenv` 之后 `--setenv`。`service start` 是独立的 bwrap，不依赖 `capbox up`。
+`.capbox/services/<name>.env` 是 `KEY=value`，不会被 source。宿主服务控制文件保存在工作区外的私有目录；日志用 `capbox service logs NAME` 读取。`CMD` 是要执行的命令，不是环境变量。`USER`、`CWD` 和其它键在 `--clearenv` 之后 `--setenv`。`service start` 是独立的 bwrap，不依赖 `capbox up`。
 
 见 [服务运维](https://github.com/Sladewww/capbox/wiki/服务运维)。
 

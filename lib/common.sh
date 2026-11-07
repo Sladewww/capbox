@@ -34,7 +34,7 @@ if [[ -z "${CAPBOX_WORKSPACE:-}" ]]; then
 fi
 export CAPBOX_WORKSPACE
 
-readonly CAPBOX_VERSION="0.3.4"
+readonly CAPBOX_VERSION="0.3.5"
 readonly CAPBOX_SCHEMA_VERSION="0.3.0"
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
@@ -904,6 +904,65 @@ _capbox_derive_paths() {
   export CAPBOX_ROOTFS CAPBOX_DAEMON_DIR
 }
 
+# Host executables, argv, and process identities must never share guest-writable run/.
+# A user-owned 0700 parent under a sticky system directory is safe from other users;
+# guest processes cannot reach it because it is outside every workspace bind.
+_capbox_host_state_dir() {
+  local uid ws project key base real parent dir candidate mode owner
+  uid="$(id -u)" || return 1
+  ws="$(readlink -f -- "$CAPBOX_WORKSPACE")" || return 1
+  project="$(resolve_path "$CAPBOX_DIR")" || return 1
+  key="$(printf '%s' "$project" | sha256sum)" || return 1
+  key="${key%% *}"
+  key="${key:0:32}"
+  for base in "${XDG_RUNTIME_DIR:-}" "/run/user/$uid" /tmp; do
+    [[ -n "$base" && -d "$base" && -w "$base" ]] || continue
+    real="$(readlink -f -- "$base")" || continue
+    case "$real" in "$ws"|"$ws"/*) continue ;; esac
+    # A writable non-sticky parent would allow replacement of our private tree.
+    mode="$(stat -c %a -- "$real")" || continue
+    owner="$(stat -c %u -- "$real")" || continue
+    if (( (8#$mode & 0022) != 0 )); then
+      (( (8#$mode & 01000) != 0 )) &&
+        [[ "$real" == /tmp || "$owner" == 0 || "$owner" == "$uid" ]] || continue
+    else
+      [[ "$owner" == "$uid" || "$owner" == 0 ]] || continue
+    fi
+    parent="$real/capbox-$uid"
+    dir="$parent/$key"
+    # Leave room for an AF_UNIX socket name even with a long XDG_RUNTIME_DIR.
+    (( ${#dir} <= 60 )) || continue
+    for candidate in "$parent" "$dir"; do
+      if [[ ! -e "$candidate" && ! -L "$candidate" ]]; then
+        (umask 077; mkdir -- "$candidate") 2>/dev/null || true
+      fi
+      if [[ -L "$candidate" || ! -d "$candidate" ||
+            "$(stat -c %u -- "$candidate")" != "$uid" ||
+            "$(stat -c %a -- "$candidate")" != 700 ]]; then
+        log_err "宿主私有目录必须由当前用户拥有、权限 0700 且不是符号链接: $candidate"
+        return 1
+      fi
+    done
+    printf '%s' "$dir"
+    return 0
+  done
+  log_err "找不到工作区之外的安全宿主运行目录（需要私有 runtime 或 sticky /tmp）"
+  return 1
+}
+
+# A stale numeric PID can refer to an unrelated process after reuse or in another PID ns.
+_capbox_process_identity() {
+  local pid="${1:-}" line ns
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || return 1
+  IFS= read -r line <"/proc/$pid/stat" 2>/dev/null || return 1
+  line="${line##*) }"
+  local -a fields=()
+  read -r -a fields <<<"$line"
+  [[ ${#fields[@]} -ge 20 ]] || return 1
+  ns="$(readlink "/proc/$pid/ns/pid")" || return 1
+  printf '%s %s' "$ns" "${fields[19]}"
+}
+
 config_get() {
   local k
   k="$(_cfg_norm_key "${1:-}")"
@@ -957,7 +1016,7 @@ config_set() {
 
 ensure_dirs() {
   local d
-  for d in bin lib lib/guest cache logs os run run/daemon run/tmp state test services; do
+  for d in bin lib lib/guest cache cache/secrets secrets logs os run run/daemon run/tmp state test services; do
     mkdir -p "$CAPBOX_DIR/$d" 2>/dev/null || true
   done
 }
@@ -1036,7 +1095,7 @@ _capbox_note_fs_placeholder() {
   local p="${1:-}" kind="${2:-file}"
   local dir marker
   [[ -n "$p" && -n "${CAPBOX_RUN_DIR:-}" ]] || return 0
-  dir="$CAPBOX_RUN_DIR/fs-placeholders"
+  dir="$(_capbox_host_state_dir)/fs-placeholders" || return 1
   mkdir -p "$dir" 2>/dev/null || return 0
   marker="$dir/$(printf '%s' "$p" | sha256sum | awk '{print $1}')"
   printf '%s\t%s\n' "$kind" "$p" >"$marker" 2>/dev/null || true
@@ -1045,7 +1104,7 @@ _capbox_note_fs_placeholder() {
 # 清理本进程创建的空挂载点（oneshot 结束后调用；不删非空/已有真实配置）
 _capbox_cleanup_fs_placeholders() {
   local dir marker kind path
-  dir="${CAPBOX_RUN_DIR:-}/fs-placeholders"
+  dir="$(_capbox_host_state_dir)/fs-placeholders" || return 1
   [[ -d "$dir" ]] || return 0
   for marker in "$dir"/*; do
     [[ -f "$marker" ]] || continue
@@ -1313,8 +1372,9 @@ with_lock() {
   [[ $# -gt 0 ]] && shift
   [[ "${1:-}" == "--" ]] && shift
   [[ $# -gt 0 ]] || die 2 "with_lock: 缺少要执行的命令"
-  local lockfile="$CAPBOX_DIR/run/${name:-default}.lock"
-  mkdir -p "$CAPBOX_DIR/run" 2>/dev/null || true
+  local private lockfile
+  private="$(_capbox_host_state_dir)" || return 1
+  lockfile="$private/${name:-default}.lock"
   if have_cmd flock; then
     (
       flock -w 180 9 || {
@@ -1611,6 +1671,10 @@ build_bwrap_args() {
   # FS_BINDS / CAPBOX_BWRAP_EXTRA 都在第一次 logs 只读挂载之后。
   # 再挂一次，保证最后盖住 logs 的是只读绑定。
   _capbox_ro_protect_logs a || return $?
+
+  if declare -F _net_append_ready_bind >/dev/null 2>&1; then
+    _net_append_ready_bind a || return $?
+  fi
 
   printf '%s\n' "${a[@]}"
 }
@@ -2211,7 +2275,7 @@ cmd_doctor() {
         if declare -F _capbox_arch >/dev/null 2>&1; then
           _apk_arch="$(_capbox_arch 2>/dev/null || echo x86_64)"
         fi
-        url="$mirror_root/v3.20/main/${_apk_arch}/APKINDEX.tar.gz"
+        url="$mirror_root/v3.24/main/${_apk_arch}/APKINDEX.tar.gz"
         ;;
       ubuntu) url="$mirror_root/dists/noble/Release" ;;
       *) url="$mirror_root" ;;

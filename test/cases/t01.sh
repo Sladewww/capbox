@@ -16,7 +16,7 @@ done
 
 run_cmd "$CAPBOX_BIN" version
 assert_rc 0 "version 退出码"
-assert_out_contains "0.3.4" "version 输出契约约定的 0.3.4"
+assert_out_contains "0.3.5" "version 输出当前发布版本 0.3.5"
 
 case_finish
 exit 0
