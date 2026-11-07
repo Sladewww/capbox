@@ -18,6 +18,11 @@ import subprocess
 import sys
 import uuid
 
+if sys.version_info < (3, 10):
+    print('[capbox] 此功能需要宿主 Python 3.10 或更新版本', file=sys.stderr)
+    sys.exit(5)
+
+
 PARTS = ('bin', 'lib')
 
 
