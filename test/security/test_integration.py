@@ -137,8 +137,13 @@ class SandboxIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.stdout.strip(), os.readlink("/proc/self/ns/net"))
 
     def test_strict_exec(self):
+        self.run_cli('config', 'set', 'NET', 'none', check=True)
         result = self.run_cli("exec", "--profile", "strict", "--", "true")
         self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_cli('exec', '--profile', 'strict', '--', 'sh', '-c',
+                              'touch /etc/capbox-strict-must-remain-read-only')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.state / 'os/alpine/etc/capbox-strict-must-remain-read-only').exists())
 
     def test_restricted_bridge_starts_without_exposing_host_control(self):
         self.env["CAPBOX_NET_ALLOW"] = "example.com"

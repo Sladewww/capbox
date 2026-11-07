@@ -74,6 +74,13 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.cli('config', 'get', 'NET').stdout.strip(), 'none')
         self.assertEqual(self.cli('config', 'get', 'MEMORY_MAX').stdout.strip(), '128M')
 
+    def test_unrelated_updates_preserve_implicit_strict_rootfs_default(self):
+        self.assertNotIn('CAPBOX_ROOTFS_RO=', self.config.read_text())
+        self.cli('config', 'set', 'MEMORY_MAX', '128M', check=True)
+        self.assertNotIn('CAPBOX_ROOTFS_RO=', self.config.read_text())
+        self.cli('config', 'set', 'ROOTFS_RO', '0', check=True)
+        self.assertIn("CAPBOX_ROOTFS_RO='0'", self.config.read_text())
+
     def test_check_does_not_write(self):
         before = self.config.read_bytes()
         path = self.ws / 'valid.recipe'
@@ -118,6 +125,34 @@ class ConfigurationTests(unittest.TestCase):
         result = self.cli('init', '--agent', '--trusted')
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(self.config.read_bytes(), before)
+
+    def test_reader_waits_for_complete_inode_preserving_commit(self):
+        import time
+        environment = dict(self.env, CAPBOX_DIR=str(self.ws / '.capbox'),
+                           CAPBOX_WORKSPACE=str(self.ws))
+        private = subprocess.check_output(['bash', '-c',
+            'source "$1/lib/common.sh"; _capbox_host_state_dir',
+            'read-lock-test', str(REPO)], env=environment, text=True).strip()
+        marker = self.base / 'writer-ready'
+        writer_code = ("import fcntl,pathlib,sys,time; "
+            "lock=open(sys.argv[1],'w'); fcntl.flock(lock,fcntl.LOCK_EX); "
+            "config=open(sys.argv[2],'w'); pathlib.Path(sys.argv[3]).touch(); "
+            "time.sleep(0.8); config.write(\"CAPBOX_NET='none'\\n\"); config.close()")
+        writer = subprocess.Popen(['python3', '-c', writer_code,
+            str(Path(private) / 'config.lock'), str(self.config), str(marker)])
+        try:
+            deadline = time.monotonic() + 5
+            while not marker.exists():
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            result = self.cli('config', 'get', 'NET')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), 'none')
+            writer.wait(timeout=5)
+        finally:
+            if writer.poll() is None:
+                writer.terminate()
+                writer.wait(timeout=5)
 
     def test_config_symlink_is_refused(self):
         victim = self.base / 'outside'

@@ -200,7 +200,8 @@ if pid==0:
         print('FAIL user namespace:', os.strerror(err), flush=True)
         os._exit(1)
     os.write(pw, b'R'); os.close(pw)
-    os.read(gr, 1)
+    if os.read(gr, 1) != b'x':
+        os._exit(1)
     # verify chown + setgroups + setuid against host-provided private path
     try:
         with open(probe_path, 'w') as f:
@@ -226,9 +227,15 @@ if os.read(pr,1) != b'R':
     sys.exit('FAIL user namespace child exited before mapping handshake')
 ua=['newuidmap', str(pid)] + parse(uid_spec)
 ga=['newgidmap', str(pid)] + parse(gid_spec)
-subprocess.check_call(ua)
-open(f'/proc/{pid}/setgroups','w').write('allow\n')
-subprocess.check_call(ga)
+try:
+    subprocess.check_call(ua)
+    open(f'/proc/{pid}/setgroups','w').write('allow\n')
+    subprocess.check_call(ga)
+except (OSError, subprocess.CalledProcessError) as exc:
+    print('FAIL user namespace mapping:', exc, flush=True)
+    os.close(gw)
+    os.waitpid(pid, 0)
+    sys.exit(1)
 os.write(gw,b'x'); os.close(gw)
 _, st = os.waitpid(pid,0)
 sys.exit(0 if os.WIFEXITED(st) and os.WEXITSTATUS(st)==0 else 1)

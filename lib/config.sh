@@ -292,6 +292,10 @@ config_save() {
   {
     printf '# CapBox 配置（KEY=value；不作为 shell 执行；环境变量优先）\n'
     for k in "${CAPBOX_CFG_KEYS[@]}"; do
+      # An implicit compat default must not pin strict's rootfs to writable.
+      if [[ "$k" == ROOTFS_RO && -z "${CAPBOX_CFG_EXPLICIT[$k]:-}" ]]; then
+        continue
+      fi
       v="$(_cfg_value_for_file "$k")"
       printf 'CAPBOX_%s=%s\n' "$k" "$(_shq "$v")"
     done
@@ -315,6 +319,7 @@ _config_apply_locked() {
         k="$_cfg_line_key"
         [[ "${CAPBOX_CFG_EXPLICIT[$k]:-}" == env ]] && continue
         printf -v "CAPBOX_$k" '%s' "$_cfg_line_val"
+        CAPBOX_CFG_EXPLICIT["$k"]=file
         [[ "$k" != BWRAP ]] || CAPBOX_BWRAP_CFG="$_cfg_line_val"
       fi
     done <"$CAPBOX_DIR/config.env"
@@ -322,6 +327,7 @@ _config_apply_locked() {
   while (( $# )); do
     k="$1"; v="$2"; shift 2
     printf -v "CAPBOX_$k" '%s' "$v"
+    CAPBOX_CFG_EXPLICIT["$k"]=user
     [[ "$k" != BWRAP ]] || CAPBOX_BWRAP_CFG="$v"
   done
   config_save
@@ -454,6 +460,19 @@ load_config() {
     fi
   done
 
+  # Readers share the writer lock, so an in-place inode-preserving commit is
+  # never mistaken for an empty/partial configuration by another CLI process.
+  local config_fd="" private=""
+  if [[ -d "$CAPBOX_DIR" ]]; then
+    need_cmd flock '读取配置需要共享锁'
+    private="$(_capbox_host_state_dir)" || die 1 '无法创建安全配置锁目录'
+    exec {config_fd}>"$private/config.lock" || die 1 '无法打开配置锁'
+    flock -s -w 180 "$config_fd" || die 1 '等待配置读取锁超时'
+  fi
+  if [[ -e "$f" || -L "$f" ]]; then
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || die 2 '配置必须是可读的普通文件，拒绝使用默认配置继续'
+  fi
+
   # 2) 白名单解析配置文件（不 source）
   if [[ -r "$f" ]]; then
     local _cfg_line_key="" _cfg_line_val=""
@@ -464,6 +483,11 @@ load_config() {
         file_seen["${_cfg_line_key}"]=1
       fi
     done <"$f"
+  fi
+
+  if [[ -n "$config_fd" ]]; then
+    flock -u "$config_fd"
+    exec {config_fd}>&-
   fi
 
   # 3) 环境变量覆盖文件
@@ -565,10 +589,7 @@ config_set() {
     [[ -n "$ver" ]] || ver="未知"
     if ! _capbox_audit_old_bwrap persist "$ver" "config set CAPBOX_ALLOW_OLD_BWRAP 1"; then
       log_err "无法写入旧版 bwrap 放行审计，已撤销 CAPBOX_ALLOW_OLD_BWRAP"
-      CAPBOX_ALLOW_OLD_BWRAP=0
-      CAPBOX_CFG_EXPLICIT["ALLOW_OLD_BWRAP"]="user"
-      config_save
-      _capbox_derive_paths
+      config_apply ALLOW_OLD_BWRAP 0 || return 1
       return 1
     fi
   fi
