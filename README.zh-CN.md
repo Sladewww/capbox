@@ -21,7 +21,7 @@ AI agent 经常要装系统包、改 `/etc`、编译进 `/usr`。直接在宿主
 
 ## 快速开始
 
-需要 Linux 和 `bwrap` **>= 0.12.0**。更旧的版本直接拒绝（退出码 6），`compat` 也不豁免。
+需要 Linux 和 `bwrap` **>= 0.12.0**。Alpine 的 `pkg install/remove` 还需要宿主 `python3` 与 `libseccomp`，以兼容宿主禁止匿名脚本执行的策略。更旧的版本直接拒绝（退出码 6），`compat` 也不豁免。
 
 ```sh
 git clone https://github.com/Sladewww/capbox.git ~/.agents/capbox

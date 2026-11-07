@@ -126,14 +126,6 @@ jobs:
           ./bin/capbox init --distro alpine
           ./bin/capbox doctor || true
 
-      - name: Check package script execution policy
-        run: |
-          gcc -static -O2 test/security/probe_script_exec.c -o /tmp/capbox-script-probe
-          probe="$(CAPBOX_BWRAP_EXTRA="--ro-bind /tmp/capbox-script-probe /run/script-probe" ./bin/capbox exec -- /run/script-probe)"
-          printf '%s\n' "$probe"
-          ./bin/capbox exec -- sh -c 'cat /proc/sys/vm/memfd_noexec; cat /proc/self/attr/current || true'
-          [[ "$probe" != *'memfd-script rc=127'* ]]
-
       - name: Run acceptance (skip slow / daemon)
         env:
           # T19 = ubuntu slow; T15/T16 need background daemon

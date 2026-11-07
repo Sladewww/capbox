@@ -1,3 +1,4 @@
+/* Fixture: compare anonymous and disk-backed benign script execution. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

@@ -129,4 +129,10 @@ CI 包含 T41 Landlock、宿主边界回归、加固服务重启、daemon 和网
 
 升级部署前，使用旧版 CLI 停止所有 service 和 daemon，再更新模板及每个项目的 `.capbox/bin`、`.capbox/lib`，然后重新启动。旧运行目录中的脚本、PID 和缓存不会导入新的宿主控制面。私有运行目录属于该宿主，移动整个项目到另一台机器后需重新启动服务；不要复制运行记录。
 
-仓库管理员仍应在 GitHub 启用 main 分支保护/规则集，将 CI 与 Security 检查设为合并前必需项；工作流文件本身不能替代仓库设置。
+本仓库 main 已配置 PR、六项必需 CI/Security 检查、讨论解决、管理员约束，并禁止强推与删除。个人维护场景不强制另一位维护者审批。Dependabot 漏洞告警和自动安全修复已启用，密钥扫描与推送保护保持启用。仓库设置与工作流需共同维护。
+
+## Alpine APK 安装脚本与宿主 AppArmor
+
+Ubuntu 26 等宿主可能允许创建可执行 memfd，却由 AppArmor 拒绝执行匿名脚本。APK 3 在这种情况下会让安装触发器失败，即使软件文件已经解包。
+
+`capbox pkg install/remove` 在 Alpine 下需要宿主 `python3` 和 `libseccomp`，并在所选安全档已有规则之外追加一条限制：显式请求可执行 memfd 的创建返回 ENOSYS，让 APK 使用自身的磁盘脚本回退路径。普通非可执行 memfd 不受这条规则影响。安装脚本仍会运行，错误码仍透传；宿主 AppArmor、已有 seccomp 规则和 capability 限制都保留。直接在 shell 内运行 apk 不经过这个兼容封装，仍可能受宿主匿名脚本策略影响。

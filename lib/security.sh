@@ -47,9 +47,10 @@ _security_seccomp_py() {
 }
 
 _security_bpf_path() {
-  local profile="${1:-untrusted}" private
+  local profile="${1:-untrusted}" private suffix=""
   private="$(_capbox_host_state_dir)" || return 1
-  printf '%s/security/seccomp-%s.bpf' "$private" "$profile"
+  [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]] || suffix=-apk
+  printf '%s/security/seccomp-%s%s.bpf' "$private" "$profile" "$suffix"
 }
 
 # 生成（或复用）BPF；成功时把绝对路径打到 stdout
@@ -57,6 +58,7 @@ _security_ensure_bpf() {
   local profile="${1:-}"
   case "$profile" in
     untrusted | strict) ;;
+    compat) [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" == 1 ]] || return 1 ;;
     *) return 1 ;;
   esac
   have_cmd python3 || {
@@ -77,7 +79,9 @@ _security_ensure_bpf() {
   fi
   local tmp
   tmp="$(mktemp "${out}.XXXXXX")" || return 5
-  if ! python3 "$py" --profile "$profile" --out "$tmp" 2>"${out}.err"; then
+  local -a gen_args=(--profile "$profile" --out "$tmp")
+  [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]] || gen_args+=(--deny-exec-memfd)
+  if ! python3 "$py" "${gen_args[@]}" 2>"${out}.err"; then
     rm -f -- "$tmp"
     log_err "seccomp BPF 生成失败（见 ${out}.err）；拒绝伪实现"
     return 5
@@ -190,14 +194,13 @@ _security_append_bwrap_args() {
 # 通过 CAPBOX_SECURITY_SECCOMP_FD_HOLD 全局保存 FD，避免提前关闭
 _security_wrap_argv() {
   local -n _sw_cmd="$1"
-  _security_is_hardened || return 0
-  local bpf="${CAPBOX_SECURITY_BPF:-}"
-  [[ -n "$bpf" && -s "$bpf" ]] || {
-    local profile
-    profile="$(_security_profile)"
-    bpf="$(_security_ensure_bpf "$profile")" || return $?
-    CAPBOX_SECURITY_BPF="$bpf"
-  }
+  if ! _security_is_hardened && [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]]; then
+    return 0
+  fi
+  local bpf profile
+  profile="$(_security_profile)" || return $?
+  bpf="$(_security_ensure_bpf "$profile")" || return $?
+  CAPBOX_SECURITY_BPF="$bpf"
 
   # 打开只读 FD
   local fd

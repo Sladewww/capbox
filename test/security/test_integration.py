@@ -97,6 +97,29 @@ class SandboxIntegrationTests(unittest.TestCase):
             client.sendall(b"defensive-test\n")
             self.assertEqual(client.recv(64), b"defensive-test\n")
 
+    def test_package_scripts_use_disk_fallback_without_losing_profile_rules(self):
+        probe = self.base / "script-probe"
+        subprocess.run(["gcc", "-static", "-O2",
+                        str(REPO / "test/security/probe_script_exec.c"),
+                        "-o", str(probe)], check=True, capture_output=True, timeout=30)
+        for profile in ("compat", "untrusted"):
+            env = dict(self.env, CAPBOX_DIR=str(self.state),
+                       CAPBOX_WORKSPACE=str(self.workspace),
+                       CAPBOX_SECURITY_PROFILE=profile,
+                       CAPBOX_BWRAP_EXTRA=f"--ro-bind {probe} /run/script-probe")
+            result = subprocess.run(
+                ["bash", "-c", 'for module in common rootfs sandbox net resources idmap '
+                 'security fsguard landlock; do source "$1/lib/$module.sh"; done; '
+                 '_pkg_run_guest install "/run/script-probe; '
+                 'if mount -t tmpfs none /mnt >/dev/null 2>&1; then echo MOUNT_ALLOWED; '
+                 'else echo MOUNT_DENIED; fi" 20', "test", str(REPO)],
+                env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("memfd_create: Function not implemented", result.stdout)
+            self.assertIn("disk-script rc=0", result.stdout)
+            if profile == "untrusted":
+                self.assertIn("MOUNT_DENIED", result.stdout)
+
     def test_none_uses_a_separate_network_namespace_and_clears_env(self):
         self.env["CAPBOX_SECURITY_TEST_SENTINEL"] = "host-only"
         result = self.run_cli("exec", "--", "sh", "-c",

@@ -121,3 +121,7 @@ workspace. Read service output with `capbox service logs NAME`. Stop services an
 daemons with the old CLI before upgrading existing project-local copies; restart
 them after updating `bin/` and `lib/`. Existing rootfs data is not overwritten.
 See [SECURITY.md](SECURITY.md) for migration and resource-limit requirements.
+
+Alpine `pkg install/remove` also requires host Python 3 and libseccomp. It adds
+an executable-memfd restriction so APK can use its disk-script fallback under
+AppArmor, while keeping package scripts and existing profile rules enabled.
