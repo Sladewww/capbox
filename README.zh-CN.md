@@ -18,6 +18,12 @@ Alpine 包安装脚本需要宿主 Python 3.10+ 和 libseccomp。升级、严格
 
 普通运行无需宿主 root；磁盘配额另需宿主 loop/mount 授权，仅覆盖指定 guest 数据目录。CPU、内存和进程限额依赖 cgroup 委派；`require` 会拒绝无法兑现的已配置额度。
 
+## 本地 Agent 任务
+
+`capbox task start -- CMD` 返回持久 task ID，支持重连、按游标读取日志和取消。`task start --isolate` 创建独立工作文件与 rootfs 副本，结束后导出 diff 供审阅。`policy show` / `policy check URL` 解释请求的策略及网络规则。
+
+接口、超时语义、隔离范围和审阅示例见 [Local Agent workflows](docs/agent-workflows.md)。
+
 ## 安装模板
 
 模板应在所有业务工作区之外。下面目标不存在时执行：

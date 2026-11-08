@@ -78,6 +78,10 @@ _net_session_tag() {
   local tag="${CAPBOX_NET_SESSION:-oneshot}"
   case "$tag" in
     daemon) printf 'daemon' ;;
+    task-*)
+      if [[ "$tag" =~ ^task-[0-9a-f]{32}$ ]]; then printf '%s' "$tag"
+      else printf 'oneshot'; fi
+      ;;
     svc-*)
       tag="$(printf '%s' "$tag" | tr -c 'A-Za-z0-9_-' '-')"
       printf '%s' "$tag"

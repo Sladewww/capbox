@@ -4,8 +4,8 @@ CI checks behavior at distinct layers. A passing fallback test is not evidence t
 
 | Job | Scope | Required behavior |
 |---|---|---|
-| bash -n + selftest | Syntax, harness fault detection, config transactions, upgrade recovery, strict locks, host boundaries and generated docs | No failing checks |
-| acceptance (bubblewrap) | T01–T41 selections plus real hardened service/daemon/network integration on Alpine | Real sandbox execution; no swallowed doctor failure |
+| bash -n + selftest | Syntax, harness fault detection, config transactions, upgrade recovery, strict locks, policy previews, host boundaries and generated docs | No failing checks |
+| acceptance (bubblewrap) | T01–T41 selections plus real hardened service/daemon/network integration and task/reconnect/isolation regression tests on Alpine | Real sandbox execution; no swallowed doctor failure |
 | Compatibility matrix | Alpine and Ubuntu guests on x86_64 and aarch64 Ubuntu 22.04 hosts | Real exec, strict profile, network isolation, service and lock verification; no skips |
 | Multi-UID mapping (required) | A runner with an explicit subordinate UID/GID delegation | Must obtain multi mapping and pass chown, non-root exec and a service; no fallback or skip |
 | Default host policy | Ubuntu 26.04 without changing userns/AppArmor sysctls | Execute successfully when bwrap can do so, or explicitly report host refusal; never report successful execution after a refusal |

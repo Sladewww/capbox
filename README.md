@@ -79,6 +79,12 @@ Services use `.capbox/services/NAME.env` and independent bwrap launches. `servic
 
 A shared persistent guest can use `capbox up --systemd`, then `capbox exec --daemon -- CMD`. Without a user systemd bus, use a process manager that survives the calling tool's lifetime.
 
+## Local Agent tasks
+
+Use `capbox task start -- CMD` for a supervised task with a persistent ID, resumable output and cancellation. `task start --isolate` uses a private working-file/rootfs copy and exports a reviewable diff. `capbox policy show` and `policy check URL` explain requested launch and network rules without weakening them.
+
+See [Local Agent workflows](docs/agent-workflows.md) for JSON contracts, timeout semantics, isolation limits and review/export examples.
+
 ## Validate configuration and reproduce packages
 
 ```sh

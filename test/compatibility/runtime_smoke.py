@@ -47,6 +47,14 @@ with tempfile.TemporaryDirectory(prefix='capbox-compat-') as temporary:
         assert guest_ns != os.readlink('/proc/self/ns/net'), guest_ns
         run('image', 'lock', 'save')
         run('image', 'lock', 'verify')
+    task = json.loads(run('task', 'start', '--timeout', '15', '--', 'sh', '-c', 'printf agent-task'))['task_id']
+    try:
+        assert json.loads(run('task', 'wait', task, '--timeout', '20'))['status'] == 'succeeded'
+        assert run('task', 'logs', task) == 'agent-task'
+        assert json.loads(run('policy', 'show'))['values']['NET']['value'] == 'none'
+    finally:
+        run('task', 'cancel', task)
+        run('task', 'rm', task)
     service = workspace / '.capbox/services/smoke.env'
     service.write_text('CMD=sleep 60\nNET=none\n' +
                        ('UID=33\nGID=33\nREQUIRE_IDMAP=1\n' if args.require_multi else ''))
