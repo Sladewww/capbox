@@ -4,6 +4,11 @@ _upgrade_assert_stopped() {
   if daemon_running; then
     log_err '升级前请先 capbox down'; return 1
   fi
+  if declare -F _agent_command >/dev/null 2>&1; then
+    _agent_command task list | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(any(t["status"] not in ("succeeded","failed","cancelled","timed_out","lost") for t in d["tasks"]))' || {
+      log_err "升级前请先取消或等待所有 task"; return 1;
+    }
+  fi
   local private dir name
   private="$(_capbox_host_state_dir)" || return 1
   for dir in "$private"/services/*; do

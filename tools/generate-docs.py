@@ -45,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
                  f'do not edit command output by hand. CLI version: **{version}**.\n')]
     for command in [('--help',), ('init', '--help'), ('upgrade', '--help'),
                     ('recipe', '--help'), ('image', '--help'), ('service', '--help'),
+                    ('task', '--help'), ('task', 'start', '--help'),
+                    ('policy', '--help'),
                     ('pkg', '--help')]:
         sections.append('\n## capbox ' + ' '.join(command) + '\n\n```text\n' +
                         cli(*command).rstrip() + '\n```\n')

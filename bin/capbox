@@ -192,6 +192,7 @@ for _capbox_module in rootfs sandbox daemon net resources recipe idmap service a
   source "$_capbox_lib_dir/$_capbox_module.sh" || exit $?
 done
 unset _capbox_module
+[ -f "$_capbox_lib_dir/agent.sh" ] && source "$_capbox_lib_dir/agent.sh"
 unset _capbox_lib_dir
 
 # ---------- 2. 帮助 -----------------------------------------------------------
@@ -220,6 +221,9 @@ CapBox —— 工作区内持久化的 root Linux 容器
 执行
   exec [--daemon] [--timeout N] [--cwd DIR] [--uid N] [--gid N] [--user NAME] [--] CMD...
                                     在容器内执行命令（默认一次性无状态容器）
+  task start|list|status|logs|attach|wait|cancel|diff|rm
+                                    持久任务、断线重连与隔离工作副本 diff（task --help）
+  policy show|check                 新 oneshot 有效策略与 HTTP(S) 网络决策预览
   service start|stop|status|logs|list
                                     配置化服务（.capbox/services/<name>.env）
   shell [--daemon]                  交互式 shell（无 tty 时退化为读取 stdin 的 sh）
@@ -366,7 +370,7 @@ capbox_main() {
 
   # 危险操作：禁止把 $HOME 或 / 当成工作区 RW bind 进容器
   case "$cmd" in
-    bootstrap | init | upgrade | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
+    bootstrap | init | upgrade | task | policy | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
       if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
         _capbox_require_safe_workspace || return 1
       fi
@@ -405,6 +409,8 @@ capbox_main() {
       ;;
 
     # ---- 执行 ----
+    task) cmd_task "$@" ;;
+    policy) cmd_policy "$@" ;;
     exec)
       _require_decl cmd_exec exec "lib/sandbox.sh" || return 1
       cmd_exec "$@"
