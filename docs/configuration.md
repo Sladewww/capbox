@@ -1,6 +1,6 @@
 # Configuration defaults
 
-Generated from `lib/config.sh`; CLI version: **0.3.7**. These are bare-initialization defaults. Explicit `--agent` and `--trusted` presets overwrite their four settings. Empty quotas mean **no quota has been configured**.
+Generated from `lib/config.sh`; CLI version: **0.4.0**. These are bare-initialization defaults. Explicit `--agent` and `--trusted` presets overwrite their four settings. Empty quotas mean **no quota has been configured**.
 
 | Key | Default |
 |---|---|
