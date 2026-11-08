@@ -54,6 +54,7 @@ jobs:
           python3 test/security/test_package_lock.py
           python3 test/security/test_agent_workflows.py PolicyTests
           python3 test/security/test_p1_tools.py SetupTests MCPTests
+          python3 test/security/test_audit_report.py
       - name: Generated documentation and examples
         run: python3 tools/generate-docs.py --check
 
@@ -62,6 +63,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
           shellcheck --severity=error bin/capbox lib/*.sh lib/guest/*.sh
+
+  audit-report-browser:
+    name: Offline audit report (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install locked browser test dependency
+        run: npm ci --prefix test/browser --ignore-scripts --no-audit --no-fund
+      - name: Install Chromium
+        run: test/browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Test the actual offline HTML artifact
+        run: npm --prefix test/browser test
 
   acceptance:
     name: acceptance (bubblewrap)

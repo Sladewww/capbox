@@ -11,6 +11,9 @@ flowchart TD
     Commands --> Process[host process identities and supervision]
     CLI --> Upgrade[upgrade.sh + upgrade-runtime.py]
     CLI --> Lock[package-lock.sh + package-lock.py]
+    CLI --> Audit[audit.sh: read-only report command]
+    Audit --> Report[audit-report.py: bounded JSONL snapshot]
+    Report --> HTML[audit-report.html: offline filters and charts]
 ```
 
 - `lib/version.sh`: the public CLI and schema versions.
@@ -20,5 +23,6 @@ flowchart TD
 - `lib/service.sh` and `lib/service-supervisor.py`: service definitions, readiness, process lifetime and restart policy.
 - `lib/upgrade.sh`: stop-state checks and the project upgrade lock. `upgrade-runtime.py` stages/validates complete runtime trees, records private recovery state and restores backups after failure.
 - `lib/package-lock.sh`: runs the normal guest package wrapper. `package-lock.py` validates data, produces exact package arguments and compares the installed set.
+- `lib/audit-report.py` and its HTML template: bound and normalise a selected audit JSONL snapshot, then publish a private, self-contained report outside the workspace. Browser interactions use only embedded data; no launcher or control server is exposed.
 
 Host launchers, process identity records, BPF and helpers remain outside the guest-visible workspace. Upgrade backups use persistent host state storage, separate from disposable runtime files. Project config and rootfs are data and are never interpreted as host shell programs.

@@ -1,0 +1,6 @@
+{
+  "name": "capbox-audit-browser-tests",
+  "private": true,
+  "scripts": { "test": "node ../security/test_audit_report_ui.cjs" },
+  "devDependencies": { "playwright": "1.58.2" }
+}

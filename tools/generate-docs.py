@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
                     ('recipe', '--help'), ('image', '--help'), ('service', '--help'),
                     ('task', '--help'), ('task', 'start', '--help'),
                     ('policy', '--help'), ('setup', '--help'), ('bundle', '--help'), ('mcp', '--help'),
-                    ('pkg', '--help')]:
+                    ('audit', '--help'), ('audit', 'report', '--help'), ('pkg', '--help')]:
         sections.append('\n## capbox ' + ' '.join(command) + '\n\n```text\n' +
                         cli(*command).rstrip() + '\n```\n')
     write_or_check('docs/cli-reference.md', ''.join(sections))
