@@ -568,7 +568,7 @@ cmd_ps() {
 _pkg_names_ok() {
   local p
   for p in "$@"; do
-    [[ "$p" =~ ^[A-Za-z0-9][A-Za-z0-9._+:@/-]*$ ]] || {
+    [[ "$p" =~ ^[A-Za-z0-9][A-Za-z0-9._+:@/-]*(=[A-Za-z0-9][A-Za-z0-9._+:~/-]*)?$ ]] || {
       log_err "可疑包名，已拒绝: $p"
       return 1
     }

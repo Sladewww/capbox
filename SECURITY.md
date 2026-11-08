@@ -35,13 +35,13 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 - `AWS_*`、`*_TOKEN`、`*_KEY`、`OPENAI_API_KEY`、`GITHUB_TOKEN`
 - 宿主 `USER`/`LOGNAME`、编辑器/agent 注入的私有变量
 
-实现位置：`lib/common.sh` 的 `build_bwrap_args`，以及 `lib/daemon.sh` 的 `_daemon_bwrap_args`（兜底路径）。`doctor` 含一项 live 探针：若哨兵变量仍能进入 guest，则 **FAIL**。
+实现位置：`lib/launch.sh` 的 `build_bwrap_args`；daemon 的 `_daemon_bwrap_args` 也委托同一实现。`doctor` 含一项 live 探针：若哨兵变量仍能进入 guest，则 **FAIL**。
 
 > 同类根因先例：调用方省略 bwrap `--clearenv` 导致沙箱继承宿主密钥（例如公开记录的 mini-swe-agent 环境继承问题）。这不是 bwrap 本身的缺陷，而是参数构造责任。
 
 ## bubblewrap 最低版本
 
-`doctor` 和每一次会创建 bwrap 的入口（`exec` / `shell` / `service start` / `up`，含 `build_bwrap_args` 与 daemon 兜底 `_daemon_bwrap_args`）都要求 `bwrap --version` **不低于 0.12.0**。版本不够或无法解析时，`doctor` 记 **FAIL** 并退出 **6**；启动直接拒绝，退出码同样是 6。二进制缺失仍是「依赖不可用」（退出码 5），不是基线 6。
+`doctor` 和每一次会创建 bwrap 的入口（`exec` / `shell` / `service start` / `up`，含 `build_bwrap_args` 与 daemon 委托入口 `_daemon_bwrap_args`）都要求 `bwrap --version` **不低于 0.12.0**。版本不够或无法解析时，`doctor` 记 **FAIL** 并退出 **6**；启动直接拒绝，退出码同样是 6。二进制缺失仍是「依赖不可用」（退出码 5），不是基线 6。
 
 0.12.0 修了 CVE-2026-87766：setup 阶段可以经 `/oldroot` 的符号链接写出沙箱。这是启动前的宿主写入，跟容器里 capability 大小无关，所以 **compat、untrusted、strict 一样拒绝**。CVE-2026-41163 只影响 setuid 的 0.11.0 与 0.11.1，0.11.2 已修。门槛放在 0.12.0，两处都盖住。CapBox 让 bwrap 在 rootfs 里创建 `/tmp`、`/proc`、`/dev` 等挂载点，而 rootfs 对 guest 经常可写，所以上面的 setup 缺陷在这条用法里成立。
 
@@ -136,3 +136,13 @@ CI 包含 T41 Landlock、宿主边界回归、加固服务重启、daemon 和网
 Ubuntu 26 等宿主可能允许创建可执行 memfd，却由 AppArmor 拒绝执行匿名脚本。APK 3 在这种情况下会让安装触发器失败，即使软件文件已经解包。
 
 `capbox pkg install/remove` 在 Alpine 下需要宿主 `python3` 和 `libseccomp`，并在所选安全档已有规则之外追加一条限制：显式请求可执行 memfd 的创建返回 ENOSYS，让 APK 使用自身的磁盘脚本回退路径。普通非可执行 memfd 不受这条规则影响。安装脚本仍会运行，错误码仍透传；宿主 AppArmor、已有 seccomp 规则和 capability 限制都保留。直接在 shell 内运行 apk 不经过这个兼容封装，仍可能受宿主匿名脚本策略影响。
+
+## 0.3.6 配置提交、升级与严格包锁
+
+配方先完整解析并校验所有键值，未知键、重复键及无效行直接失败。校验失败不会写回部分配置；合法批次通过进程间锁串行提交，并保留已有 config.env inode，维持长寿 guest 的只读绑定。提交不是跨断电的原子替换，后续初始化和装包也不属于配置事务。隐式 ROOTFS_RO 默认值不会因修改其它配置而写成显式可写，保留 strict 的默认只读语义；旧文件中已有 ROOTFS_RO=0 仍受尊重，需要只读根时请显式设为 1。配置处理在 `lib/config.sh`；启动参数在 `lib/launch.sh`，缺少必需运行模块时拒绝启动。
+
+`init --trusted` 显式选择兼容开发设置；`--agent` 选择加固、无网、单 UID 与资源 require。两者都不会自动选择资源数值。裸初始化保留既有配置与历史兼容默认值。
+
+`upgrade` 只更新已停止项目的 bin/lib。新模板必须在工作区外并由用户信任；暂存时验证完整文件集合和冒烟检查。备份及恢复日志放在工作区外的持久私有宿主状态目录（XDG_STATE_HOME，默认 ~/.local/state/capbox），替换失败时补偿恢复。中断标记会阻止新 CLI 的普通命令，需从完整外部模板回滚。升级无法协调仍在运行的旧版 CLI 调用，需要停机维护；不会自动升级 rootfs 或业务数据。
+
+严格包锁绑定发行版、架构及完整已安装包版本集合。它仅生成校验过的精确版本参数，经现有包管理封装安装后重新比较；版本不可用或不匹配会失败。锁文件是数据，不能证明包文件未被篡改，也不能保存上游已删除的软件版本。长期重建需另存可信软件源快照或 rootfs 镜像。详见 [升级](docs/upgrades.md)、[包锁](docs/package-locks.md)、[CI 范围](docs/testing.md)。

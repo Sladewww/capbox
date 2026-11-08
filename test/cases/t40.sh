@@ -328,11 +328,14 @@ PY
   rc=0
   ( cmd_up --net ) || rc=$?
   [[ "$rc" -eq 2 ]]
-  keys=()
-  config_set() { keys+=("$1=$2"); return 0; }
+  # Exercise the real batch commit, rather than observing old config_set calls.
   _apply_agent_preset
-  printf '%s\n' "${keys[@]}" | grep -qx 'NET=none'
-  printf '%s\n' "${keys[@]}" | grep -qx 'SECURITY_PROFILE=untrusted'
+  [[ "$CAPBOX_NET" == none && "$CAPBOX_SECURITY_PROFILE" == untrusted ]]
+  [[ "$CAPBOX_IDMAP" == off && "$CAPBOX_RESOURCES_MODE" == require ]]
+  grep -q "CAPBOX_NET='none'" "$CAPBOX_DIR/config.env"
+  grep -q "CAPBOX_SECURITY_PROFILE='untrusted'" "$CAPBOX_DIR/config.env"
+  grep -q "CAPBOX_IDMAP='off'" "$CAPBOX_DIR/config.env"
+  grep -q "CAPBOX_RESOURCES_MODE='require'" "$CAPBOX_DIR/config.env"
 
   # 仓库即状态：logs 必须出现在 --ro-bind 里。符号链接和普通文件拒绝。
   (

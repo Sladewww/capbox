@@ -54,7 +54,7 @@ _recipe_parse_line() {
   raw="${BASH_REMATCH[2]}"
   short="$(_recipe_norm_key "$key")"
   _recipe_known "$short" || {
-    log_warn "recipe 忽略未知键: $key"
+    log_err "recipe 未知键: $key"
     return 1
   }
   if [[ "$raw" == \'* ]]; then
@@ -130,13 +130,41 @@ _recipe_find_file() {
 _recipe_load_into() {
   local file="${1:-}"
   local -n _rl="$2"
-  local line _recipe_key _recipe_val
+  local line trimmed number=0 _recipe_key="" _recipe_val=""
   while IFS= read -r line || [[ -n "$line" ]]; do
+    ((++number))
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    [[ -n "$trimmed" && "$trimmed" != \#* ]] || continue
     _recipe_key=""; _recipe_val=""
-    if _recipe_parse_line "$line"; then
-      _rl["$_recipe_key"]="$_recipe_val"
+    if ! _recipe_parse_line "$line"; then
+      log_err "recipe 第 $number 行无效（只接受已知键的 KEY=value）"
+      return 2
     fi
+    [[ -z "${_rl[$_recipe_key]+x}" ]] || {
+      log_err "recipe 重复键: $_recipe_key（第 $number 行）"; return 2;
+    }
+    _rl["$_recipe_key"]="$_recipe_val"
   done <"$file"
+}
+
+_recipe_validate() {
+  local -n _rv="$1"
+  local k raw
+  local -a pkgs=()
+  for k in "${!_rv[@]}"; do
+    case "$k" in
+      INIT)
+        case "${_rv[$k],,}" in
+          0|1|true|false|yes|no|on|off) ;;
+          *) log_err 'recipe INIT 只能是布尔值'; return 2 ;;
+        esac ;;
+      PACKAGES)
+        raw="${_rv[$k]//,/ }"
+        read -r -a pkgs <<<"$raw"
+        _pkg_names_ok "${pkgs[@]}" || return 2 ;;
+      *) _cfg_validate "$k" "${_rv[$k]}" || return 2 ;;
+    esac
+  done
 }
 
 cmd_recipe() {
@@ -146,20 +174,27 @@ cmd_recipe() {
       shift || true
       _recipe_cmd_apply "$@"
       ;;
+    check)
+      shift || true
+      _recipe_cmd_apply --check "$@"
+      ;;
     show | cat)
       shift || true
       _recipe_cmd_show "$@"
       ;;
     -h | --help | help)
       cat <<'HELP'
-用法: capbox recipe apply [FILE]
+用法: capbox recipe apply [--locked LOCKFILE] [FILE]
+      capbox recipe check [FILE]
       capbox recipe show  [FILE]
 
   声明式 KEY=value 配方（不会被 source）。默认读：
     ./capbox.recipe  或  .capbox/recipe.env
 
   常用键: DISTRO PACKAGES NET NET_ALLOW MEMORY_MAX CPU_MAX PIDS_MAX MIRROR INIT
-  apply：写入 config.env → 按需 init → 安装 PACKAGES
+  check：完整校验，不写配置。未知键、重复键或无效行均报错。
+  apply：完整校验 → 一次写回 config.env → 按需 init → 安装 PACKAGES
+  --locked：按严格包锁安装并验证；版本不可用则失败。
 HELP
       return 0
       ;;
@@ -168,7 +203,7 @@ HELP
       if [[ -f "$sub" ]]; then
         _recipe_cmd_apply "$sub"
       else
-        die 2 "用法: capbox recipe <apply|show> [FILE]"
+        die 2 "用法: capbox recipe <check|apply|show> [FILE]"
       fi
       ;;
   esac
@@ -182,24 +217,39 @@ _recipe_cmd_show() {
 }
 
 _recipe_cmd_apply() {
-  local f do_init=1
-  f="$(_recipe_find_file "${1:-}")" || die 2 "未找到 recipe（试 capbox.recipe 或 .capbox/recipe.env）"
+  local f do_init=1 hint="" locked="" check=0
+  while (( $# )); do
+    case "$1" in
+      --check) check=1; shift ;;
+      --locked)
+        [[ $# -ge 2 ]] || die 2 '--locked 需要锁文件'
+        locked="$2"; shift 2 ;;
+      -*) die 2 "recipe 未知选项: $1" ;;
+      *) [[ -z "$hint" ]] || die 2 'recipe 只接受一个文件'; hint="$1"; shift ;;
+    esac
+  done
+  f="$(_recipe_find_file "$hint")" || die 2 "未找到 recipe（试 capbox.recipe 或 .capbox/recipe.env）"
   log_info "应用配方: $f"
 
   declare -A R=()
-  _recipe_load_into "$f" R
+  _recipe_load_into "$f" R || return $?
+  _recipe_validate R || return $?
+  if [[ -n "$locked" ]]; then
+    _package_lock_validate "$locked" "${R[DISTRO]:-$CAPBOX_DISTRO}" "${R[PACKAGES]:-}" || return $?
+  fi
+  if (( check == 1 )); then
+    printf 'OK %s\n' "$f"
+    return 0
+  fi
 
-  local k v
+  local k
+  local -a config_pairs=()
   for k in "${CAPBOX_RECIPE_KEYS[@]}"; do
-    [[ "$k" == "PACKAGES" || "$k" == "INIT" ]] && continue
+    [[ "$k" == PACKAGES || "$k" == INIT ]] && continue
     [[ -n "${R[$k]+x}" ]] || continue
-    v="${R[$k]}"
-    if declare -F config_set >/dev/null 2>&1; then
-      config_set "$k" "$v" || die 2 "recipe 配置无效: $k=$v"
-    else
-      die 1 "config_set 不可用"
-    fi
+    config_pairs+=("$k" "${R[$k]}")
   done
+  config_apply "${config_pairs[@]}" || return $?
 
   case "${R[INIT]:-1}" in
     0 | false | False | no | NO | off | OFF) do_init=0 ;;
@@ -223,7 +273,9 @@ _recipe_cmd_apply() {
     fi
   fi
 
-  if [[ -n "${R[PACKAGES]:-}" ]]; then
+  if [[ -n "$locked" ]]; then
+    _package_lock_restore "$locked" || return $?
+  elif [[ -n "${R[PACKAGES]:-}" ]]; then
     local pkgs=() raw
     raw="${R[PACKAGES]//,/ }"
     read -r -a pkgs <<<"$raw"

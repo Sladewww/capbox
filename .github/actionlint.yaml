@@ -1,0 +1,5 @@
+# Official GitHub-hosted label documented in the runner reference.
+# actionlint 1.7.12 predates this label in its built-in allowlist.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

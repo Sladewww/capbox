@@ -166,7 +166,7 @@ cmd_image() {
   import NAME [--force]    导入到旁路目录 os/<distro>.imported-NAME；--force 才替换当前 rootfs
   list                     列出已导出镜像
   verify NAME              校验 SHA256
-  lock save|show           保存/显示包版本锁（apk policy / dpkg-query）
+  lock save|show|verify|restore [FILE]  保存/查看/验证/按精确版本恢复包锁
   cache save|restore|path  离线包缓存（apk/apt 缓存目录打包）
 
 导入默认不破坏现有 rootfs；--force 会先 snapshot-bak 再替换。
@@ -286,26 +286,23 @@ H
       local lsub="${1:-show}"
       case "$lsub" in
         save)
-          require_rootfs
-          mkdir -p "$(dirname "$(_image_lock_path)")"
-          local out
-          if [[ "${CAPBOX_DISTRO}" == "alpine" ]]; then
-            out="$(exec_in_guest 'apk info -v 2>/dev/null | sort' /workspace 120)" || true
+          _package_lock_save || return $?
+          ;;
+        verify|restore)
+          local action="$lsub" lockfile="${2:-$(_image_lock_path)}"
+          [[ $# -le 2 ]] || die 2 'image lock: 参数过多'
+          if [[ "$action" == verify ]]; then
+            _package_lock_verify "$lockfile"
           else
-            out="$(exec_in_guest 'dpkg-query -W -f='\''${Package}=${Version}\n'\'' 2>/dev/null | sort' /workspace 120)" || true
+            _package_lock_restore "$lockfile"
           fi
-          {
-            printf '# CapBox package.lock — %s %s\n' "${CAPBOX_DISTRO}" "$(date -Iseconds 2>/dev/null || date)"
-            printf '%s\n' "$out"
-          } >"$(_image_lock_path)"
-          log_info "已写入 $(_image_lock_path)"
-          printf '%s\n' "$(_image_lock_path)"
+          return $?
           ;;
         show|"")
           [[ -f "$(_image_lock_path)" ]] || { printf '(无 package.lock；先 image lock save)\n'; return 0; }
           cat -- "$(_image_lock_path)"
           ;;
-        *) die 2 "image lock: save|show" ;;
+        *) die 2 "image lock: save|show|verify|restore" ;;
       esac
       return 0
       ;;

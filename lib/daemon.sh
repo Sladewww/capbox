@@ -8,9 +8,9 @@
 # 容器内的服务端在 lib/guest/daemon.sh（由本文件在 bwrap 里以 /bin/sh 启动）。
 #
 # 与他人文件的关系（契约 §4）：
-#   * 优先复用 common.sh 的 build_bwrap_args / ensure_rootfs_dirs / log_* / die /
+#   * 复用 launch.sh 的 build_bwrap_args 及 common.sh 的 ensure_rootfs_dirs / log_* / die /
 #     refresh_resolv 等；sandbox.sh 的 sandbox_bwrap_cmd 用于构造 bwrap argv。
-#   * 这些文件缺失或函数未定义时，本文件用 _daemon_* 私有兜底，**绝不因此崩溃**。
+#   * 启动策略只有 lib/launch.sh 一份；缺少必需模块时明确失败。
 #   * 本文件**不定义 capbox_main**（由 主模块的 bin/capbox 提供），只注册命令函数。
 #
 # ⚠️ 本文件最反直觉的一条设计（已实测，务必保留）：
@@ -26,7 +26,7 @@
 # =============================================================================
 
 # =============================================================================
-# 0. 兜底层：common.sh 缺失时的最小可用实现
+# 0. 基础工具与启动入口
 # =============================================================================
 
 # ---- 0.1 全局变量 ------------------------------------------------------------
@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.3.5}"
+: "${CAPBOX_VERSION:=0.3.6}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -104,192 +104,25 @@ if ! declare -F ensure_dirs >/dev/null 2>&1; then
   }
 fi
 
-# ---- 0.4 bwrap 参数兜底（契约 §3.4 的同构实现） ------------------------------
+# ---- 0.4 统一 bwrap 参数入口 ------------------------------
 
-# 兜底路径自己检查版本。common.sh 的门禁在时用它（含单次/持久放行与审计）。
-# 助手缺失时按同一条 >= 0.12.0 规则拒绝，退出码 6。不读环境变量放行。
+# 复用同一安全门禁；模块不完整时失败，不维护第二份策略。
 _daemon_require_bwrap_version() {
-  if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
-    CAPBOX_BWRAP_BASELINE_CMD="up"
-  fi
-  if declare -F _capbox_enforce_bwrap_baseline >/dev/null 2>&1; then
-    _capbox_enforce_bwrap_baseline
-    return $?
-  fi
-  local bin line maj min pat
-  bin="${CAPBOX_BWRAP:-}"
-  if [[ -z "$bin" || ! -x "$bin" ]]; then
-    log_err "bwrap 不可用: ${bin:-未设置}"
+  if ! declare -F _capbox_enforce_bwrap_baseline >/dev/null 2>&1; then
+    log_err '启动模块不完整：缺少统一 bwrap 安全门禁'
     return 5
   fi
-  line="$("$bin" --version 2>/dev/null | head -n 1 || true)"
-  if [[ "$line" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-    maj=$((10#${BASH_REMATCH[1]}))
-    min=$((10#${BASH_REMATCH[2]}))
-    pat=$((10#${BASH_REMATCH[3]}))
-    if (( maj > 0 || (maj == 0 && min > 12) || (maj == 0 && min == 12 && pat >= 0) )); then
-      return 0
-    fi
-  fi
-  log_err "bwrap 低于安全基线 0.12.0（兜底路径不接受放行）"
-  return 6
+  _capbox_enforce_bwrap_baseline
 }
 
-# _daemon_bwrap_args MODE   —— 打印一行一个参数（不含 -- 命令部分）
+# Keep the internal entry point for callers, with no independent policy fallback.
 _daemon_bwrap_args() {
-  local mode="${1:-daemon}"
-  local -a a=()
-
-  _daemon_require_bwrap_version || return $?
-
-  a+=(--bind "$CAPBOX_ROOTFS" /)
-  a+=(--proc /proc)
-  a+=(--dev /dev)
-  if [[ "$mode" == "daemon" ]]; then
-    mkdir -p "$CAPBOX_TMP_DIR" 2>/dev/null || true
-    a+=(--bind "$CAPBOX_TMP_DIR" /tmp)
-  else
-    a+=(--tmpfs /tmp)
+  if ! declare -F build_bwrap_args >/dev/null 2>&1; then
+    log_err '启动模块不完整：缺少 lib/launch.sh'
+    return 5
   fi
-  a+=(--tmpfs /run)
-  a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
-  # 防止 guest 改写 CLI / config.env（与 common.sh build_bwrap_args 同构）
-  if declare -F _capbox_append_ro_cli_binds >/dev/null 2>&1; then
-    _capbox_append_ro_cli_binds a || return $?
-  else
-    # 兜底：common.sh 未加载时手工 ro-bind（含缺失 config.env / services 预占）
-    local _gp _cfg _svc _logs
-    if [[ -d "${CAPBOX_BIN_DIR:-}" ]]; then
-      _gp="$(_daemon_guest_path "$CAPBOX_BIN_DIR")"
-      [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_BIN_DIR" "$_gp")
-    fi
-    if [[ -d "${CAPBOX_LIB_DIR:-}" ]]; then
-      _gp="$(_daemon_guest_path "$CAPBOX_LIB_DIR")"
-      [[ -n "$_gp" && "$_gp" == /workspace/* ]] && a+=(--ro-bind "$CAPBOX_LIB_DIR" "$_gp")
-    fi
-    _cfg="${CAPBOX_DIR:-}/config.env"
-    _gp="$(_daemon_guest_path "$_cfg")"
-    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
-      if [[ ! -e "$_cfg" && ! -L "$_cfg" ]]; then
-        ( umask 077; : >"$_cfg" ) 2>/dev/null || true
-      fi
-      if [[ -f "$_cfg" && ! -L "$_cfg" ]]; then
-        a+=(--ro-bind /dev/null "$_gp")
-      fi
-    fi
-    _svc="${CAPBOX_DIR:-}/services"
-    _gp="$(_daemon_guest_path "$_svc")"
-    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
-      [[ -d "$_svc" ]] || mkdir -p "$_svc" 2>/dev/null || true
-      if [[ -d "$_svc" && ! -L "$_svc" ]]; then
-        a+=(--ro-bind "$_svc" "$_gp")
-      fi
-    fi
-    _logs="${CAPBOX_DIR:-}/logs"
-    _gp="$(_daemon_guest_path "$_logs")"
-    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
-      if [[ -L "$_logs" || ( -e "$_logs" && ! -d "$_logs" ) ]]; then
-        log_err "logs 必须是普通目录，拒绝启动: $_logs"
-        return 1
-      fi
-      if [[ -L "$_logs/audit.jsonl" || -d "$_logs/audit.jsonl" ]]; then
-        log_err "logs/audit.jsonl 必须是普通文件，拒绝启动: $_logs/audit.jsonl"
-        return 1
-      fi
-      [[ -d "$_logs" ]] || mkdir -p "$_logs" 2>/dev/null || true
-      if [[ -d "$_logs" && ! -L "$_logs" ]]; then
-        a+=(--ro-bind "$_logs" "$_gp")
-      else
-        log_err "无法把 logs 只读挂进 guest: $_logs"
-        return 1
-      fi
-    fi
-    local _vercache
-    _vercache="${CAPBOX_STATE_DIR:-${CAPBOX_DIR:-}/state}/bwrap-version"
-    _gp="$(_daemon_guest_path "$_vercache")"
-    if [[ -n "$_gp" && "$_gp" == /workspace/* ]]; then
-      if [[ -L "$_vercache" ]]; then
-        log_err "bwrap 版本缓存是符号链接，拒绝启动: $_vercache"
-        return 1
-      fi
-      if [[ ! -e "$_vercache" ]]; then
-        mkdir -p "$(dirname -- "$_vercache")" 2>/dev/null || true
-        ( umask 077; : >"$_vercache" ) 2>/dev/null || true
-      fi
-      if [[ -f "$_vercache" && ! -L "$_vercache" ]]; then
-        a+=(--ro-bind /dev/null "$_gp")
-      fi
-    fi
-  fi
-
-  if [[ -f "$CAPBOX_STATE_DIR/resolv.conf" ]]; then
-    a+=(--ro-bind "$CAPBOX_STATE_DIR/resolv.conf" /etc/resolv.conf)
-  fi
-  if [[ ! -e "$CAPBOX_ROOTFS/etc/ssl/certs" && -d /etc/ssl/certs ]]; then
-    mkdir -p "$CAPBOX_ROOTFS/etc/ssl/certs" 2>/dev/null || true
-    a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
-  fi
-
-  # 与 common.sh build_bwrap_args 同构：先 clearenv，再允许 net/security/白名单 setenv。
-  a+=(--clearenv)
-
-  if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
-    _net_append_bwrap_args a
-  else
-    case "${CAPBOX_NET:-open}" in
-      none | restricted) a+=(--unshare-net) ;;
-      open | host | "") ;;
-      *)
-        log_err "CAPBOX_NET 非法（${CAPBOX_NET}），拒绝当作 open"
-        return 2
-        ;;
-    esac
-  fi
-  # restricted：代理桥由 cmd_up 在拿到 child pid 后挂上（与 oneshot 同一套 net.sh）。
-  # 这里只保证 --unshare-net + http(s)_proxy 环境变量（由 _net_append_bwrap_args 注入）。
-  a+=(--unshare-user --unshare-uts --unshare-ipc --unshare-pid)
-  local _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
-  local _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
-  if [[ ! "$_eu" =~ ^[0-9]+$ || ! "$_eg" =~ ^[0-9]+$ ]] || (( _eu > 4294967295 || _eg > 4294967295 )); then
-    log_err "EXEC_UID/EXEC_GID 必须是 0..4294967295 的数字（当前 uid=${_eu} gid=${_eg}）"
-    return 2
-  fi
-  a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)
-  a+=(--hostname "$CAPBOX_HOSTNAME")
-  a+=(--chdir /workspace)
-  a+=(--die-with-parent)
-  if declare -F _security_append_bwrap_args >/dev/null 2>&1; then
-    _security_append_bwrap_args a || return $?
-  fi
-  a+=(--setenv HOME /root)
-  a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
-  a+=(--setenv TERM "${TERM:-xterm-256color}")
-  a+=(--setenv LANG "${LANG:-C.UTF-8}")
-
-  if [[ -n "${CAPBOX_PROXY:-}" ]]; then
-    local _mode="${CAPBOX_NET:-open}"
-    if declare -F _net_mode >/dev/null 2>&1; then
-      _mode="$(_net_mode)"
-    fi
-    if [[ "$_mode" != "restricted" ]]; then
-      local np="localhost,127.0.0.1,::1,*.local"
-      a+=(--setenv http_proxy "$CAPBOX_PROXY" --setenv https_proxy "$CAPBOX_PROXY")
-      a+=(--setenv all_proxy "$CAPBOX_PROXY" --setenv no_proxy "$np")
-      a+=(--setenv HTTP_PROXY "$CAPBOX_PROXY" --setenv HTTPS_PROXY "$CAPBOX_PROXY")
-      a+=(--setenv ALL_PROXY "$CAPBOX_PROXY" --setenv NO_PROXY "$np")
-    fi
-  fi
-
-  if declare -F _capbox_ro_protect_logs >/dev/null 2>&1; then
-    _capbox_ro_protect_logs a || return $?
-  fi
-
-  printf '%s\n' "${a[@]}"
+  build_bwrap_args "${1:-daemon}" /workspace
 }
-
-# =============================================================================
-# 1. 路径与解析小工具
-# =============================================================================
 
 _daemon_ensure_dirs() {
   mkdir -p "$CAPBOX_DAEMON_DIR"/{req,out,ctl} 2>/dev/null || true
@@ -1357,7 +1190,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.3.5}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.3.6}")"
     return 0
   fi
 
@@ -1390,7 +1223,7 @@ cmd_status() {
   printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
   printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
   printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.5}"
+  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.3.6}"
   return 0
 }
 
