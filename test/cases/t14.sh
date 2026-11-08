@@ -65,7 +65,7 @@ if [ -f "$CAPBOX_DIR/config.env" ]; then
   fi
 fi
 
-# version 应形如 0.3.7（CAPBOX_VERSION 当前 0.3.7）
+# version 应形如 0.4.0（CAPBOX_VERSION 当前 0.4.0）
 ver=$(printf '%s' "$RUN_STDOUT" | tr -d '\n' | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p')
 if printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   _ok "version 是 x.y.z 形式（$ver）"
