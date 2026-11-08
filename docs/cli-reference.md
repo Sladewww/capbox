@@ -27,6 +27,10 @@ CapBox —— 工作区内持久化的 root Linux 容器
 执行
   exec [--daemon] [--timeout N] [--cwd DIR] [--uid N] [--gid N] [--user NAME] [--] CMD...
                                     在容器内执行命令（默认一次性无状态容器）
+  setup check|plan [--json]         宿主依赖检查、安装和升级计划（不自动安装）
+  bundle pack|verify|check|restore DIR
+                                    可携带 rootfs/配方/包锁制品及完整性校验
+  mcp serve                         固定工作区与策略的 stdio MCP 适配器
   task start|list|status|logs|attach|wait|cancel|diff|rm
                                     持久任务、断线重连与隔离工作副本 diff（task --help）
   policy show|check                 新 oneshot 有效策略与 HTTP(S) 网络决策预览
@@ -143,6 +147,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
     ./capbox.recipe  或  .capbox/recipe.env
 
   常用键: DISTRO PACKAGES NET NET_ALLOW MEMORY_MAX CPU_MAX PIDS_MAX MIRROR INIT
+  export FILE：导出经过校验的 JSON 配方数据（不执行）。
   check：完整校验，不写配置。未知键、重复键或无效行均报错。
   apply：完整校验 → 一次写回 config.env → 按需 init → 安装 PACKAGES
   --locked：按严格包锁安装并验证；版本不可用则失败。
@@ -233,6 +238,50 @@ positional arguments:
 
 options:
   -h, --help    show this help message and exit
+```
+
+## capbox setup --help
+
+```text
+usage: capbox setup [-h] {check,plan} ...
+
+positional arguments:
+  {check,plan}
+
+options:
+  -h, --help    show this help message and exit
+```
+
+## capbox bundle --help
+
+```text
+usage: capbox bundle [-h] {pack,verify,check,restore} ...
+
+positional arguments:
+  {pack,verify,check,restore}
+
+options:
+  -h, --help            show this help message and exit
+```
+
+## capbox mcp --help
+
+```text
+usage: capbox mcp [-h] [--profile {untrusted,strict}]
+                  [--net {none,restricted}]
+                  [--workspace-mode {isolated,shared}]
+                  [--max-timeout MAX_TIMEOUT]
+                  {serve}
+
+positional arguments:
+  {serve}
+
+options:
+  -h, --help            show this help message and exit
+  --profile {untrusted,strict}
+  --net {none,restricted}
+  --workspace-mode {isolated,shared}
+  --max-timeout MAX_TIMEOUT
 ```
 
 ## capbox pkg --help

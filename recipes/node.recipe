@@ -1,0 +1,7 @@
+DISTRO=alpine
+SECURITY_PROFILE=untrusted
+NET=none
+IDMAP=off
+RESOURCES_MODE=require
+PACKAGES=nodejs npm git ca-certificates
+INIT=1

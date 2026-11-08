@@ -178,6 +178,8 @@ cmd_recipe() {
       shift || true
       _recipe_cmd_apply --check "$@"
       ;;
+    export)
+      shift || true; _recipe_cmd_export "$@" ;;
     show | cat)
       shift || true
       _recipe_cmd_show "$@"
@@ -192,6 +194,7 @@ cmd_recipe() {
     ./capbox.recipe  或  .capbox/recipe.env
 
   常用键: DISTRO PACKAGES NET NET_ALLOW MEMORY_MAX CPU_MAX PIDS_MAX MIRROR INIT
+  export FILE：导出经过校验的 JSON 配方数据（不执行）。
   check：完整校验，不写配置。未知键、重复键或无效行均报错。
   apply：完整校验 → 一次写回 config.env → 按需 init → 安装 PACKAGES
   --locked：按严格包锁安装并验证；版本不可用则失败。
@@ -291,4 +294,16 @@ _recipe_cmd_apply() {
 
   log_info "配方应用完成"
   return 0
+}
+
+
+_recipe_cmd_export() {
+  local f key
+  f="$(_recipe_find_file "${1:-}")" || return 2
+  declare -A R=()
+  _recipe_load_into "$f" R && _recipe_validate R || return 2
+  for key in "${CAPBOX_RECIPE_KEYS[@]}"; do
+    [[ -n "${R[$key]+x}" ]] || continue
+    printf '%s\0%s\0' "$key" "${R[$key]}"
+  done | python3 -c 'import json,sys; p=sys.stdin.buffer.read().decode().split("\0")[:-1]; print(json.dumps({"schema":"capbox.recipe.v1","values":dict(zip(p[::2],p[1::2]))},ensure_ascii=True))'
 }

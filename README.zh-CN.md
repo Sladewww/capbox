@@ -10,6 +10,10 @@
 
 guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项目的可写视图，guest 能修改项目代码。无关密钥留在工作区外，宿主执行修改后的代码前仍需审查。[安全模型](SECURITY.md)。
 
+## 安装、环境包与 MCP
+
+`setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [P1 工作流](docs/p1-workflows.md)。
+
 ## 宿主要求
 
 Linux、Bash 4.4+、bubblewrap **≥ 0.12.0**。安装后检查 `bwrap --version`；发行版自带的旧版本可能不满足要求。宿主还必须允许相应用户命名空间。
