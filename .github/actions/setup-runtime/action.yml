@@ -29,8 +29,14 @@ runs:
         rm -rf "$work"
         mkdir -p "$work"
         tarball="$work/bubblewrap-0.13.1.tar.xz"
-        curl -fsSL -o "$tarball" \
-          https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz
+        if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 -o "$tarball" \
+          https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz; then
+          # The website's release redirect can return 504 while the official
+          # asset API still works. Both routes must pass the same pinned hash.
+          curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+            -H 'Accept: application/octet-stream' -o "$tarball" \
+            https://api.github.com/repos/containers/bubblewrap/releases/assets/640310180
+        fi
         echo "0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  $tarball" | sha256sum -c -
         tar -xJf "$tarball" -C "$work"
         meson setup "$work/bubblewrap-0.13.1/build" "$work/bubblewrap-0.13.1" -Dselinux=disabled

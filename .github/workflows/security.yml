@@ -51,9 +51,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-security-scanner
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.2
+          skip-setup-trivy: 'true'
           scan-type: fs
           scan-ref: .
           scanners: secret
@@ -67,6 +69,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-security-scanner
       - name: Fetch the pinned rootfs
         shell: bash
         run: |
@@ -81,6 +84,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.2
+          skip-setup-trivy: 'true'
           scan-type: rootfs
           scan-ref: os/alpine
           scanners: vuln
@@ -93,6 +97,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.2
+          skip-setup-trivy: 'true'
           scan-type: rootfs
           scan-ref: os/alpine
           format: cyclonedx
