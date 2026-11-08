@@ -1,0 +1,47 @@
+name: Set up CapBox runtime dependencies
+description: Install dependencies and a checksum-pinned bubblewrap without changing host policy
+runs:
+  using: composite
+  steps:
+    - name: Install runtime dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates gcc libc6-dev python3 libseccomp2
+        ver="$(bwrap --version 2>/dev/null | head -n 1 || true)"
+        echo "distro bwrap: ${ver:-missing} ($(command -v bwrap || echo none))"
+        ok=0
+        if [[ "$ver" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+          maj=$((10#${BASH_REMATCH[1]}))
+          min=$((10#${BASH_REMATCH[2]}))
+          if (( maj > 0 || min >= 12 )); then
+            ok=1
+          fi
+        fi
+        if (( ok == 1 )); then
+          echo "bwrap already >= 0.12.0"
+          exit 0
+        fi
+        echo "distro bwrap is below 0.12.0; building upstream 0.13.1"
+        sudo apt-get install -y -qq meson ninja-build gcc pkg-config libcap-dev python3
+        work="${RUNNER_TEMP:-/tmp}/bubblewrap-build"
+        rm -rf "$work"
+        mkdir -p "$work"
+        tarball="$work/bubblewrap-0.13.1.tar.xz"
+        curl -fsSL -o "$tarball" \
+          https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz
+        echo "0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  $tarball" | sha256sum -c -
+        tar -xJf "$tarball" -C "$work"
+        meson setup "$work/bubblewrap-0.13.1/build" "$work/bubblewrap-0.13.1" -Dselinux=disabled
+        ninja -C "$work/bubblewrap-0.13.1/build" bwrap
+        dest="$(command -v bwrap || true)"
+        if [[ -z "$dest" ]]; then
+          dest=/usr/bin/bwrap
+        fi
+        sudo install -m 0755 "$work/bubblewrap-0.13.1/build/bwrap" "$dest"
+        if [[ "$dest" != /usr/bin/bwrap ]]; then
+          sudo install -m 0755 "$work/bubblewrap-0.13.1/build/bwrap" /usr/bin/bwrap
+        fi
+        hash -r
+        echo "installed: $(command -v bwrap): $(bwrap --version)"
