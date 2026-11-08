@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
     for command in [('--help',), ('init', '--help'), ('upgrade', '--help'),
                     ('recipe', '--help'), ('image', '--help'), ('service', '--help'),
                     ('task', '--help'), ('task', 'start', '--help'),
-                    ('policy', '--help'),
+                    ('policy', '--help'), ('setup', '--help'), ('bundle', '--help'), ('mcp', '--help'),
                     ('pkg', '--help')]:
         sections.append('\n## capbox ' + ' '.join(command) + '\n\n```text\n' +
                         cli(*command).rstrip() + '\n```\n')

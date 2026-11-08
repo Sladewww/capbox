@@ -10,6 +10,10 @@ Development CLI: **0.3.6**. Published releases and their migration notes are lis
 
 CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and review guest-modified project code before executing it on the host. [Security model](SECURITY.md).
 
+## Installation, portable environments and MCP
+
+Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [P1 workflows](docs/p1-workflows.md) for usage and limits.
+
 ## Requirements
 
 Linux, Bash 4.4+, and **bubblewrap >= 0.12.0**. Package installation may require updating the distro's bubblewrap package or building a supported upstream version. Check `bwrap --version` after installation.
