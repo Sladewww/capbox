@@ -52,6 +52,7 @@ jobs:
           python3 test/security/test_configuration.py
           python3 test/security/test_upgrade.py
           python3 test/security/test_package_lock.py
+          python3 test/security/test_agent_workflows.py PolicyTests
       - name: Generated documentation and examples
         run: python3 tools/generate-docs.py --check
 
@@ -109,7 +110,9 @@ jobs:
       - name: Hardened service, daemon and network regressions
         env:
           CAPBOX_TEST_ROOTFS: ${{ github.workspace }}/os/alpine
-        run: python3 test/security/test_integration.py
+        run: |
+          python3 test/security/test_integration.py
+          python3 test/security/test_agent_workflows.py
 
       - name: Make failure logs readable
         if: failure()
