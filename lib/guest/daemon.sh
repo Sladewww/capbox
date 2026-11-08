@@ -55,7 +55,7 @@ HB_TTL="${CAPBOX_DAEMON_HB_TTL:-6}"         # 心跳陈旧阈值（秒），客�
 
 DISTRO="${CAPBOX_DISTRO:-alpine}"
 ROOTFS_HOST="${CAPBOX_ROOTFS_HOST:-}"
-VERSION="${CAPBOX_VERSION:-0.3.6}"
+VERSION="${CAPBOX_VERSION:-0.3.7}"
 
 # 数字型配置兜底校验（非法值一律回落默认，避免 set -u/算术炸掉）
 case "$MAXJOBS" in ''|*[!0-9]*) MAXJOBS=8 ;; esac
