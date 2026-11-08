@@ -1,0 +1,7 @@
+DISTRO=alpine
+SECURITY_PROFILE=untrusted
+NET=none
+IDMAP=off
+RESOURCES_MODE=require
+PACKAGES=build-base git cmake pkgconf ca-certificates
+INIT=1

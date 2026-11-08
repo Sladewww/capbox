@@ -1,0 +1,8 @@
+# Starter recipe. Lock installed versions after the first successful application.
+DISTRO=alpine
+SECURITY_PROFILE=untrusted
+NET=none
+IDMAP=off
+RESOURCES_MODE=require
+PACKAGES=python3 py3-pip git ca-certificates
+INIT=1

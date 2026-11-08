@@ -2,7 +2,7 @@
 
 Requires host Python **3.10+**.
 
-Use a trusted, complete template outside the project workspace. Update that template through your normal Git or verified-release process. Before applying or rolling back, use the old CLI to stop every service and the daemon, and finish all exec calls. CapBox checks known running services/daemon and conservatively refuses legacy service records; it cannot coordinate arbitrary concurrent uses of an older CLI.
+Use a trusted, complete template outside the project workspace. Update that template through your normal Git or verified-release process. Before applying or rolling back, use the old CLI to finish or cancel active tasks, stop every service and the daemon, and finish all exec calls. Confirm task completion with `task wait` or `task status`. CapBox checks known running tasks/services/daemon and conservatively refuses legacy service records; it cannot coordinate arbitrary concurrent uses of an older CLI.
 
 ```sh
 capbox --root /path/to/project upgrade check --from /path/to/new-template --json
