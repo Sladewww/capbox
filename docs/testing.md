@@ -5,7 +5,7 @@ CI checks behavior at distinct layers. A passing fallback test is not evidence t
 | Job | Scope | Required behavior |
 |---|---|---|
 | bash -n + selftest | Syntax, harness fault detection, config transactions, upgrade recovery, strict locks, policy/MCP protocol and setup previews, host boundaries and generated docs | No failing checks |
-| Offline audit report (Chromium) | Actual file:// report: filters, details, JSON download, pagination, mobile, inert log text and CSP | No browser errors, CSP violations or network requests |
+| Offline audit report (Chromium) | Ubuntu 24.04; actual file:// report: filters, details, JSON download, pagination, mobile, inert log text and CSP | No browser errors, CSP violations or network requests |
 | acceptance (bubblewrap) | T01–T41 selections plus real hardened service/daemon/network integration and task/reconnect/isolation, bundle round-trip and MCP execution regression tests on Alpine | Real sandbox execution; no swallowed doctor failure |
 | Compatibility matrix | Alpine and Ubuntu guests on x86_64 and aarch64 Ubuntu 22.04 hosts | Real exec, strict profile, network isolation, service and lock verification; no skips |
 | Multi-UID mapping (required) | A runner with an explicit subordinate UID/GID delegation | Must obtain multi mapping and pass chown, non-root exec and a service; no fallback or skip |
