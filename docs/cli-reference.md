@@ -27,6 +27,9 @@ CapBox —— 工作区内持久化的 root Linux 容器
 执行
   exec [--daemon] [--timeout N] [--cwd DIR] [--uid N] [--gid N] [--user NAME] [--] CMD...
                                     在容器内执行命令（默认一次性无状态容器）
+  task start|list|status|logs|attach|wait|cancel|diff|rm
+                                    持久任务、断线重连与隔离工作副本 diff（task --help）
+  policy show|check                 新 oneshot 有效策略与 HTTP(S) 网络决策预览
   service start|stop|status|logs|list
                                     配置化服务（.capbox/services/<name>.env）
   shell [--daemon]                  交互式 shell（无 tty 时退化为读取 stdin 的 sh）
@@ -181,6 +184,55 @@ CapBox —— 工作区内持久化的 root Linux 容器
   RESTART_MAX=3
   STOP_TIMEOUT=10
   DEPENDS_ON=other
+```
+
+## capbox task --help
+
+```text
+usage: capbox task [-h]
+                   {start,list,status,wait,attach,cancel,logs,diff,rm} ...
+
+positional arguments:
+  {start,list,status,wait,attach,cancel,logs,diff,rm}
+    start               启动独立监督的 exec 任务
+
+options:
+  -h, --help            show this help message and exit
+```
+
+## capbox task start --help
+
+```text
+usage: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
+                         [--net {none,restricted,open,host}]
+                         [--profile {compat,untrusted,strict}] [--isolate]
+                         [--max-output-bytes MAX_OUTPUT_BYTES]
+                         ...
+
+positional arguments:
+  command
+
+options:
+  -h, --help            show this help message and exit
+  --json                结果默认即为版本化 JSON
+  --timeout TIMEOUT
+  --cwd CWD
+  --net {none,restricted,open,host}
+  --profile {compat,untrusted,strict}
+  --isolate             复制 Git tracked 工作文件与独立 rootfs；diff 后导出
+  --max-output-bytes MAX_OUTPUT_BYTES
+```
+
+## capbox policy --help
+
+```text
+usage: capbox policy [-h] {show,check} ...
+
+positional arguments:
+  {show,check}
+
+options:
+  -h, --help    show this help message and exit
 ```
 
 ## capbox pkg --help

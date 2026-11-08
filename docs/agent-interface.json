@@ -1,0 +1,19 @@
+{
+  "schema": "capbox.agent.v1",
+  "commands": {
+    "task start": {"output": "JSON task state", "exit": "0 means accepted; inspect wait/status for execution result"},
+    "task list": {"output": "JSON object containing tasks"},
+    "task status": {"output": "JSON task state"},
+    "task logs --json": {"output": "JSON byte-range with base64 data", "cursor": "per-stream byte offsets"},
+    "task attach --json": {"output": "JSONL output events and terminal exit event", "exit": "task exit code or client wait timeout 124"},
+    "task wait": {"output": "JSON terminal state or wait_timeout", "exit": "task exit code or client wait timeout 124"},
+    "task cancel": {"output": "JSON current state; cancellation is asynchronous"},
+    "task diff --json": {"output": "JSON changed_files, origin_changed and patch_base64; no apply"},
+    "task rm": {"output": "JSON removed acknowledgement; terminal non-lost tasks only"},
+    "policy show": {"output": "JSON requested effective policy and value sources"},
+    "policy check": {"output": "JSON HTTP(S) policy decision", "exit": "0 allow/conditional; 1 deny; 2 invalid input"}
+  },
+  "states": ["preparing", "running", "succeeded", "failed", "cancelled", "timed_out", "lost"],
+  "output_event": {"schema": "capbox.agent.v1", "type": "output", "task_id": "32 lowercase hex characters", "stream": "stdout or stderr", "offset": 0, "next_offset": 3, "data_base64": "YWJj"},
+  "scope": "local host lifetime; no memory checkpoint, network control server, automatic patch apply or secret broker"
+}
