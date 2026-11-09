@@ -159,7 +159,7 @@ fi
 unset _capbox_force_local_state _ws _want
 unset _capbox_self _capbox_bin_dir
 
-# Interrupted upgrades must be recovered through a complete external template.
+# 中断的升级必须用完整的外部模板恢复。
 if [[ -e "$CAPBOX_DIR/.upgrade-in-progress" && "${1:-}" != upgrade ]]; then
   printf '[capbox] 错误: 运行文件升级未完成；请用完整模板运行 upgrade rollback\n' >&2
   exit 1
