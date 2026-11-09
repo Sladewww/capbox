@@ -23,4 +23,20 @@ cmd_bundle() {
     *) _envkit_command bundle "$@" ;;
   esac
 }
-cmd_mcp() { _envkit_command mcp "$@"; }
+cmd_mcp() {
+  case "${1:-}" in
+    -h | --help) _envkit_command mcp "$@"; return $? ;;
+  esac
+  local t0 rc=0
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
+  _envkit_command mcp "$@"
+  rc=$?
+  if declare -F audit_command >/dev/null 2>&1; then
+    if (( rc == 0 )); then
+      audit_command mcp "$rc" "$t0" "cmd=mcp $*"
+    else
+      audit_command mcp "$rc" "$t0" "cmd=mcp $*" "detail=mcp 失败，退出码 $rc"
+    fi
+  fi
+  return "$rc"
+}

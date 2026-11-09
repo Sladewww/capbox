@@ -147,7 +147,7 @@ capbox recipe apply --locked /path/to/package.lock capbox.recipe
 | [贡献指南](CONTRIBUTING.md) | 提交前检查 |
 
 <!-- generated:tests -->
-验收用例：**42**（T01–T42）。框架自测验证测试工具；真实 guest 与宿主边界回归单独运行。
+验收用例：**43**（T01–T43）。框架自测验证测试工具；真实 guest 与宿主边界回归单独运行。
 <!-- /generated:tests -->
 
 MIT — [LICENSE](LICENSE)。

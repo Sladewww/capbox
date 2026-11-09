@@ -755,7 +755,7 @@ _resources_wrap_argv() {
 
   if (( cgroup_ok == 1 )) || [[ "${CAPBOX_RESOURCES_APPLIED_DISK:-}" == loop:* ]]; then
     if declare -F audit_event >/dev/null 2>&1; then
-      audit_event resources ok "detail=cgroup:${CAPBOX_RESOURCES_CGROUP_LEAF:-} mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-} disk=${CAPBOX_RESOURCES_APPLIED_DISK:-}"
+      audit_event resources ok "detail=cgroup:${CAPBOX_RESOURCES_CGROUP_LEAF:-} mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-} disk=${CAPBOX_RESOURCES_APPLIED_DISK:-}" "exit=0" "ms=0"
     fi
   fi
   return 0

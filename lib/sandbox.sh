@@ -268,23 +268,22 @@ EOF
     fi
   fi
 
-  if (( use_daemon == 1 )); then
-    local rc_d=0
-    _exec_via_daemon "$cmdstr" "$cwd" "$timeout_s"
-    rc_d=$?
-    unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
-    return "$rc_d"
-  fi
-
-  require_rootfs
   local rc=0 t0 t1 ms
   t0=$(date +%s%3N 2>/dev/null || date +%s)
-  exec_in_guest "$cmdstr" "$cwd" "$timeout_s"
-  rc=$?
+  if (( use_daemon == 1 )); then
+    _exec_via_daemon "$cmdstr" "$cwd" "$timeout_s"
+    rc=$?
+  else
+    require_rootfs
+    exec_in_guest "$cmdstr" "$cwd" "$timeout_s"
+    rc=$?
+  fi
   t1=$(date +%s%3N 2>/dev/null || date +%s)
   ms=$((t1 - t0))
   unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
-  if declare -F audit_event >/dev/null 2>&1; then
+  if declare -F audit_command >/dev/null 2>&1; then
+    audit_command exec "$rc" "$t0" "cmd=$cmdstr" "profile=${CAPBOX_SECURITY_PROFILE:-compat}" "net=${CAPBOX_NET:-open}"
+  elif declare -F audit_event >/dev/null 2>&1; then
     if (( rc == 0 )); then
       audit_event exec ok "cmd=$cmdstr" "exit=$rc" "ms=$ms" "profile=${CAPBOX_SECURITY_PROFILE:-compat}" "net=${CAPBOX_NET:-open}"
     else
@@ -361,8 +360,14 @@ cmd_shell() {
       return 3
     fi
     # 契约 §4：daemon_request CMD [TIMEOUT] [FOLLOW]；FOLLOW=1 让客户端 tail -f 输出
+    local t0 rc=0
+    t0=$(date +%s%3N 2>/dev/null || date +%s)
     daemon_request 'cd /workspace; exec /bin/sh' 0 1
-    return $?
+    rc=$?
+    if declare -F audit_command >/dev/null 2>&1; then
+      audit_command shell "$rc" "$t0" "cmd=shell --daemon" "net=${CAPBOX_NET:-open}"
+    fi
+    return "$rc"
   fi
 
   require_rootfs
@@ -379,8 +384,15 @@ cmd_shell() {
 
   # 与 exec 同一条启动路径：restricted 挂 allowlist 桥，hardened 挂 seccomp。
   # timeout 0 = 不包 timeout，stdio 直接继承（idmap 路径须保留 stdin，见 _idmap_run_bwrap_argv）。
+  # 交互式 shell 只记这次启动，不把会话里的每一行当审计。
+  local t0 rc=0
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
   run_bwrap_oneshot /workspace 0 "$shbin" "${shargs[@]}"
-  return $?
+  rc=$?
+  if declare -F audit_command >/dev/null 2>&1; then
+    audit_command shell "$rc" "$t0" "cmd=shell" "net=${CAPBOX_NET:-open}"
+  fi
+  return "$rc"
 }
 
 # ---------- 5. cp（宿主↔容器拷贝） --------------------------------------------
@@ -658,6 +670,8 @@ EOF
       ;;
   esac
 
+  local t0=0
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
   rc=0
   _pkg_run_guest "$sub" "$cmdstr" "$timeout_s" || rc=$?
 
@@ -670,6 +684,17 @@ EOF
       log_warn "pkg $sub 返回 $rc（请结合上方 dpkg audit / 日志判断）"
     else
       log_warn "pkg $sub 返回 $rc（单 UID 下 chown 告警常见；请看 dpkg audit 与可执行文件）"
+    fi
+  fi
+  if declare -F audit_command >/dev/null 2>&1; then
+    local _pkg_cmd="pkg $sub"
+    if [[ $# -gt 0 ]]; then
+      _pkg_cmd="pkg $sub $*"
+    fi
+    if (( rc == 0 )); then
+      audit_command pkg "$rc" "$t0" "cmd=$_pkg_cmd"
+    else
+      audit_command pkg "$rc" "$t0" "cmd=$_pkg_cmd" "detail=pkg $sub 返回 $rc"
     fi
   fi
   return "$rc"

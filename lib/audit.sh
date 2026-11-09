@@ -3,10 +3,13 @@
 # CapBox - audit.sh
 # 统一 JSONL 审计日志（exec / pkg / service / security / resources / net / image）
 #
-# CAPBOX_AUDIT=off|summary|full   默认 summary（开启但命令可摘要）
-# CAPBOX_AUDIT_CMD=summary|full|off  命令字段：摘要 / 原文 / 不写
+# CAPBOX_AUDIT=off|summary|full   默认 summary（开启；cmd 记脱敏后的完整参数）
+# CAPBOX_AUDIT_CMD=summary|full|off  命令字段：脱敏完整参数 / 同 summary / 不写
+#   默认不把命令 stdout/stderr 写入 audit.jsonl；
+#   只有 CAPBOX_AUDIT=full 才允许写入封顶后的脱敏 output 字段。
 # 路径：$CAPBOX_DIR/logs/audit.jsonl
-# 绝不记录明显的 secret 形态（password=/token=/Authorization: 等）
+# 脱敏：password=/Bearer，以及 --password x、--password=x 这类长选项。
+# 短选项只走明确的口令类允许列表（当前为空，不加 -p）。
 # =============================================================================
 
 _audit_enabled() {
@@ -31,13 +34,45 @@ _audit_json_escape() {
   printf '%s' "$s"
 }
 
+_audit_secret_long_names='password|passwd|pwd|token|secret|api[_-]?key|authorization'
+
+# CapBox 自身目前没有口令类短选项。列表先空，不要把 -p 加进去
+# （exec 里的 -p 经常是端口或路径）。
+_AUDIT_SECRET_SHORT_OPTS=()
+
 _audit_redact() {
   local s="${1-}"
-  # 粗粒度脱敏：常见密钥赋值与 Bearer
-  s="$(printf '%s' "$s" | sed -E \
-    -e 's/(password|passwd|pwd|token|secret|api[_-]?key|authorization)=[^[:space:]]+/\1=***REDACTED***/Ig' \
-    -e 's/(Bearer[[:space:]]+)[^[:space:]]+/\1***REDACTED***/Ig')"
+  local names="${_audit_secret_long_names}"
+  local script
+  # 同时覆盖未加引号、以及 join_cmd_str 生成的 'arg' / "arg" 形式。
+  script=$(cat <<'SED'
+s/(^|[[:space:]])(--(__NAMES__))=([^[:space:]'"]+)/\1\2=***REDACTED***/Ig
+s/(^|[[:space:]])('--(__NAMES__)=)[^']*'/\1\2***REDACTED***'/Ig
+s/(^|[[:space:]])("--(__NAMES__)=)[^"]*"/\1\2***REDACTED***"/Ig
+s/(^|[[:space:]])(--(__NAMES__))[[:space:]]+[^[:space:]'"]+/\1\2 ***REDACTED***/Ig
+s/(^|[[:space:]])('--(__NAMES__)')[[:space:]]+('[^']*'|"[^"]*"|[^[:space:]]+)/\1\2 ***REDACTED***/Ig
+s/(^|[[:space:]])("--(__NAMES__)")[[:space:]]+('[^']*'|"[^"]*"|[^[:space:]]+)/\1\2 ***REDACTED***/Ig
+s/(__NAMES__)=([^[:space:]'"]+)/\1=***REDACTED***/Ig
+s/(Bearer[[:space:]]+)[^[:space:]]+/\1***REDACTED***/Ig
+SED
+)
+  script="${script//__NAMES__/${names}}"
+  s="$(printf '%s' "$s" | sed -E -f <(printf '%s\n' "$script"))"
   printf '%s' "$s"
+}
+
+_audit_truncate() {
+  local s="${1-}" max="${2:-256}"
+  local n=${#s}
+  if (( n > max )); then
+    printf '%s...' "${s:0:max}"
+  else
+    printf '%s' "$s"
+  fi
+}
+
+_audit_now_ms() {
+  date +%s%3N 2>/dev/null || date +%s
 }
 
 _audit_cmd_field() {
@@ -51,30 +86,18 @@ _audit_cmd_field() {
   fi
   case "$mode" in
     off|0|none) printf '' ; return 0 ;;
-    full)
+    full|summary|*)
+      # summary 与 full 都记脱敏后的完整参数，不再写成 argv0 (+N args)
       _audit_redact "$cmd"
-      ;;
-    summary|*)
-      # 只保留 argv0 + 参数个数，避免泄露长命令/密钥
-      local first rest
-      first="${cmd%%[[:space:]]*}"
-      rest="${cmd#"$first"}"
-      rest="${rest#"${rest%%[![:space:]]*}"}"
-      local n=0
-      if [[ -n "$rest" ]]; then
-        # shellcheck disable=SC2206
-        local -a _a=($rest)
-        n=${#_a[@]}
-      fi
-      printf '%s (+%s args)' "$(_audit_redact "$first")" "$n"
       ;;
   esac
 }
 
 # audit_event KIND STATUS [KEY=VAL ...]
-# KIND: exec|pkg|service|security|resources|net|image|snapshot|fs|doctor
+# KIND: exec|pkg|init|shell|doctor|upgrade|task|mcp|recipe|service|security|resources|net|image|snapshot|fs
 # STATUS: ok|fail|warn|skip|start|stop
-# 可选键：cmd, exit, ms, object, detail, profile, net, uid
+# 可选键：cmd, exit, ms, object, detail, profile, net, uid, output
+# detail 失败时用，截断约 256 字。output 仅 CAPBOX_AUDIT=full 时写入，且封顶脱敏。
 audit_event() {
   _audit_enabled || return 0
   local kind="${1:-}" status="${2:-}"
@@ -91,7 +114,7 @@ audit_event() {
   fi
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
 
-  local cmd="" exit_c="" ms="" object="" detail="" profile="" net="" uid=""
+  local cmd="" exit_c="" ms="" object="" detail="" profile="" net="" uid="" output=""
   local kv k v
   for kv in "$@"; do
     k="${kv%%=*}"
@@ -105,6 +128,7 @@ audit_event() {
       profile) profile="$v" ;;
       net) net="$v" ;;
       uid) uid="$v" ;;
+      output|out) output="$v" ;;
     esac
   done
 
@@ -120,13 +144,36 @@ audit_event() {
     [[ -n "$ms" ]] && printf ',"ms":%s' "$ms"
     [[ -n "$object" ]] && printf ',"object":"%s"' "$(_audit_json_escape "$object")"
     [[ -n "$cmd_out" ]] && printf ',"cmd":"%s"' "$(_audit_json_escape "$cmd_out")"
-    [[ -n "$detail" ]] && printf ',"detail":"%s"' "$(_audit_json_escape "$(_audit_redact "$detail")")"
+    [[ -n "$detail" ]] && printf ',"detail":"%s"' "$(_audit_json_escape "$(_audit_truncate "$(_audit_redact "$detail")" 256)")"
     [[ -n "$profile" ]] && printf ',"profile":"%s"' "$(_audit_json_escape "$profile")"
     [[ -n "$net" ]] && printf ',"net":"%s"' "$(_audit_json_escape "$net")"
     [[ -n "$uid" ]] && printf ',"uid":"%s"' "$(_audit_json_escape "$uid")"
+    if [[ -n "$output" && "${CAPBOX_AUDIT:-summary}" == "full" ]]; then
+      printf ',"output":"%s"' "$(_audit_json_escape "$(_audit_truncate "$(_audit_redact "$output")" 2048)")"
+    fi
     printf ',"distro":"%s"' "$(_audit_json_escape "${CAPBOX_DISTRO:-}")"
     printf '}\n'
   } >>"$f" 2>/dev/null || true
+}
+
+# audit_command KIND RC T0 [KEY=VAL ...]
+# 按退出码写成 ok/fail，并补上 exit 与 ms（T0 为 _audit_now_ms 的起点）。
+audit_command() {
+  local kind="${1:-}" rc="${2:-0}" t0="${3:-}"
+  shift 3 || true
+  [[ -n "$kind" ]] || return 0
+  declare -F audit_event >/dev/null 2>&1 || return 0
+  local status=ok
+  [[ "$rc" == "0" ]] || status=fail
+  local t1 ms=""
+  if [[ -n "$t0" ]]; then
+    t1="$(_audit_now_ms)"
+    ms=$((10#${t1} - 10#${t0}))
+    (( ms < 0 )) && ms=0
+  fi
+  local -a kv=( "exit=$rc" )
+  [[ -n "$ms" ]] && kv+=( "ms=$ms" )
+  audit_event "$kind" "$status" "${kv[@]}" "$@"
 }
 
 cmd_audit() {
@@ -143,7 +190,12 @@ cmd_audit() {
   clear      清空审计文件（需确认意图：直接执行即清空）
 
 CAPBOX_AUDIT=off|summary|full
+  summary（默认）：记下脱敏后的完整参数、status、退出码和耗时；
+                 失败可带截断短 detail。不写命令 stdout/stderr。
+  full：在 summary 之上，允许再写封顶后的脱敏 output 字段。
 CAPBOX_AUDIT_CMD=summary|full|off
+  不设置时跟随 CAPBOX_AUDIT。off 不写 cmd 字段。
+  summary 与 full 都写脱敏后的完整参数（不再是 argv0 加参数个数）。
 H
       return 0
       ;;

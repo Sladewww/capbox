@@ -167,7 +167,7 @@ _recipe_validate() {
   done
 }
 
-cmd_recipe() {
+_cmd_recipe_dispatch() {
   local sub="${1:-apply}"
   case "$sub" in
     apply)
@@ -210,6 +210,27 @@ HELP
       fi
       ;;
   esac
+}
+
+cmd_recipe() {
+  case "${1:-}" in
+    -h | --help | help) ;;
+    *)
+      local t0 rc=0
+      t0=$(date +%s%3N 2>/dev/null || date +%s)
+      _cmd_recipe_dispatch "$@"
+      rc=$?
+      if declare -F audit_command >/dev/null 2>&1; then
+        if (( rc == 0 )); then
+          audit_command recipe "$rc" "$t0" "cmd=recipe $*"
+        else
+          audit_command recipe "$rc" "$t0" "cmd=recipe $*" "detail=recipe 失败，退出码 $rc"
+        fi
+      fi
+      return "$rc"
+      ;;
+  esac
+  _cmd_recipe_dispatch "$@"
 }
 
 _recipe_cmd_show() {

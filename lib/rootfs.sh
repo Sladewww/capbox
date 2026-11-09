@@ -604,7 +604,22 @@ EOF
     config_apply SECURITY_PROFILE compat NET open IDMAP auto RESOURCES_MODE warn || return $?
   fi
   need_cmd tar
+  local t0 rc=0 _init_cmd="init --distro $distro"
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
+  (( force == 1 )) && _init_cmd+=" --force"
+  [[ -n "$from" ]] && _init_cmd+=" --from $from"
+  (( agent == 1 )) && _init_cmd+=" --agent"
+  (( trusted == 1 )) && _init_cmd+=" --trusted"
   with_lock init -- _do_init "$distro" "$force" "$from" "$agent"
+  rc=$?
+  if declare -F audit_command >/dev/null 2>&1; then
+    if (( rc == 0 )); then
+      audit_command init "$rc" "$t0" "cmd=$_init_cmd"
+    else
+      audit_command init "$rc" "$t0" "cmd=$_init_cmd" "detail=init 失败，退出码 $rc"
+    fi
+  fi
+  return "$rc"
 }
 
 # 仅脚手架：把 CLI 模板的 bin/lib/skill 填进当前工作区 .capbox，不下载 rootfs

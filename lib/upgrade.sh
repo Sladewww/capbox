@@ -74,5 +74,18 @@ HELP
   fi
   need_cmd python3
   need_cmd flock
+  local t0 rc=0 _up_cmd="upgrade $action"
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
+  [[ -n "$source" ]] && _up_cmd+=" --from $source"
+  [[ -n "$json" ]] && _up_cmd+=" --json"
   with_lock upgrade -- _upgrade_locked "$action" "$source" "$json"
+  rc=$?
+  if declare -F audit_command >/dev/null 2>&1; then
+    if (( rc == 0 )); then
+      audit_command upgrade "$rc" "$t0" "cmd=$_up_cmd"
+    else
+      audit_command upgrade "$rc" "$t0" "cmd=$_up_cmd" "detail=upgrade $action 失败，退出码 $rc"
+    fi
+  fi
+  return "$rc"
 }

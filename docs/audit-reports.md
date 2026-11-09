@@ -25,6 +25,14 @@ capbox audit report --input /path/to/archived-audit.jsonl \
 
 默认源是项目的 `logs/audit.jsonl`。默认源缺失时生成明确的空报告；显式 `--input` 缺失则失败。报告不会开启采集、不会执行已记录命令、不会收集新遥测，也不改源文件。采集仍由既有 `AUDIT` / `AUDIT_CMD` 控制。
 
+## 采集范围
+
+默认 `CAPBOX_AUDIT=summary`（不要把这项改成 `full` 才看得到参数）。summary 会写入脱敏后的完整命令参数、`status`、退出码 `exit` 和耗时 `ms`；失败时可带截断到约 256 字的短 `detail`。默认不把命令的 stdout/stderr 写入 `audit.jsonl`。`CAPBOX_AUDIT=full` 才允许再写封顶后的脱敏 `output` 字段。`CAPBOX_AUDIT_CMD=off` 不写 `cmd`；未设置时跟随 `CAPBOX_AUDIT`。字段名和枚举保持英文。
+
+脱敏会覆盖 `password=` / `token=` / Bearer，以及 `--password x`、`--password=x` 这类长选项（password、passwd、pwd、token、secret、api-key、authorization）。短选项只走明确的口令类允许列表；当前列表为空，`-p` 不会被抹掉，以免把 `exec` 里的端口或路径去掉。
+
+一次命令写一条记录，覆盖 `exec`（含走常驻容器的路径）、`pkg`、`init`、`shell`、`doctor`、`upgrade`、`task`、`mcp`、`recipe`。交互式 `shell` 只记这次启动的状态、退出码和耗时，不把会话里的每一行当作审计。`help` 和 `audit` 本身不记。仓库没有单独的 `capbox net` 命令，网络模式写在对应 `exec` / `shell` 记录的 `net` 字段里。
+
 只包含选定的 JSONL。其它项目、轮转文件与私有隔离任务副本不会自动汇总。事件数不是任务数：一次执行可产生多条策略/资源/exec 记录。报告不加任务关联 ID，也不声称未记录事件成功。
 
 ## 覆盖与统计

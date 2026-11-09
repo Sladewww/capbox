@@ -205,7 +205,7 @@ H
       log_info "已导出: $out"
       log_info "SHA256: $sum"
       if declare -F audit_event >/dev/null 2>&1; then
-        audit_event image ok "object=$name" "detail=export:$sum"
+        audit_event image ok "object=$name" "detail=export:$sum" "exit=0" "ms=0"
       fi
       printf '%s\n' "$out"
       return 0
@@ -278,7 +278,7 @@ H
         log_info "如需替换当前 rootfs: capbox image import $name --force"
       fi
       if declare -F audit_event >/dev/null 2>&1; then
-        audit_event image ok "object=$name" "detail=import:force=$force"
+        audit_event image ok "object=$name" "detail=import:force=$force" "exit=0" "ms=0"
       fi
       return 0
       ;;
