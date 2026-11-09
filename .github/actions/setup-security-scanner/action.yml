@@ -1,5 +1,5 @@
 name: Set up pinned Trivy
-description: Install the official checksum-pinned scanner through the release asset API
+description: Install the official checksum-pinned scanner from the release download URL
 runs:
   using: composite
   steps:
@@ -10,10 +10,11 @@ runs:
         [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]
         work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/capbox-trivy.XXXXXX")"
         archive="$work/trivy.tar.gz"
-        # Fixed release asset, bypassing the failing website/telemetry redirect.
-        curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
-          -H 'Accept: application/octet-stream' -o "$archive" \
-          https://api.github.com/repos/aquasecurity/trivy/releases/assets/713401165
+        # Prefer the public release asset URL. The Releases Assets API returns 403
+        # without auth and is rate-limit sensitive on push-to-main runners.
+        # Keep the SHA-256 pin so a redirect or swap cannot silently change bits.
+        url='https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz'
+        curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 -o "$archive" "$url"
         printf '%s  %s\n' bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf "$archive" | sha256sum -c -
         mkdir "$work/bin"
         tar --no-same-owner -xzf "$archive" -C "$work/bin" trivy
