@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# CapBox host-side allowlist HTTP proxy + guest-netns TCP↔UNIX bridge.
-# Never executed inside untrusted recipe files; CapBox launches it explicitly.
+# CapBox 宿主侧白名单 HTTP 代理 + guest-netns 的 TCP↔UNIX 桥。
+# 从不在不可信 recipe 内执行；由 CapBox 显式拉起。
 from __future__ import annotations
 
 import argparse
@@ -26,9 +26,9 @@ PLACEHOLDER_RE = re.compile(rb"capbox-sec-[0-9a-f]{32}")
 
 
 def enter_network_namespace(child: int, command: List[str]) -> None:
-    # --disable-userns gives the guest a nested user namespace. Its network
-    # namespace can belong to the parent, so /proc/PID/ns/user is not authoritative.
-    # NS_GET_USERNS from linux/nsfs.h returns the network namespace's actual owner.
+    # --disable-userns 给 guest 嵌套 user namespace。其 network namespace 可能属于父进程，
+    # 所以 /proc/PID/ns/user 不能当权威。
+    # linux/nsfs.h 的 NS_GET_USERNS 返回该 network namespace 的真正属主。
     net_fd = os.open(f"/proc/{child}/ns/net", os.O_RDONLY)
     owner_fd = fcntl.ioctl(net_fd, 0xB701)
     os.set_inheritable(net_fd, True)
@@ -55,10 +55,10 @@ def parse_allowlist(raw: str) -> List[str]:
 
 
 def _parse_rule(raw: str) -> Tuple[str, Optional[int], bool]:
-    """Return (host pattern, explicit port or None, any_port).
+    """返回 (主机模式, 显式端口或 None, 是否任意端口)。
 
-    No port means 80 and 443 only. ``:*`` means any port.
-    ``*.example.com`` matches subdomains, not the apex.
+    未写端口时仅允许 80 与 443。``:*`` 表示任意端口。
+    ``*.example.com`` 匹配子域，不匹配 apex。
     """
     raw = (raw or "").strip()
     if raw.startswith("["):
@@ -75,7 +75,7 @@ def _parse_rule(raw: str) -> Tuple[str, Optional[int], bool]:
         return _norm_host(raw[:-2]), None, True
     if ":" in raw:
         host, maybe_port = raw.rsplit(":", 1)
-        # unbracketed IPv6 has multiple colons; only split a single trailing :port
+        # 未加括号的 IPv6 含多个冒号；只拆末尾单个 :port
         if maybe_port.isdigit() and host.count(":") == 0:
             return _norm_host(host), int(maybe_port), False
     return _norm_host(raw), None, False
@@ -110,9 +110,9 @@ def _ip_for_policy(ip: "ipaddress._BaseAddress") -> "ipaddress._BaseAddress":
 
 
 def _ip_forbidden(ip: "ipaddress._BaseAddress") -> bool:
-    # is_global is false for RFC1918, loopback, link-local, multicast,
-    # reserved, unspecified, and 100.64.0.0/10 (CGNAT / cloud metadata).
-    # is_private alone does not cover that CGNAT range on Python 3.13+.
+    # is_global 对 RFC1918、回环、链路本地、组播、保留、未指定以及
+    # 100.64.0.0/10（CGNAT / 云元数据）为假。
+    # 仅用 is_private 在 Python 3.13+ 盖不住该 CGNAT 段。
     return not bool(_ip_for_policy(ip).is_global)
 
 
@@ -178,9 +178,8 @@ def host_allowed(host: str, allow: Iterable[str], port: Optional[int] = None) ->
 
 
 def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
-    """Connect after the allowlist check. Names that resolve only to
-    loopback / link-local / private / metadata addresses are refused
-    unless that address is itself on the allowlist.
+    """白名单校验通过后再连接。若解析结果仅为回环 / 链路本地 /
+    私网 / 元数据地址，则拒绝，除非该地址本身也在白名单中。
     """
     host = _norm_host(host)
     try:
@@ -189,14 +188,14 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
     except ValueError:
         literal = False
     if not host_allowed(host, allow, port):
-        raise OSError(f"blocked {host}:{port}")
+        raise OSError(f"已拦截 {host}:{port}")
     if literal:
         return socket.create_connection((host, port), timeout=20)
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise OSError(str(exc)) from exc
-    last = "no address"
+    last = "无可用地址"
     for _fam, _type, _proto, _canon, sockaddr in infos:
         ip_s = sockaddr[0].split("%", 1)[0]
         try:
@@ -204,7 +203,7 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
         except ValueError:
             continue
         if _ip_forbidden(ip) and not host_allowed(ip_s, allow, port):
-            last = f"blocked resolved {ip_s}"
+            last = f"已拦截解析结果 {ip_s}"
             continue
         try:
             return socket.create_connection((ip_s, sockaddr[1]), timeout=20)
@@ -216,7 +215,7 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
 def _split_hostport(authority: str, default_port: int) -> Tuple[str, int]:
     authority = authority.strip()
     if authority.startswith("["):
-        # [ipv6]:port
+        # [ipv6]:port 形式
         end = authority.find("]")
         if end < 0:
             return _norm_host(authority), default_port
@@ -273,15 +272,15 @@ def _read_headers(conn: socket.socket) -> bytes:
 def load_inject_map(path: Optional[str]) -> Dict[str, Any]:
     if not path:
         return {"entries": []}
-    # Host-only 0600 file; never bind into the guest.
+    # 仅宿主可读的 0600 文件；永不 bind 进 guest。
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, encoding="utf-8") as fh:
         st = os.fstat(fh.fileno())
         if not stat_is_reg(st.st_mode) or (st.st_mode & 0o077):
-            raise OSError("inject map must be a regular file mode 0600")
+            raise OSError("注入映射必须是权限 0600 的普通文件")
         data = json.load(fh)
     if not isinstance(data, dict):
-        raise OSError("invalid inject map")
+        raise OSError("注入映射无效")
     data.setdefault("entries", [])
     return data
 
@@ -313,14 +312,14 @@ def _resolve_entry_value(entry: Dict[str, Any], cache: Dict[str, Tuple[str, floa
             env={k: os.environ[k] for k in ("PATH", "HOME", "LANG", "XDG_RUNTIME_DIR") if k in os.environ},
         )
         if proc.returncode != 0 or not proc.stdout.strip():
-            raise OSError(f"credential command failed for {name}")
+            raise OSError(f"凭据命令失败: {name}")
         value = proc.stdout.strip()
         if refresh > 0:
             cache[name] = (value, now)
         return value
     value = entry.get("value")
     if not value:
-        raise OSError(f"credential missing value for {name}")
+        raise OSError(f"凭据缺少 value: {name}")
     return str(value)
 
 
@@ -331,12 +330,10 @@ def rewrite_headers_for_credentials(
     cache: Dict[str, Tuple[str, float]],
     log: bool,
 ) -> Tuple[List[str], Optional[str]]:
-    """Replace placeholders in request headers when host is authorized. Header-only.
+    """主机已授权时替换请求头中的占位符；只改 header。
 
-    The placeholder token is replaced with the raw secret value. Agents typically
-    already wrap env values (e.g. Authorization: Bearer $KEY); we do not re-apply
-    format strings during substitution. format is reserved for future whole-header
-    injection. Bodies and query strings are never rewritten.
+    占位符换成原始密钥值。Agent 通常已自行包裹环境值（如 Authorization: Bearer $KEY）；
+    替换时不再套 format。format 留给将来整头注入。body 与 query 永不改写。
     """
     if not inject.get("entries"):
         return header_lines, None
@@ -360,7 +357,7 @@ def rewrite_headers_for_credentials(
             domains = entry.get("domains") or []
             if not any(_domain_match(host, d) for d in domains):
                 msg = (
-                    "凭据未绑定到该主机: placeholder used for unauthorized host %s (secret=%s). "
+                    "凭据未绑定到该主机: 占位符用于未授权主机 %s（secret=%s）。"
                     "把该 host 加入密钥 domains 与 CAPBOX_NET_ALLOW，或改用已绑定域名。"
                     % (host, entry.get("name"))
                 )
@@ -464,7 +461,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                 return
             if log:
                 print(f"capbox-net ALLOW CONNECT {host}:{port}", file=sys.stderr)
-            # Credential-bound hosts: TLS MITM so we can rewrite Authorization headers.
+            # 绑定了凭据的主机：TLS MITM，以便改写 Authorization 头。
             if host_needs_mitm(host, inject) and inject.get("ca_key") and inject.get("ca_cert"):
                 try:
                     upstream_tcp = _dial(host, port, allow)
@@ -477,7 +474,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                     key_pem, cert_pem = mint_mitm_cert(inject["ca_key"], inject["ca_cert"], host)
                     ctx_client = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                     ctx_client.minimum_version = ssl.TLSVersion.TLSv1_2
-                    # Keep PEM files until after wrap_socket loads them into the context.
+                    # 等 wrap_socket 把 PEM 载入上下文后再删临时文件。
                     tmp = tempfile.mkdtemp(prefix="capbox-mitm-")
                     try:
                         kpath = os.path.join(tmp, "k.pem")
@@ -500,7 +497,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                     ctx_up = ssl.create_default_context()
                     ctx_up.minimum_version = ssl.TLSVersion.TLSv1_2
                     upstream = ctx_up.wrap_socket(upstream_tcp, server_hostname=host)
-                    # Read one HTTP request from guest, rewrite headers, forward.
+                    # 从 guest 读一条 HTTP 请求，改写头后转发。
                     req = _read_headers(client_tls)
                     if not req:
                         client_tls.close(); upstream.close(); return
@@ -510,7 +507,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                     if violation:
                         client_tls.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
                         client_tls.close(); upstream.close(); return
-                    # First line is request line; rebuild absolute-form-less request.
+                    # 首行是请求行；重建不含 absolute-form 的请求。
                     out = ("\r\n".join(rebuilt) + "\r\n\r\n").encode("iso-8859-1", "replace") + body
                     upstream.sendall(out)
                     _relay(client_tls, upstream)
@@ -568,7 +565,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
             return
 
         skip = {"proxy-connection", "proxy-authorization", "connection", "keep-alive", "te", "transfer-encoding"}
-        # Credential placeholder rewrite (header values only).
+        # 凭据占位符改写（仅 header 值）。
         rewritten, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
         if violation:
             conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
@@ -615,7 +612,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
 def cmd_proxy(args: argparse.Namespace) -> int:
     allow = parse_allowlist(args.allow)
     if not allow:
-        print("capbox-net: allowlist empty", file=sys.stderr)
+        print("capbox-net: 白名单为空", file=sys.stderr)
         return 2
     inject = load_inject_map(getattr(args, "inject_map", None))
     cache: Dict[str, Tuple[str, float]] = {}
@@ -650,10 +647,10 @@ def cmd_proxy(args: argparse.Namespace) -> int:
 
 
 def cmd_bridge(args: argparse.Namespace) -> int:
-    # Listen on TCP in current netns; forward to UNIX sock (host mount ns).
+    # 在当前 netns 上监听 TCP；转发到 UNIX sock（宿主 mount ns）。
     host, port_s = args.listen.split(":", 1)
     port = int(port_s)
-    # Bring-up of lo is done by CapBox shell before invoking bridge.
+    # lo 的拉起由 CapBox shell 在调用 bridge 前完成。
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
@@ -712,7 +709,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_proxy.add_argument("--allow", required=True)
     p_proxy.add_argument("--ready")
     p_proxy.add_argument("--log", action="store_true")
-    p_proxy.add_argument("--inject-map", help="host-only credential inject map (0600 JSON)")
+    p_proxy.add_argument("--inject-map", help="仅宿主凭据注入映射（0600 JSON）")
     p_proxy.set_defaults(func=cmd_proxy)
 
     p_br = sub.add_parser("bridge")
