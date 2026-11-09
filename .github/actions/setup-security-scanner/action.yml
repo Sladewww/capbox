@@ -5,6 +5,10 @@ runs:
   steps:
     - name: Install Trivy 0.76.2
       shell: bash
+      env:
+        # Reuse the job token for authenticated release downloads when the
+        # anonymous CDN returns transient 5xx (common 504 flaps).
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]
@@ -14,8 +18,21 @@ runs:
         # without auth and is rate-limit sensitive on push-to-main runners.
         # Keep the SHA-256 pin so a redirect or swap cannot silently change bits.
         url='https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz'
-        curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 -o "$archive" "$url"
-        printf '%s  %s\n' bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf "$archive" | sha256sum -c -
+        expected='bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf'
+        download() {
+          curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 15 --max-time 180 -o "$archive" "$1"
+        }
+        if ! download "$url"; then
+          echo "anonymous release download failed; retrying with gh (authenticated)" >&2
+          rm -f "$archive"
+          gh release download v0.76.2 \
+            --repo aquasecurity/trivy \
+            --pattern 'trivy_0.76.2_Linux-64bit.tar.gz' \
+            --dir "$work"
+          mv "$work/trivy_0.76.2_Linux-64bit.tar.gz" "$archive"
+        fi
+        printf '%s  %s\n' "$expected" "$archive" | sha256sum -c -
         mkdir "$work/bin"
         tar --no-same-owner -xzf "$archive" -C "$work/bin" trivy
         chmod 0755 "$work/bin/trivy"
