@@ -57,11 +57,12 @@ bash -n bin/capbox lib/*.sh lib/guest/*.sh test/*.sh test/cases/*.sh
 
 When editing README, `docs/`, Wiki, comments, CLI help, or error strings:
 
+- Default language for docs, comments, CLI help, and user-visible strings: Chinese. Keep identifiers, flags, env vars, paths, and code samples in English.
 - Prefer short sentences, concrete commands/paths, and verifiable limits. No slogans.
 - Cut empty adjectives and filler. Ban CN: 赋能 / 打造 / 一站式 / 助力 / 无缝 / 强大 (and similar). Ban EN: "It's important to note", "In conclusion", "Let's dive in", and parallel hedging.
 - State a trust fact once where it belongs. Do not restack the same trust-boundary slogan across Home / MCP / Agent pages, or bold every default for layout.
 - Avoid bold/list stacking used only for emphasis. Prefer plain prose plus a table or command block when listing facts.
-- CN and EN should read like human tech notes, not machine-translated marketing.
+- Chinese prose should read like human tech notes, not machine-translated marketing.
 - Copy-only edits must not change runtime behavior or loosen default trust boundaries (`isolated` / `untrusted` / `none`, no auto-apply of diffs, secrets on host).
 
 ## Network / recipe / resources
