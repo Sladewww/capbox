@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Host-side CapBox service supervisor: ready wait, health, restart backoff, stop timeout.
+"""宿主侧 CapBox 服务监督器：就绪等待、健康检查、重启退避、停止超时。
 
-Launched by service.sh. Never reads secrets from env files beyond what's passed
-as explicit CLI flags. Child is the already-constructed bwrap argv after `--`.
+由 service.sh 启动。除显式 CLI 标志外，不从环境文件读取密钥。
+子进程是 `--` 之后已构造好的 bwrap argv。
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def ready_cmd(cmd: str, cwd: Optional[str] = None) -> bool:
 def wait_ready(args: argparse.Namespace, log: str, deadline: float,
                proc: subprocess.Popen) -> bool:
     if not (args.ready_cmd or args.ready_tcp or args.ready_http):
-        # Let setup/exec errors reach the supervisor before reporting success.
+        # 先让 setup/exec 错误到达监督器，再报告成功。
         time.sleep(0.25)
         return proc.poll() is None
     while time.time() < deadline:
@@ -76,10 +76,10 @@ def wait_ready(args: argparse.Namespace, log: str, deadline: float,
         if ok and args.ready_cmd and not ready_cmd(args.ready_cmd):
             ok = False
         if ok:
-            _log(log, "ready: ok")
+            _log(log, "ready: 就绪")
             return True
         time.sleep(0.2)
-    _log(log, "ready: timeout")
+    _log(log, "ready: 超时")
     return False
 
 
@@ -105,7 +105,7 @@ def terminate_tree(proc: subprocess.Popen, stop_timeout: float, log: str) -> Non
         if proc.poll() is not None:
             return
         time.sleep(0.1)
-    _log(log, f"stop timeout {stop_timeout}s → SIGKILL")
+    _log(log, f"停止超时 {stop_timeout}s → SIGKILL")
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -143,13 +143,13 @@ def main() -> int:
     status("starting")
     for fd in args.pass_fd:
         if fd < 3:
-            ap.error("--pass-fd must be a descriptor above stderr")
-        os.fstat(fd)  # Fail closed before reporting a running supervisor.
+            ap.error("--pass-fd 必须是大于 stderr 的描述符")
+        os.fstat(fd)  # 报告监督器运行前先失败关闭。
     child: List[str] = list(args.child)
     if child and child[0] == "--":
         child = child[1:]
     if not child:
-        _log(args.log, "supervisor: missing child argv")
+        _log(args.log, "supervisor: 缺少子进程 argv")
         return 2
 
     stop = {"flag": False}
@@ -170,9 +170,9 @@ def main() -> int:
     restarts = 0
     backoff = args.restart_backoff
     while not stop["flag"]:
-        _log(args.log, f"supervisor: start {' '.join(child[:3])}...")
-        # bwrap consumes BPF bytes. The inherited open-file offset is shared with
-        # the supervisor, so every restart must read the filter from its beginning.
+        _log(args.log, f"supervisor: 启动 {' '.join(child[:3])}...")
+        # bwrap 会消费 BPF 字节。继承的打开文件偏移与监督器共享，
+        # 因此每次重启都必须从过滤器开头重新读取。
         for fd in args.pass_fd:
             os.lseek(fd, 0, os.SEEK_SET)
         proc = subprocess.Popen(
@@ -194,7 +194,7 @@ def main() -> int:
                 return 1
             restarts += 1
             if restarts > args.restart_max:
-                _log(args.log, "restart max exceeded after ready failure")
+                _log(args.log, "就绪失败后超过最大重启次数")
                 return 1
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
@@ -207,9 +207,9 @@ def main() -> int:
                 time.sleep(args.health_interval)
                 if not health_ok(args):
                     fails += 1
-                    _log(args.log, f"health fail {fails}/{args.health_retries}")
+                    _log(args.log, f"健康检查失败 {fails}/{args.health_retries}")
                     if fails >= args.health_retries:
-                        _log(args.log, "health: giving up → restart/stop")
+                        _log(args.log, "health: 放弃 → 重启/停止")
                         terminate_tree(proc, args.stop_timeout, args.log)
                         break
                 else:
@@ -221,18 +221,18 @@ def main() -> int:
             status("stopped")
             terminate_tree(proc, args.stop_timeout, args.log)
             proc.wait(timeout=args.stop_timeout + 2)
-            _log(args.log, "supervisor: stopped")
+            _log(args.log, "supervisor: 已停止")
             return 0
 
         rc = proc.wait()
         status("stopped")
-        _log(args.log, f"child exited rc={rc}")
+        _log(args.log, f"子进程退出 rc={rc}")
         should = args.restart == "always" or (args.restart == "on-failure" and rc != 0)
         if not should:
             return rc
         restarts += 1
         if restarts > args.restart_max:
-            _log(args.log, "restart max exceeded")
+            _log(args.log, "超过最大重启次数")
             return rc
         time.sleep(backoff)
         backoff = min(backoff * 2, 60)

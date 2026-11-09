@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fixed daily-path defaults for `capbox mcp serve`.
+"""`capbox mcp serve` 日常路径的固定默认值。
 
-Tool calls cannot raise these; only explicit CLI flags may opt into shared
-workspace or restricted network. Keep this module free of imports so tests and
-argparse can load it without a CapBox runtime context.
+工具调用不能抬高这些默认值；只有显式 CLI 标志才能改用共享
+工作区或 restricted 网络。本模块不导入其它依赖，便于测试与
+argparse 在没有 CapBox 运行时上下文时加载。
 """
 
 DEFAULT_PROFILE = 'untrusted'

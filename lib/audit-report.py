@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded audit snapshots rendered as a self-contained, read-only HTML report."""
+"""将有界审计快照渲染为自包含、只读的 HTML 报告。"""
 import argparse
 import base64
 from collections import deque
@@ -64,7 +64,7 @@ def redact(value):
 
 
 def parent_fd(path):
-    """Pin each directory without following guest-writable symlink ancestors."""
+    """钉住每一级目录，不跟随 guest 可写的符号链接祖先。"""
     path = Path(os.path.abspath(path))
     if not path.name:
         raise ValueError('必须指定文件名')
@@ -152,7 +152,7 @@ def snapshot(path, args):
             return data
 
         if start:
-            # The first fragment may belong to an earlier record; omit it.
+            # 首段碎片可能属于更早的记录；丢弃它。
             fragment = line()
             start += len(fragment)
             while fragment and not fragment.endswith(b'\n'):
@@ -207,7 +207,7 @@ def render(document):
         digest = base64.b64encode(hashlib.sha256(blocks[0].encode()).digest()).decode()
         template = template.replace('@@' + directive + '_HASH@@', digest)
     encoded = json.dumps(document, ensure_ascii=True, allow_nan=False, separators=(',', ':'))
-    # Inert JSON must never be allowed to close its script element.
+    # 惰性 JSON 绝不能关闭其 script 元素。
     encoded = encoded.replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026')
     if len(encoded) > MAX_PAYLOAD:
         raise ValueError('报告数据超过 32MiB，请缩小 --limit 或时间范围')
