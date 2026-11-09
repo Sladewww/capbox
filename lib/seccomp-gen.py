@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Generate a seccomp BPF blob for CapBox untrusted/strict profiles.
+"""为 CapBox untrusted/strict 配置生成 seccomp BPF。
 
-Uses libseccomp via ctypes (no python3-seccomp package required).
-Writes raw BPF to --out (or stdout as binary). Exit 0 on success.
+通过 ctypes 使用 libseccomp（不依赖 python3-seccomp 包）。
+将原始 BPF 写入 --out（或以二进制写到 stdout）。成功时退出码 0。
 
-Profiles:
-  untrusted — deny mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/
+配置：
+  untrusted — 拒绝 mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/
               unshare/setns/io_uring
   strict    — untrusted + ptrace + perf_event_open + process_vm_{read,write}v
 
-clone3 is intentionally NOT denied: glibc uses it to create threads. Namespace
-creation is blocked via unshare/setns (and bwrap --disable-userns when idmap is off).
+有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
+unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import errno
 import os
 import sys
 
-# x86_64 / aarch64 syscall numbers we care about. We resolve via libseccomp when possible.
+# 我们关心的 x86_64 / aarch64 系统调用号。尽量通过 libseccomp 解析。
 _FALLBACK_NR = {
     "x86_64": {
         "mount": 165,
@@ -116,7 +116,7 @@ STRICT_EXTRA = [
     "ptrace", "perf_event_open", "process_vm_readv", "process_vm_writev",
 ]
 
-# Action encodings from linux/seccomp.h / libseccomp
+# 来自 linux/seccomp.h / libseccomp 的动作编码
 SCMP_ACT_ALLOW = 0x7FFF0000
 SCMP_ACT_ERRNO = lambda errno: 0x00050000 | (errno & 0xFFFF)  # noqa: E731
 
@@ -133,7 +133,7 @@ def _arch() -> str:
 def _load_lib():
     path = ctypes.util.find_library("seccomp")
     if not path:
-        raise SystemExit("libseccomp not found (install libseccomp)")
+        raise SystemExit("未找到 libseccomp（请安装 libseccomp）")
     return ctypes.CDLL(path)
 
 
@@ -154,9 +154,9 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
     if profile == "strict":
         names += STRICT_EXTRA
     elif profile not in ("untrusted", "compat"):
-        raise SystemExit(f"unknown profile for seccomp: {profile}")
+        raise SystemExit(f"未知 seccomp 配置: {profile}")
     if profile == "compat" and not deny_exec_memfd:
-        raise SystemExit("compat requires an explicit additional restriction")
+        raise SystemExit("compat 需要显式附加限制")
 
     lib = _load_lib()
     lib.seccomp_init.restype = ctypes.c_void_p
@@ -167,14 +167,13 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
 
     ctx = lib.seccomp_init(SCMP_ACT_ALLOW)
     if not ctx:
-        raise SystemExit("seccomp_init failed")
+        raise SystemExit("seccomp_init 失败")
 
     added = 0
     missing = []
     if deny_exec_memfd:
-        # APK 3 uses executable memfds for scripts. AppArmor can deny their exec
-        # even when creation succeeds. ENOSYS makes APK use its on-disk fallback;
-        # this adds a restriction and leaves every profile's existing rules intact.
+        # APK 3 用可执行 memfd 跑脚本。即使创建成功，AppArmor 也可能拒绝 exec。
+        # 返回 ENOSYS 可让 APK 走磁盘回退；这只追加一条限制，不改动各配置已有规则。
         class ArgCmp(ctypes.Structure):
             _fields_ = [("arg", ctypes.c_uint), ("op", ctypes.c_uint),
                         ("datum_a", ctypes.c_uint64), ("datum_b", ctypes.c_uint64)]
@@ -205,20 +204,20 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
         os.close(fd)
     lib.seccomp_release(ctx)
     if rc != 0:
-        raise SystemExit(f"seccomp_export_bpf failed: {rc}")
+        raise SystemExit(f"seccomp_export_bpf 失败: {rc}")
 
     size = os.path.getsize(out_path)
     if size < 8:
-        raise SystemExit(f"BPF too small ({size}); libseccomp export failed")
+        raise SystemExit(f"BPF 过小 ({size})；libseccomp 导出失败")
     if missing:
         try:
             os.remove(out_path)
         except OSError:
             pass
         raise SystemExit(
-            f"seccomp-gen profile={profile} unresolved syscalls: {','.join(missing)}"
+            f"seccomp-gen 配置={profile} 未解析系统调用: {','.join(missing)}"
         )
-    sys.stderr.write(f"seccomp-gen profile={profile} arch={arch} rules={added} bytes={size}\n")
+    sys.stderr.write(f"seccomp-gen 配置={profile} arch={arch} rules={added} bytes={size}\n")
     return 0
 
 
@@ -226,7 +225,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--profile", choices=("compat", "untrusted", "strict"), required=True)
     ap.add_argument("--deny-exec-memfd", action="store_true")
-    ap.add_argument("--out", required=True, help="BPF output path")
+    ap.add_argument("--out", required=True, help="BPF 输出路径")
     args = ap.parse_args()
     return generate(args.profile, args.out, args.deny_exec_memfd)
 
