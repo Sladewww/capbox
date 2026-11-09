@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Stage, verify and recover a stopped project's bin/lib without touching its data.
+"""为已停止的项目暂存、校验并恢复 bin/lib，不触碰其数据。
 
-The journal and backups live outside the workspace. Each rename is same-filesystem;
-completed steps can be reversed after interruption. Existing processes must be stopped.
+事务记录与备份位于工作区外。每次 rename 都在同一文件系统上；
+中断后可回退已完成步骤。现有进程必须先停止。
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ PARTS = ('bin', 'lib')
 
 
 def real_directory(path: Path) -> Path:
-    # Resolve only after rejecting links, including parent components.
+    # 先拒绝链接（含父路径组件），再解析。
     for part in (path, *path.parents):
         if part.is_symlink():
             raise ValueError(f'拒绝符号链接目录: {part}')
@@ -49,7 +49,7 @@ def inventory(root: Path) -> dict[str, str]:
                 path = Path(folder) / name
                 if not path.is_file():
                     raise ValueError(f'运行目录只接受普通文件: {path}')
-                # Python bytecode is local cache, not part of a runtime bundle.
+                # Python 字节码是本地缓存，不属于运行时包。
                 if '__pycache__' in path.parts or path.suffix == '.pyc':
                     continue
                 mode = stat.S_IMODE(path.stat().st_mode) & 0o111
@@ -114,7 +114,7 @@ def smoke(root: Path, workspace: Path) -> None:
         raise ValueError('bin/capbox 缺少可执行权限')
     for path in [root / 'bin/capbox', *sorted((root / 'lib').rglob('*.sh'))]:
         subprocess.run(['bash', '-n', str(path)], check=True, capture_output=True)
-    # Call from its own directory, so another project's lib cannot shadow the stage.
+    # 从自身目录调用，避免其他项目的 lib 遮蔽暂存区。
     env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
     for args in [('version',), ('--help',)]:
         result = subprocess.run([str(root / 'bin/capbox'), '--root', str(root), *args], cwd=root, env=env,
@@ -201,7 +201,7 @@ def main() -> None:
         if inventory(backup) != record['old_inventory']:
             raise ValueError('备份完整性校验失败，拒绝回滚')
         begin_maintenance()
-        # Recovery is idempotent and can be repeated after interruption.
+        # 恢复是幂等的，中断后可重复执行。
         for part in PARTS:
             pending = target / f'.upgrade-recover-{part}'
             if pending.is_symlink():
@@ -248,7 +248,7 @@ def main() -> None:
     try:
         copy_runtime(source, stage)
         smoke(stage, workspace)
-        # Validate the new bundle before backing up or replacing any old file.
+        # 先校验新包，再备份或替换任何旧文件。
         copy_runtime(target, backup)
         record = {'id': ident, 'phase': 'prepared', 'old_inventory': old,
                   'new_inventory': new, 'old_version': version(target),
@@ -259,7 +259,7 @@ def main() -> None:
             record['phase'] = 'promoting'
             write_json(journal, record)
             for part in PARTS:
-                # Both moves stay on the project's filesystem.
+                # 两次移动都留在项目所在文件系统上。
                 displaced = stage / ('old-' + part)
                 os.replace(target / part, displaced)
                 os.replace(stage / part, target / part)
