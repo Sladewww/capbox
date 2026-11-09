@@ -236,7 +236,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
             path.unlink()
             removed.append(kind)
     if not removed:
-        raise CredError('找不到密钥: ' + name, 2)
+        raise CredError('找不到密钥: ' + name + '；用 secret ls 查看，或 secret set <name> --value-stdin 重新绑定', 2)
     print(json.dumps({'schema': SCHEMA, 'removed': name, 'kinds': removed}, ensure_ascii=True))
     return 0
 
@@ -424,11 +424,13 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     """Prepare inject map + guest placeholder env for a restricted launch."""
     allow = [p.strip() for p in (args.allow or '').split(',') if p.strip()]
     if not allow:
-        print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'empty-allow'}, ensure_ascii=True))
+        print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'empty-allow',
+            'hint': '未绑定凭据：CAPBOX_NET_ALLOW 为空。先 config set CAPBOX_NET_ALLOW <host>，再 secret set <service> --value-stdin。'}, ensure_ascii=True))
         return 0
     records = iter_records()
     if not records:
-        print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'no-secrets'}, ensure_ascii=True))
+        print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'no-secrets',
+            'hint': '未绑定凭据：宿主密钥库为空。运行: printf "%s" "$KEY" | capbox secret set <service> --value-stdin；guest 只会看到 capbox-sec-… 占位符。'}, ensure_ascii=True))
         return 0
     inject: Dict[str, Any] = {'schema': SCHEMA, 'entries': []}
     guest_env: Dict[str, str] = {}
@@ -463,7 +465,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         inject['entries'].append(entry)
         needs_mitm = True
     if not inject['entries']:
-        print(json.dumps({'schema': SCHEMA, 'active': False, 'skipped': skipped}, ensure_ascii=True))
+        print(json.dumps({'schema': SCHEMA, 'active': False, 'skipped': skipped,
+            'hint': '未绑定凭据：已存密钥的域名不在 CAPBOX_NET_ALLOW 中（不会静默放宽）。把 provider host 写入 NET_ALLOW，或 secret set --custom --host …。'}, ensure_ascii=True))
         return 0
     session = args.session or secrets.token_hex(8)
     root = cred_dir()

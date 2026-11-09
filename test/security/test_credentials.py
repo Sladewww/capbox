@@ -191,15 +191,35 @@ class GuestPlaceholderTests(Fixture):
         shutil.copytree(ROOTFS, self.ws / '.capbox/os/alpine', symlinks=True)
 
     def test_guest_printenv_has_placeholder_not_secret(self):
+        secret = 'SUPER-SECRET-KEY-LEAK-PROBE'
         subprocess.run(self.cli + ['secret', 'set', 'openai', '--value-stdin'],
-                       input='SUPER-SECRET-KEY', text=True, env=self.env,
+                       input=secret, text=True, env=self.env,
                        capture_output=True, check=True)
         self.env['CAPBOX_NET_ALLOW'] = 'api.openai.com'
         r = self.run_cli('exec', '--net', 'restricted', '--', 'printenv', 'OPENAI_API_KEY')
         self.assertEqual(r.returncode, 0, r.stderr)
         val = r.stdout.strip()
         self.assertTrue(val.startswith('capbox-sec-'), val)
-        self.assertNotIn('SUPER-SECRET-KEY', r.stdout + r.stderr)
+        self.assertNotIn(secret, r.stdout + r.stderr)
+        # Guest environ dump must not contain the raw host secret either.
+        r_env = self.run_cli('exec', '--net', 'restricted', '--', 'sh', '-c',
+                             'printenv; printf "\n---\n"; wc -c </proc/self/environ')
+        self.assertEqual(r_env.returncode, 0, r_env.stderr)
+        self.assertNotIn(secret, r_env.stdout + r_env.stderr)
+        self.assertIn('OPENAI_API_KEY=capbox-sec-', r_env.stdout)
+        # Session guest.env on the host is placeholders only.
+        private = Path(subprocess.check_output([
+            'bash', '-c',
+            'export CAPBOX_DIR="$1/.capbox" CAPBOX_WORKSPACE="$1"; '
+            'source "$2/lib/common.sh"; _capbox_host_state_dir',
+            'x', str(self.ws), str(REPO)
+        ], env=self.env, text=True).strip())
+        env_files = list((private / 'credentials' / 'sessions').rglob('guest.env'))
+        self.assertTrue(env_files)
+        for path in env_files:
+            body = path.read_text()
+            self.assertNotIn(secret, body)
+            self.assertIn('capbox-sec-', body)
         # Restricted allowlist still blocks other hosts (policy/proxy path).
         r2 = self.run_cli('policy', 'check', '--net', 'restricted', 'https://example.com/')
         self.assertEqual(r2.returncode, 1)
@@ -365,6 +385,62 @@ class HttpsMitmTests(unittest.TestCase):
             finally:
                 proc.terminate(); proc.wait(timeout=5)
 
+
+
+
+class UnboundCredentialHintsTests(Fixture):
+    def host_private(self):
+        return subprocess.check_output([
+            'bash', '-c',
+            'export CAPBOX_DIR="$1/.capbox" CAPBOX_WORKSPACE="$1"; '
+            'source "$2/lib/common.sh"; _capbox_host_state_dir',
+            'x', str(self.ws), str(REPO)
+        ], env=self.env, text=True).strip()
+
+    def test_prepare_no_secrets_includes_bind_hint(self):
+        private = self.host_private()
+        out = subprocess.check_output([
+            'env', f'CAPBOX_CRED_PRIVATE={private}',
+            'python3', str(REPO / 'lib/credentials-runtime.py'),
+            'prepare', '--allow', 'api.openai.com', '--session', 'hint1'
+        ], text=True)
+        data = json.loads(out)
+        self.assertFalse(data['active'])
+        self.assertEqual(data['reason'], 'no-secrets')
+        self.assertIn('secret set', data['hint'])
+        self.assertIn('capbox-sec-', data['hint'])
+
+    def test_prepare_domain_mismatch_includes_net_allow_hint(self):
+        subprocess.run(self.cli + ['secret', 'set', 'openai', '--value-stdin'],
+                       input='REAL-KEY-SHOULD-NOT-LEAK', text=True, env=self.env,
+                       capture_output=True, check=True)
+        private = self.host_private()
+        out = subprocess.check_output([
+            'env', f'CAPBOX_CRED_PRIVATE={private}',
+            'python3', str(REPO / 'lib/credentials-runtime.py'),
+            'prepare', '--allow', 'evil.example', '--session', 'hint2'
+        ], text=True)
+        data = json.loads(out)
+        self.assertFalse(data['active'])
+        self.assertTrue(data['skipped'])
+        self.assertIn('NET_ALLOW', data['hint'])
+        self.assertNotIn('REAL-KEY-SHOULD-NOT-LEAK', out)
+
+
+class ProxyUnauthorizedMessageTests(unittest.TestCase):
+    def test_unauthorized_host_message_is_actionable(self):
+        token = 'capbox-sec-' + ('44' * 16)
+        inject = {'entries': [{
+            'name': 'openai', 'domains': ['api.openai.com'],
+            'header': 'Authorization', 'format': 'Bearer %s',
+            'value': 'REAL-OPENAI', 'placeholders': {'OPENAI_API_KEY': token},
+        }]}
+        lines = ['GET / HTTP/1.1', f'Authorization: Bearer {token}', 'Host: evil.test', '']
+        _, viol = net_proxy.rewrite_headers_for_credentials(lines, 'evil.test', inject, {}, False)
+        self.assertIsNotNone(viol)
+        self.assertIn('凭据未绑定', viol)
+        self.assertIn('NET_ALLOW', viol)
+        self.assertNotIn('REAL-OPENAI', viol)
 
 
 if __name__ == '__main__':

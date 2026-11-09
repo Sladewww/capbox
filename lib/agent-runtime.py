@@ -456,6 +456,11 @@ def public_state(job):
     result.update(output_bytes={s: (job / (s + '.log')).stat().st_size
                                 if (job / (s + '.log')).exists() else 0
                                 for s in ('stdout', 'stderr')})
+    if result.get('status') == 'timed_out':
+        result['hint'] = ('任务执行超时（timed_out / exit 124）。'
+                          '查看 task logs，缩小命令，或提高 --timeout（MCP 受 --max-timeout 上限约束）。')
+    elif result.get('status') == 'cancelled':
+        result['hint'] = '任务已取消。可用 task logs 查看部分输出；需要时可重新 task start。'
     return result
 
 
@@ -624,13 +629,26 @@ def worker(root, task_id):
 def log_chunk(job, stream, offset, limit):
     path = job / (stream + '.log')
     data = b''
+    size = 0
     if path.exists():
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as f:
+            size = os.fstat(f.fileno()).st_size
+            if offset > size:
+                # Keep empty-read compatibility for clients that poll past EOF, but mark it.
+                return {'task_id': job.name, 'stream': stream, 'offset': offset,
+                        'next_offset': offset, 'data_base64': '',
+                        'size': size, 'eof': True, 'cursor_past_eof': True,
+                        'hint': '日志游标超出文件末尾（offset=%d, size=%d）；请用上一次的 next_offset，或从 0 重读'
+                                % (offset, size)}
             f.seek(offset)
             data = f.read(limit)
-    return {'task_id': job.name, 'stream': stream, 'offset': offset,
-            'next_offset': offset + len(data), 'data_base64': base64.b64encode(data).decode()}
+    next_offset = offset + len(data)
+    eof = next_offset >= size
+    result = {'task_id': job.name, 'stream': stream, 'offset': offset,
+              'next_offset': next_offset, 'data_base64': base64.b64encode(data).decode(),
+              'size': size, 'eof': eof, 'cursor_past_eof': False}
+    return result
 
 
 def diff_task(ctx, job, as_json):
@@ -665,7 +683,7 @@ def diff_task(ctx, job, as_json):
     result = {'kind': 'workspace_diff', 'task_id': job.name, 'changed_files': sorted(
         name for name in set(current) | set(baseline) if current.get(name) != baseline.get(name)),
         'origin_changed': conflicts, 'patch_base64': base64.b64encode(patch).decode(),
-        'notes': 'Export only; review the patch and source baseline before applying. No automatic apply.'}
+        'notes': 'Export only; review the patch and source baseline before applying. CapBox never auto-applies isolate diffs — apply on the host only after review.'}
     if as_json:
         emit(result)
     else:
@@ -784,7 +802,8 @@ def main(argv=None):
                 return return_code(state)
             if deadline and time.monotonic() >= deadline:
                 if args.json or args.action == 'wait':
-                    emit({'kind': 'wait_timeout', 'task_id': job.name, 'status': state['status']})
+                    emit({'kind': 'wait_timeout', 'task_id': job.name, 'status': state['status'],
+                          'hint': '客户端等待超时（未取消任务）。继续 status/logs/wait，或显式 cancel。'})
                 return 124
             time.sleep(0.05)
     elif args.action == 'diff':

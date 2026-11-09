@@ -48,7 +48,13 @@ _credentials_prepare_restricted() {
   # Parse tiny JSON without requiring jq.
   local active inject envf cacert
   active="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; d=json.loads(os.environ["CAPBOX_CRED_JSON"]); print("1" if d.get("active") else "0")')" || return 1
-  [[ "$active" == "1" ]] || return 0
+  if [[ "$active" != "1" ]]; then
+    hint="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; print(json.loads(os.environ["CAPBOX_CRED_JSON"]).get("hint") or "")' 2>/dev/null || true)"
+    if [[ -n "$hint" ]]; then
+      log_warn "$hint"
+    fi
+    return 0
+  fi
   inject="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; print(json.loads(os.environ["CAPBOX_CRED_JSON"]).get("inject_map",""))')"
   envf="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; print(json.loads(os.environ["CAPBOX_CRED_JSON"]).get("guest_env_file",""))')"
   cacert="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; print(json.loads(os.environ["CAPBOX_CRED_JSON"]).get("ca_cert") or "")')"
