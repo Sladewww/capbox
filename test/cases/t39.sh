@@ -74,9 +74,10 @@ restore_t39() {
   fi
   rm -f -- "${host_probe:-}" 2>/dev/null || true
   # 只删探针标记行，不截断已有审计日志。
-  if [ -n "${log_host:-}" ] && [ -f "$log_host" ] && [ ! -L "$log_host" ] && grep -q -F -- "$marker" "$log_host" 2>/dev/null; then
+  # 只去掉 guest 写入的整行探针；宿主审计可能把命令行记进 cmd，不能按子串删行。
+  if [ -n "${log_host:-}" ] && [ -f "$log_host" ] && [ ! -L "$log_host" ] && grep -qx -F -- "$marker" "$log_host" 2>/dev/null; then
     _strip="$QA_TMP/t39-audit.strip"
-    grep -v -F -- "$marker" "$log_host" >"$_strip" && cat "$_strip" >"$log_host"
+    grep -vx -F -- "$marker" "$log_host" >"$_strip" && cat "$_strip" >"$log_host"
     rm -f -- "$_strip"
   fi
 }
@@ -178,7 +179,8 @@ CASE_ASSERTS=$((CASE_ASSERTS + 1))
 mkdir -p "$CAPBOX_DIR/logs"
 run_cmd "$CAPBOX_BIN" exec -- sh -c "echo $marker >> \"$log_guest\""
 assert_ne 0 "$RUN_RC" "guest 追加 audit.jsonl 应非零退出"
-if [ -f "$log_host" ] && grep -q -F -- "$marker" "$log_host" 2>/dev/null; then
+# 宿主现在会为这次 exec 写审计，cmd 里会带上 marker；只有整行等于 marker 才是 guest 写入。
+if [ -f "$log_host" ] && grep -qx -F -- "$marker" "$log_host" 2>/dev/null; then
   _fail "guest 写入了 logs/audit.jsonl"
 else
   _ok "guest 未能写入 logs/audit.jsonl"
