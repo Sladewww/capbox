@@ -268,6 +268,7 @@ class HttpsMitmTests(unittest.TestCase):
 
         def upstream():
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             with tempfile.TemporaryDirectory() as tmp:
                 k = Path(tmp) / 'k.pem'; c = Path(tmp) / 'c.pem'
                 k.write_bytes(up_key.private_bytes(
@@ -345,6 +346,7 @@ class HttpsMitmTests(unittest.TestCase):
                     resp += client.recv(4096)
                 self.assertIn(b'200', resp.split(b'\r\n', 1)[0])
                 ctx = ssl.create_default_context()
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_REQUIRED
                 ctx.load_verify_locations(cafile=str(ca_cert_path))

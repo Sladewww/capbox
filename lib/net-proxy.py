@@ -472,6 +472,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                 try:
                     key_pem, cert_pem = mint_mitm_cert(inject["ca_key"], inject["ca_cert"], host)
                     ctx_client = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    ctx_client.minimum_version = ssl.TLSVersion.TLSv1_2
                     # Keep PEM files until after wrap_socket loads them into the context.
                     tmp = tempfile.mkdtemp(prefix="capbox-mitm-")
                     try:
@@ -493,6 +494,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                         except OSError:
                             pass
                     ctx_up = ssl.create_default_context()
+                    ctx_up.minimum_version = ssl.TLSVersion.TLSv1_2
                     upstream = ctx_up.wrap_socket(upstream_tcp, server_hostname=host)
                     # Read one HTTP request from guest, rewrite headers, forward.
                     req = _read_headers(client_tls)
