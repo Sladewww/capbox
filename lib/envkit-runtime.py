@@ -188,8 +188,8 @@ def readiness(ctx, probe):
             sysctls[name]=path.read_text().strip()
     return {'kind':'host_readiness','dependencies_ready':ready,'host':dict(os_release(),architecture=platform.machine(),supported=supported),
             'runtime_version':ctx['version'],'project_version':installed_version(ctx),'components':items,'kernel_policy':sysctls,
-            'userns_execution':'未探测；init 后请跑 doctor',
-            'resource_enforcement':'未探测；已配置限额仍需真实启动/委托才生效',
+            'userns_execution':'not_probed; run doctor after init',
+            'resource_enforcement':'not_probed; configured limits still require real launch/delegation',
             'workspace_runtime':str(Path(ctx['state'])/'lib/version.sh')}
 
 
