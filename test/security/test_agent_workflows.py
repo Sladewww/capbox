@@ -176,7 +176,7 @@ class TaskTests(Fixture):
         self.assertIn('new.bin',d['changed_files'])
         self.assertIn(b'GIT binary patch',patch);self.assertIn(b'deleted file mode',patch)
         self.assertNotIn(b'fixture-secret',patch)
-        self.assertIn('never auto-applies', d.get('notes','').lower())
+        self.assertIn('从不自动应用', d.get('notes',''))
         (self.ws/'hello.txt').write_text('concurrent-change\n')
         d=json.loads(self.run_cli('task','diff',task,'--json').stdout)
         self.assertIn('hello.txt',d['origin_changed'])
