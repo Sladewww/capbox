@@ -419,9 +419,9 @@ _capbox_derive_paths() {
   export CAPBOX_ROOTFS CAPBOX_DAEMON_DIR
 }
 
-# Host executables, argv, and process identities must never share guest-writable run/.
-# A user-owned 0700 parent under a sticky system directory is safe from other users;
-# guest processes cannot reach it because it is outside every workspace bind.
+# 宿主可执行文件、argv 与进程身份绝不能放进 guest 可写的 run/。
+# sticky 系统目录下由用户持有的 0700 父目录对其他用户是安全的；
+# guest 进程到不了这里，因为它在所有工作区 bind 之外。
 _capbox_host_state_dir() {
   local uid ws project key base real parent dir candidate mode owner
   uid="$(id -u)" || return 1
@@ -434,7 +434,7 @@ _capbox_host_state_dir() {
     [[ -n "$base" && -d "$base" && -w "$base" ]] || continue
     real="$(readlink -f -- "$base")" || continue
     case "$real" in "$ws"|"$ws"/*) continue ;; esac
-    # A writable non-sticky parent would allow replacement of our private tree.
+    # 可写且非 sticky 的父目录会允许别人替换我们的私有树。
     mode="$(stat -c %a -- "$real")" || continue
     owner="$(stat -c %u -- "$real")" || continue
     if (( (8#$mode & 0022) != 0 )); then
@@ -445,7 +445,7 @@ _capbox_host_state_dir() {
     fi
     parent="$real/capbox-$uid"
     dir="$parent/$key"
-    # Leave room for an AF_UNIX socket name even with a long XDG_RUNTIME_DIR.
+    # 即使 XDG_RUNTIME_DIR 很长，也要给 AF_UNIX socket 名留出空间。
     (( ${#dir} <= 60 )) || continue
     for candidate in "$parent" "$dir"; do
       if [[ ! -e "$candidate" && ! -L "$candidate" ]]; then
@@ -465,7 +465,7 @@ _capbox_host_state_dir() {
   return 1
 }
 
-# A stale numeric PID can refer to an unrelated process after reuse or in another PID ns.
+# 过期的数字 PID 在复用后或另一个 PID ns 里可能指向无关进程。
 _capbox_process_identity() {
   local pid="${1:-}" line ns
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || return 1
@@ -478,7 +478,7 @@ _capbox_process_identity() {
   printf '%s %s' "$ns" "${fields[19]}"
 }
 
-# Configuration owns parsing, validation and persistence; loading stays explicit below.
+# 配置的解析、校验与持久化归 config；下方只做显式加载。
 # shellcheck source=lib/config.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/config.sh" || return 1
 
@@ -997,7 +997,7 @@ ensure_rootfs_dirs() {
   mkdir -p "$CAPBOX_TMP_DIR" 2>/dev/null || true
 }
 
-# One parameter builder is shared by exec, shell, services and daemon.
+# exec / shell / 服务 / daemon 共用同一套参数构造。
 # shellcheck source=lib/launch.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/launch.sh" || return 1
 
