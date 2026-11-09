@@ -11,6 +11,20 @@ import tarfile
 import time
 import unittest
 from test_agent_workflows import Fixture, ROOTFS, REPO
+import importlib.util
+from types import SimpleNamespace
+
+
+def load_module(name, relative):
+    spec = importlib.util.spec_from_file_location(name, REPO / relative)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MCP_DEFAULTS = load_module('capbox_mcp_defaults', 'lib/mcp-defaults.py')
+MCP_STDIO = load_module('capbox_mcp_stdio', 'lib/mcp-stdio.py')
+ENVKIT = load_module('capbox_envkit_runtime', 'lib/envkit-runtime.py')
 
 
 def request(identifier,method,params=None):
@@ -102,6 +116,76 @@ class MCPTests(Fixture):
         out=self.exchange([huge,*initialization(),request(2,'ping')])
         self.assertEqual(out[0]['error']['code'],-32700)
         self.assertEqual(out[-1]['result'],{})
+
+
+    def test_cli_defaults_lock_daily_trust_boundary(self):
+        parser = ENVKIT.build_mcp_parser()
+        args = parser.parse_args(['serve'])
+        self.assertEqual(args.profile, MCP_DEFAULTS.DEFAULT_PROFILE)
+        self.assertEqual(args.net, MCP_DEFAULTS.DEFAULT_NET)
+        self.assertEqual(args.workspace_mode, MCP_DEFAULTS.DEFAULT_WORKSPACE_MODE)
+        self.assertEqual(args.max_timeout, MCP_DEFAULTS.DEFAULT_MAX_TIMEOUT)
+        self.assertEqual(args.profile, 'untrusted')
+        self.assertEqual(args.net, 'none')
+        self.assertEqual(args.workspace_mode, 'isolated')
+        self.assertEqual(args.max_timeout, 600)
+        self.assertEqual(MCP_DEFAULTS.MAX_OUTPUT_BYTES, 8 * 1024 * 1024)
+        import contextlib, io
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                parser.parse_args(['serve', '--net', 'open'])
+
+    def test_default_execute_pins_isolate_untrusted_none_and_8mib(self):
+        calls = []
+        class Proc:
+            returncode = 0
+            stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
+        def invoke(command):
+            calls.append(command)
+            return Proc()
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1'}, args, invoke).call('capbox_execute', {'argv': ['true']})
+        self.assertFalse(result['isError'])
+        command = calls[0]
+        self.assertEqual(command[:2], ['task', 'start'])
+        self.assertIn('--isolate', command)
+        self.assertEqual(command[command.index('--profile') + 1], 'untrusted')
+        self.assertEqual(command[command.index('--net') + 1], 'none')
+        self.assertEqual(command[command.index('--max-output-bytes') + 1], str(MCP_DEFAULTS.MAX_OUTPUT_BYTES))
+        self.assertNotIn('open', command)
+
+    def test_shared_mode_is_opt_in_and_omits_isolate(self):
+        calls = []
+        class Proc:
+            returncode = 0
+            stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='shared', max_timeout=600)
+        MCP_STDIO.Server({'version': '0.4.1'}, args, lambda c: calls.append(c) or Proc()).call(
+            'capbox_execute', {'argv': ['true']})
+        self.assertNotIn('--isolate', calls[0])
+
+    def test_tool_schema_rejects_policy_and_root_overrides(self):
+        schema = next(t['inputSchema'] for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_execute')
+        for key in ('root', 'profile', 'net', 'workspace_mode', 'max_output_bytes', 'isolate'):
+            self.assertNotIn(key, schema['properties'])
+        diff = next(t for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_diff')
+        self.assertIn('never applies', diff['description'].lower())
+
+    def test_handshake_advertises_fixed_defaults_in_instructions(self):
+        out = self.exchange(initialization())
+        instructions = out[0]['result']['instructions']
+        self.assertIn('isolated/untrusted/none', instructions)
+        self.assertIn('cannot raise policy', instructions.lower())
+
+    def test_policy_tool_reports_mcp_fixed_block(self):
+        out = self.exchange(initialization() + [request(2, 'tools/call', {'name': 'capbox_policy', 'arguments': {}})])
+        data = out[1]['result']['structuredContent']
+        self.assertEqual(data['values']['NET']['value'], 'none')
+        self.assertEqual(data['mcp']['workspace_mode'], 'isolated')
+        self.assertEqual(data['mcp']['profile'], 'untrusted')
+        self.assertEqual(data['mcp']['net'], 'none')
+        self.assertEqual(data['mcp']['max_output_bytes'], 8 * 1024 * 1024)
+        self.assertTrue(data['mcp']['tools_cannot_raise_policy'])
 
 
 @unittest.skipUnless((ROOTFS/'bin/sh').is_symlink() or (ROOTFS/'bin/sh').exists(),'real rootfs required')

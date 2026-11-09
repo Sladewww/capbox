@@ -141,4 +141,4 @@ MIT — [LICENSE](LICENSE).
 
 ### Host credential proxy
 
-Real API keys stay on the host; restricted mode injects them via the allowlist proxy. See [docs/credentials.md](docs/credentials.md).
+Real API keys stay on the host; restricted mode injects them via the allowlist proxy. See [docs/credentials.md](docs/credentials.md). For the daily MCP entry (`mcp serve`, default isolated/untrusted/none) plus `--net restricted`, see [docs/envkit.md](docs/envkit.md) and [examples/](examples/).

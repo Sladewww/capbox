@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "capbox": {
+      "command": "/absolute/path/to/template/bin/capbox",
+      "args": [
+        "--root", "/absolute/path/to/project",
+        "mcp", "serve",
+        "--net", "restricted"
+      ]
+    }
+  }
+}

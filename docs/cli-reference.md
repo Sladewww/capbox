@@ -280,9 +280,13 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --profile {untrusted,strict}
+                        security profile (default: untrusted)
   --net {none,restricted}
+                        network mode (default: none; open is rejected)
   --workspace-mode {isolated,shared}
+                        task workspace (default: isolated)
   --max-timeout MAX_TIMEOUT
+                        max task timeout seconds (default: 600)
 ```
 
 ## capbox audit --help
