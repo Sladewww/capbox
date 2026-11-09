@@ -600,8 +600,7 @@ config_set() {
   config_apply "$k" "$v" || return $?
   if [[ "$k" == "ALLOW_OLD_BWRAP" && "$v" == "1" ]]; then
     _capbox_bwrap_version_ok >/dev/null || true
-    ver="${CAPBOX_BWRAP_VERSION:-未知}"
-    [[ -n "$ver" ]] || ver="未知"
+    ver="$(i18n_or "${CAPBOX_BWRAP_VERSION:-}" val.unknown)"
     if ! _capbox_audit_old_bwrap persist "$ver" "config set CAPBOX_ALLOW_OLD_BWRAP 1"; then
       i18n_err config.unable_write_old_bwrap_allow_audit_record
       config_apply ALLOW_OLD_BWRAP 0 || return 1

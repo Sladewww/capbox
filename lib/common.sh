@@ -359,7 +359,7 @@ _capbox_enforce_bwrap_baseline() {
     i18n_err common.bwrap_unavailable bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
     return 5
   fi
-  ver="${CAPBOX_BWRAP_VERSION:-未知}"
+  ver="$(i18n_or "${CAPBOX_BWRAP_VERSION:-}" val.unknown)"
   if scope="$(_capbox_old_bwrap_scope)"; then
     if [[ "$scope" == "persist" ]]; then
       i18n_warn common.bwrap_below_0_12_0_security_baseline ver="${ver}"

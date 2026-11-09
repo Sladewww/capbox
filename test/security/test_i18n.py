@@ -246,6 +246,20 @@ class CliResolveTests(unittest.TestCase):
         self.assertIn('CapBox template not found (no lib/ next to the CLI); install CapBox or use a project-local .capbox/bin/capbox', en.stderr)
         self.assertNotIn('找不到 CapBox 模板', en.stderr)
 
+    def test_old_bwrap_version_fallback_uses_val_unknown(self):
+        """Host old-bwrap paths must not leak a hardcoded 未知 into English messages."""
+        common = (REPO / 'lib/common.sh').read_text()
+        start = common.index('_capbox_enforce_bwrap_baseline()')
+        end = common.index('_capbox_audit_old_bwrap()', start)
+        body = common[start:end]
+        self.assertNotIn('未知', body)
+        self.assertIn('val.unknown', body)
+        config = (REPO / 'lib/config.sh').read_text()
+        idx = config.index('config set CAPBOX_ALLOW_OLD_BWRAP 1')
+        block = config[max(0, idx - 500): idx + 80]
+        self.assertNotIn('未知', block)
+        self.assertIn('val.unknown', block)
+
 
 if __name__ == '__main__':
     unittest.main()
