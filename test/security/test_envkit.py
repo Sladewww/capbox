@@ -188,6 +188,89 @@ class MCPTests(Fixture):
         self.assertTrue(data['mcp']['tools_cannot_raise_policy'])
 
 
+
+    def test_tools_list_cursor_error_explains_single_page(self):
+        out = self.exchange(initialization() + [request(2, 'tools/list', {'cursor': '1'})])
+        err = out[1]['error']
+        self.assertEqual(err['code'], -32602)
+        self.assertIn('omit cursor', err['message'].lower())
+        self.assertIn('full tool list', err['message'].lower())
+
+    def test_status_timed_out_surfaces_next_step_text(self):
+        class Proc:
+            returncode = 0
+            stdout = json.dumps({
+                'schema': 'capbox.agent.v1', 'task_id': 'a' * 32,
+                'status': 'timed_out', 'exit_code': 124,
+                'hint': '任务执行超时',
+            })
+            stderr = b''
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1'}, args, lambda c: Proc()).call(
+            'capbox_status', {'task_id': 'a' * 32})
+        self.assertFalse(result['isError'])
+        text = result['content'][0]['text']
+        self.assertIn('execution timeout', text.lower())
+        self.assertIn('capbox_logs', text.lower())
+        self.assertEqual(result['structuredContent']['status'], 'timed_out')
+
+    def test_logs_past_eof_surfaces_byte_cursor_hint(self):
+        class Proc:
+            returncode = 0
+            stdout = json.dumps({
+                'task_id': 'b' * 32, 'stream': 'stdout', 'offset': 99, 'next_offset': 99,
+                'data_base64': '', 'size': 3, 'eof': True, 'cursor_past_eof': True,
+                'hint': '日志游标超出文件末尾',
+            })
+            stderr = b''
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1'}, args, lambda c: Proc()).call(
+            'capbox_logs', {'task_id': 'b' * 32, 'offset': 99})
+        text = result['content'][0]['text']
+        self.assertIn('past end-of-file', text.lower())
+        self.assertIn('next_offset', text.lower())
+        self.assertTrue(result['structuredContent']['cursor_past_eof'])
+
+    def test_cli_failure_uses_sanitized_stderr_not_opaque_setup(self):
+        class Proc:
+            returncode = 2
+            stdout = b'not-json'
+            stderr = '[capbox] 找不到 task ID\n'.encode()
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1'}, args, lambda c: Proc()).call(
+            'capbox_status', {'task_id': 'c' * 32})
+        self.assertTrue(result['isError'])
+        text = result['content'][0]['text']
+        self.assertIn('找不到 task ID', text)
+        self.assertNotIn('check local setup', text.lower())
+
+    def test_diff_tool_still_never_auto_applies(self):
+        diff = next(t for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_diff')
+        self.assertIn('never applies', diff['description'].lower())
+        class Proc:
+            returncode = 2
+            stdout = b''
+            stderr = '[capbox] diff 只支持已结束且非 lost 的隔离任务\n'.encode()
+        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1'}, args, lambda c: Proc()).call(
+            'capbox_diff', {'task_id': 'd' * 32})
+        self.assertTrue(result['isError'])
+        self.assertIn('never auto-applies', result['content'][0]['text'].lower())
+
+    def test_restricted_policy_mentions_unbound_credential_next_step(self):
+        class Proc:
+            returncode = 0
+            stdout = json.dumps({'schema': 'capbox.agent.v1', 'values': {'NET': {'value': 'restricted'}}})
+            stderr = b''
+        args = SimpleNamespace(profile='untrusted', net='restricted', workspace_mode='isolated', max_timeout=600)
+        result = MCP_STDIO.Server({'version': '0.4.1', 'config': {'NET_ALLOW': 'api.openai.com'}},
+                                 args, lambda c: Proc()).call('capbox_policy', {})
+        note = result['structuredContent']['mcp']['credential_note']
+        self.assertIn('secret set', note.lower())
+        self.assertIn('placeholder', note.lower())
+
+
+
 @unittest.skipUnless((ROOTFS/'bin/sh').is_symlink() or (ROOTFS/'bin/sh').exists(),'real rootfs required')
 class BundleTests(Fixture):
     def setUp(self):

@@ -117,6 +117,27 @@ class TaskTests(Fixture):
         self.assertEqual(stdout,b'def');self.assertIn(b'err',stderr)
         self.assertEqual(events[-1]['exit_code'],7)
 
+    def test_log_cursor_past_eof_is_marked(self):
+        task=self.start('--','sh','-c','printf abc')
+        self.wait(task)
+        r=self.run_cli('task','logs',task,'--offset','100','--json')
+        self.assertEqual(r.returncode,0,r.stderr)
+        d=json.loads(r.stdout)
+        self.assertTrue(d['cursor_past_eof'])
+        self.assertTrue(d['eof'])
+        self.assertEqual(d['size'],3)
+        self.assertIn('next_offset', d['hint'])
+
+    def test_wait_timeout_includes_hint(self):
+        task=self.start('--','sleep','30')
+        r=self.run_cli('task','wait',task,'--timeout','1','--json')
+        self.assertEqual(r.returncode,124)
+        d=json.loads(r.stdout)
+        self.assertEqual(d['kind'],'wait_timeout')
+        self.assertIn('cancel', d['hint'])
+        self.run_cli('task','cancel',task)
+        self.wait(task,143,timeout=5)
+
     def test_wait_timeout_cancel_and_no_cross_task_kill(self):
         other=self.start('--','sleep','2');task=self.start('--','sleep','8')
         self.assertEqual(self.run_cli('task','wait',task,'--timeout','1').returncode,124)
@@ -155,6 +176,7 @@ class TaskTests(Fixture):
         self.assertIn('new.bin',d['changed_files'])
         self.assertIn(b'GIT binary patch',patch);self.assertIn(b'deleted file mode',patch)
         self.assertNotIn(b'fixture-secret',patch)
+        self.assertIn('never auto-applies', d.get('notes','').lower())
         (self.ws/'hello.txt').write_text('concurrent-change\n')
         d=json.loads(self.run_cli('task','diff',task,'--json').stdout)
         self.assertIn('hello.txt',d['origin_changed'])
