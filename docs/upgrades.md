@@ -1,8 +1,8 @@
-# Upgrade and recovery
+# 升级与恢复
 
-Requires host Python **3.10+**.
+需要宿主 Python **3.10+**。
 
-Use a trusted, complete template outside the project workspace. Update that template through your normal Git or verified-release process. Before applying or rolling back, use the old CLI to finish or cancel active tasks, stop every service and the daemon, and finish all exec calls. Confirm task completion with `task wait` or `task status`. CapBox checks known running tasks/services/daemon and conservatively refuses legacy service records; it cannot coordinate arbitrary concurrent uses of an older CLI.
+使用工作区外可信、完整的模板。模板本身用你平时的 Git 或已校验发行流程更新。应用或回滚前，用旧 CLI 结束或取消活动任务，停掉全部 service 与 daemon，并结束所有 exec。用 `task wait` 或 `task status` 确认任务结束。CapBox 会检查已知在跑的 task/service/daemon，并对遗留 service 记录保守拒绝；它无法协调任意并发使用的旧版 CLI。
 
 ```sh
 capbox --root /path/to/project upgrade check --from /path/to/new-template --json
@@ -10,24 +10,24 @@ capbox --root /path/to/project upgrade apply --from /path/to/new-template
 capbox --root /path/to/project upgrade rollback
 ```
 
-Invoke the **new template's bin/capbox** when upgrading an old project. Upgrade dispatch deliberately uses that template's complete libraries, even when the target project's libraries are old or incomplete.
+升级旧项目时调用**新模板的 bin/capbox**。升级分发故意使用该模板的完整库，即使目标项目的库偏旧或不完整。
 
-`check` compares runtime contents and executable bits, including obsolete files. It reports differences even if the version strings match and can run before stopping services. `apply` replaces the complete `bin` and `lib` trees, including local modifications; inspect the comparison first. The private backup retains the previous trees for rollback.
+`check` 比较运行时内容与可执行位（含过时文件）。即使版本字符串相同也会报告差异，且可在停服务前运行。`apply` 替换完整 `bin` 与 `lib` 树（含本地改动）；先看比较结果。私有备份保留旧树供回滚。
 
-## Commit and recovery
+## 提交与恢复
 
-1. Validate ordinary files and directories; reject symlinked runtime inputs and guest-visible upgrade sources.
-2. Copy a complete bundle to staging on the project's filesystem. Verify content hashes, shell syntax, module completeness, version and help.
-3. Copy and verify the old runtime in persistent private backup storage. Save a flushed transaction journal.
-4. Mark the project as under maintenance, replace the runtime directories and verify the installed bundle.
-5. On a replacement/check failure, restore the old trees. Successful recovery clears the maintenance marker.
+1. 校验普通文件与目录；拒绝符号链接的运行时输入与 guest 可见的升级源。
+2. 在项目所在文件系统上把完整包拷到暂存区。校验内容哈希、shell 语法、模块完整性、版本与 help。
+3. 把旧运行时拷到持久私有备份并校验。保存已 flush 的事务日志。
+4. 标记项目处于维护，替换运行时目录并校验已安装包。
+5. 替换/检查失败时恢复旧树。恢复成功后清除维护标记。
 
-Directory replacement uses a journal and compensating recovery; it is not one atomic filesystem operation spanning both trees. The marker blocks normal invocations of the new CLI while recovery is needed. If the process or machine is interrupted, use an intact external template to run `upgrade rollback`. Rootfs, config, service definitions and business data are never moved as part of this operation.
+目录替换靠日志与补偿恢复，不是跨两棵树的一次原子文件系统操作。需要恢复时，标记会拦住新 CLI 的普通调用。进程或机器中断后，用完好的外部模板跑 `upgrade rollback`。rootfs、配置、服务定义与业务数据不在此操作中搬移。
 
-## Backup location
+## 备份位置
 
-Backups are under `$XDG_STATE_HOME/capbox/<project-hash>/upgrades/`, or `~/.local/state/capbox/<project-hash>/upgrades/` when XDG_STATE_HOME is unset. Directories must belong to the user, use `0700` for private backup roots, and stay outside the workspace. These backups survive runtime-directory cleanup and normal reboots. `check --json` reports the location.
+备份在 `$XDG_STATE_HOME/capbox/<project-hash>/upgrades/`；未设置 XDG_STATE_HOME 时为 `~/.local/state/capbox/<project-hash>/upgrades/`。目录须属当前用户，私有备份根用 `0700`，并留在工作区外。这些备份在运行时目录清理与普通重启后仍在。`check --json` 会报告位置。
 
-The current implementation retains the latest rollback record and previous backup directories. Before moving a project or removing host state, preserve any backups you still need; the project hash follows its canonical installation path. Rollback checks backup hashes before replacing files.
+当前实现保留最近一条回滚记录与先前备份目录。迁移项目或清理宿主状态前，先留好仍需要的备份；项目哈希跟其规范安装路径走。回滚在替换文件前检查备份哈希。
 
-Existing rootfs versions are independent from the CLI. For an old Alpine release, retain backups and initialize a new workspace, reinstall supported packages and migrate necessary business data. A CLI upgrade does not patch existing guest packages or perform database-version migrations.
+已有 rootfs 版本与 CLI 独立。对旧 Alpine 发行版，请保留备份并初始化新工作区，重装受支持包并迁移必要业务数据。CLI 升级不会修补已有 guest 包，也不做数据库版本迁移。
