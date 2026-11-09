@@ -373,8 +373,16 @@ cli.incomplete_install=安装不完整，缺少 {dir}/{module}.sh
 common.bwrap_below_baseline=FAIL  bwrap {ver} 低于安全基线 0.12.0
 common.need_cmd=缺少依赖命令: {cmd}
 common.need_cmd_hint=缺少依赖命令: {cmd}（{hint}）
+
+rootfs.need_curl_to_download=下载 rootfs 需要 curl
+rootfs.need_tar_to_unpack=解包 rootfs 需要 tar
+rootfs.need_curl_to_init_from_url=从 URL 初始化需要 curl
+config.need_flock_to_commit=配置提交需要进程间锁
+config.need_flock_to_read=读取配置需要共享锁
 cli.cmd_unavailable=命令 '{label}' 不可用：缺少实现函数 {fn}
 cli.cmd_unavailable_hint=命令 '{label}' 不可用：缺少实现函数 {fn}（{hint}）
+
+cli.module_not_ready={module} 尚未就绪
 cli.unknown_global_option=未知全局选项: {arg}
 cli.unknown_command=未知命令: {cmd}
 audit.audit_log_must_regular_file_refusing_write=审计日志必须是普通文件，拒绝写入: {f}
@@ -819,6 +827,25 @@ svc.service_value_contains_illegal_expansion_characters=服务 {name}: {key} 值
 svc.service_value_contains_newline=服务 {name}: {key} 值含换行
 svc.service_missing_cmd=服务 {name}: 缺少 CMD
 svc.service_diagnostics=服务 '{name}' 诊断: {reason}
+
+svc.user_does_not_exist_in_guest_passwd=USER 不存在于 {passwd}
+svc.require_idmap_but_multi_uid_mapping_unavailable=REQUIRE_IDMAP=1 但多 UID 映射不可用
+svc.require_idmap_but_current_status=REQUIRE_IDMAP=1 但当前为 {status}
+svc.restricted_prerequisites_not_met=restricted 前置不满足
+svc.failed_start_restricted_proxy=restricted 代理启动失败
+svc.guest_cannot_see_bridge_ready_path=guest 看不到 bridge ready 路径
+svc.unable_create_run_dir=无法创建 {rd}
+svc.service_run_directory_is_symlink=服务运行目录是符号链接
+svc.unable_build_bwrap_args_rc_often_old_bwrap=无法构造 bwrap 参数（rc={rc}；常见原因：bwrap 版本不足）
+svc.unable_build_bwrap_args=无法构造 bwrap 参数
+svc.security_profile_could_not_be_applied=安全档无法应用
+svc.resource_limits_could_not_be_applied=资源限额无法应用
+svc.landlock_could_not_be_enabled=Landlock 未能启用
+svc.capbox_idmap_on_but_multi_uid_mapping_unavailable=CAPBOX_IDMAP=on 但多 UID 映射不可用
+svc.unable_inject_info_fd=无法注入 --info-fd
+svc.idmap_start_failed=idmap 启动失败
+svc.restricted_service_network_bridge_not_ready=restricted 服务网络桥未就绪
+svc.service_not_ready_or_start_failed_see_logs=服务未就绪或启动失败（见 service logs）
 svc.idmap=  idmap: {status} — {detail}
 svc.listening_ports_ss_lntu_head=  监听端口(ss -lntu | head):
 svc.msg=    {L}

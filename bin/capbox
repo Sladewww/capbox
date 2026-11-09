@@ -451,15 +451,15 @@ capbox_main() {
 
     # ---- 常驻容器（由 lib/daemon.sh 提供） ----
     up)
-      _require_decl cmd_up up "lib/daemon.sh 尚未就绪" || return 3
+      _require_decl cmd_up up "$(i18n_fmt cli.module_not_ready module=lib/daemon.sh)" || return 3
       cmd_up "$@"
       ;;
     down)
-      _require_decl cmd_down down "lib/daemon.sh 尚未就绪" || return 3
+      _require_decl cmd_down down "$(i18n_fmt cli.module_not_ready module=lib/daemon.sh)" || return 3
       cmd_down "$@"
       ;;
     logs)
-      _require_decl cmd_logs logs "lib/daemon.sh 尚未就绪" || return 3
+      _require_decl cmd_logs logs "$(i18n_fmt cli.module_not_ready module=lib/daemon.sh)" || return 3
       cmd_logs "$@"
       ;;
 

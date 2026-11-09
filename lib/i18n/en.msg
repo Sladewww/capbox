@@ -374,8 +374,16 @@ cli.incomplete_install=Incomplete install, missing {dir}/{module}.sh
 common.bwrap_below_baseline=FAIL  bwrap {ver} is below the 0.12.0 security baseline
 common.need_cmd=Missing required command: {cmd}
 common.need_cmd_hint=Missing required command: {cmd} ({hint})
+
+rootfs.need_curl_to_download=Downloading a rootfs requires curl
+rootfs.need_tar_to_unpack=Unpacking a rootfs requires tar
+rootfs.need_curl_to_init_from_url=Initializing from a URL requires curl
+config.need_flock_to_commit=Committing configuration requires an inter-process lock
+config.need_flock_to_read=Reading configuration requires a shared lock
 cli.cmd_unavailable=Command '{label}' is unavailable: missing implementation function {fn}
 cli.cmd_unavailable_hint=Command '{label}' is unavailable: missing implementation function {fn} ({hint})
+
+cli.module_not_ready={module} is not ready
 cli.unknown_global_option=Unknown global option: {arg}
 cli.unknown_command=Unknown command: {cmd}
 audit.audit_log_must_regular_file_refusing_write=Audit log must be a regular file, refusing to write: {f}
@@ -820,6 +828,25 @@ svc.service_value_contains_illegal_expansion_characters=Service {name}: value of
 svc.service_value_contains_newline=Service {name}: value of {key} contains a newline
 svc.service_missing_cmd=Service {name}: missing CMD
 svc.service_diagnostics=Service '{name}' diagnostics: {reason}
+
+svc.user_does_not_exist_in_guest_passwd=USER does not exist in {passwd}
+svc.require_idmap_but_multi_uid_mapping_unavailable=REQUIRE_IDMAP=1 but multi-UID mapping is unavailable
+svc.require_idmap_but_current_status=REQUIRE_IDMAP=1 but current status is {status}
+svc.restricted_prerequisites_not_met=restricted prerequisites are not met
+svc.failed_start_restricted_proxy=failed to start the restricted proxy
+svc.guest_cannot_see_bridge_ready_path=guest cannot see the bridge ready path
+svc.unable_create_run_dir=cannot create {rd}
+svc.service_run_directory_is_symlink=service run directory is a symlink
+svc.unable_build_bwrap_args_rc_often_old_bwrap=cannot build bwrap arguments (rc={rc}; often caused by an old bwrap)
+svc.unable_build_bwrap_args=cannot build bwrap arguments
+svc.security_profile_could_not_be_applied=security profile could not be applied
+svc.resource_limits_could_not_be_applied=resource limits could not be applied
+svc.landlock_could_not_be_enabled=Landlock could not be enabled
+svc.capbox_idmap_on_but_multi_uid_mapping_unavailable=CAPBOX_IDMAP=on but multi-UID mapping is unavailable
+svc.unable_inject_info_fd=cannot inject --info-fd
+svc.idmap_start_failed=idmap start failed
+svc.restricted_service_network_bridge_not_ready=restricted service network bridge is not ready
+svc.service_not_ready_or_start_failed_see_logs=service is not ready or failed to start (see service logs)
 svc.idmap=  idmap: {status} — {detail}
 svc.listening_ports_ss_lntu_head=  Listening ports (ss -lntu | head):
 svc.msg=    {L}

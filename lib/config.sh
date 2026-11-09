@@ -353,7 +353,7 @@ config_apply() {
     _cfg_known "$k" || { i18n_err config.unknown_config_key k="$k"; return 2; }
     _cfg_validate "$k" "$v" || return 2
   done
-  need_cmd flock '配置提交需要进程间锁'
+  need_cmd flock config.need_flock_to_commit
   with_lock config -- _config_apply_locked "${pairs[@]}" || return $?
   set -- "${pairs[@]}"
   while (( $# )); do
@@ -474,7 +474,7 @@ load_config() {
   # 不会被其他 CLI 进程误当成空/半截配置。
   local config_fd="" private=""
   if [[ -d "$CAPBOX_DIR" ]]; then
-    need_cmd flock '读取配置需要共享锁'
+    need_cmd flock config.need_flock_to_read
     private="$(_capbox_host_state_dir)" || i18n_die 1 config.unable_create_safe_config_lock_directory
     exec {config_fd}>"$private/config.lock" || i18n_die 1 config.unable_open_config_lock
     flock -s -w 180 "$config_fd" || i18n_die 1 config.timed_out_waiting_config_read_lock

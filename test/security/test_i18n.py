@@ -260,6 +260,30 @@ class CliResolveTests(unittest.TestCase):
         self.assertNotIn('未知', block)
         self.assertIn('val.unknown', block)
 
+    def test_need_cmd_and_service_reason_args_use_catalog_keys(self):
+        """Hints and service reasons must be catalog keys, not Chinese literals."""
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['rootfs.need_curl_to_download'], '下载 rootfs 需要 curl')
+        self.assertEqual(en['rootfs.need_curl_to_download'], 'Downloading a rootfs requires curl')
+        self.assertEqual(zh['cli.module_not_ready'], '{module} 尚未就绪')
+        self.assertEqual(en['cli.module_not_ready'], '{module} is not ready')
+        self.assertEqual(zh['svc.restricted_prerequisites_not_met'], 'restricted 前置不满足')
+        self.assertEqual(en['svc.restricted_prerequisites_not_met'],
+                         'restricted prerequisites are not met')
+        self.assertNotIn('尚未就绪', Path(REPO / 'bin/capbox').read_text())
+        import re
+        cjk = re.compile(r'[\u4e00-\u9fff]')
+        for rel, prefixes in (
+            ('lib/rootfs.sh', ('need_cmd ',)),
+            ('lib/config.sh', ('need_cmd ',)),
+            ('lib/service.sh', ('_service_abort ', '_service_diagnose ')),
+            ('bin/capbox', ('_require_decl ',)),
+        ):
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if any(line.lstrip().startswith(p) or f'; {p}' in line for p in prefixes):
+                    self.assertFalse(cjk.search(line), f'{rel}:{i}: {line}')
+
 
 if __name__ == '__main__':
     unittest.main()

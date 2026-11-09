@@ -182,7 +182,7 @@ fetch_tarball() {
   fi
 
   # 2) 下载
-  need_cmd curl "下载 rootfs 需要 curl"
+  need_cmd curl rootfs.need_curl_to_download
   local tmp="$dst.part.$RANDOM"
   local -a urls=()
   if [[ -n "$url" ]]; then
@@ -231,7 +231,7 @@ extract_rootfs() {
   local tarball="${1:-}"
   local dest="${2:-$CAPBOX_ROOTFS}"
   [[ -s "$tarball" ]] || i18n_die 1 rootfs.tarball_does_not_exist tarball="$tarball"
-  need_cmd tar "解包 rootfs 需要 tar"
+  need_cmd tar rootfs.need_tar_to_unpack
 
   local parent
   parent="$(dirname "$dest")"
@@ -678,7 +678,7 @@ _do_init() {
     case "$from" in
       http://* | https://*)
         i18n_info rootfs.downloading_specified_url from="$from"
-        need_cmd curl "从 URL 初始化需要 curl"
+        need_cmd curl rootfs.need_curl_to_init_from_url
         local name
         name="$(_distro_tarball_name "$distro")"
         mkdir -p "$CAPBOX_CACHE_DIR"

@@ -100,7 +100,7 @@ need_cmd() {
   local cmd="${1:-}"
   have_cmd "$cmd" && return 0
   if [[ -n "${2:-}" ]]; then
-    i18n_die 5 common.need_cmd_hint cmd="$cmd" hint="$2"
+    i18n_die 5 common.need_cmd_hint cmd="$cmd" hint="$(i18n_get "$2")"
   else
     i18n_die 5 common.need_cmd cmd="$cmd"
   fi

@@ -94,8 +94,12 @@ _service_append_env_args() {
 }
 
 _service_diagnose() {
-  local name="${1:-}" reason="${2:-}"
+  local name="${1:-}" key="${2:-}" reason=""
+  shift 2 || true
   local rd rootfs
+  if [[ -n "$key" ]]; then
+    reason="$(i18n_fmt "$key" "$@")"
+  fi
   rd="$(_service_run_dir "$name")" || return 1
   rootfs="${CAPBOX_ROOTFS:-}"
   i18n_err svc.service_diagnostics name="$name" reason="$reason"
@@ -235,9 +239,9 @@ _service_abort() {
     _svc_restricted=0
   fi
   if [[ $# -gt 0 && -n "${name:-}" ]]; then
-    _service_diagnose "$name" "$*"
+    _service_diagnose "$name" "$@"
   elif [[ $# -gt 0 ]]; then
-    log_err "$*"
+    i18n_err "$@"
   fi
   return "$rc"
 }
@@ -317,7 +321,7 @@ _service_start() {
       fi
     else
       i18n_err svc.service_unable_resolve_user_guest_passwd name="$name" user="$user"
-      _service_diagnose "$name" "USER 不存在于 ${CAPBOX_ROOTFS}/etc/passwd"
+      _service_diagnose "$name" svc.user_does_not_exist_in_guest_passwd passwd="${CAPBOX_ROOTFS}/etc/passwd"
       return 1
     fi
   fi
@@ -328,11 +332,11 @@ _service_start() {
 
   if [[ "$require_idmap" == "1" ]]; then
     if ! declare -F _idmap_probe >/dev/null 2>&1 || ! _idmap_probe; then
-      _service_diagnose "$name" "REQUIRE_IDMAP=1 但多 UID 映射不可用"
+      _service_diagnose "$name" svc.require_idmap_but_multi_uid_mapping_unavailable
       return 1
     fi
     if [[ "${CAPBOX_IDMAP_STATUS}" != "multi" ]]; then
-      _service_diagnose "$name" "REQUIRE_IDMAP=1 但当前为 ${CAPBOX_IDMAP_STATUS}"
+      _service_diagnose "$name" svc.require_idmap_but_current_status status="${CAPBOX_IDMAP_STATUS}"
       return 1
     fi
   fi
@@ -356,19 +360,19 @@ _service_start() {
     export CAPBOX_NET_SESSION="$(_service_net_tag "$name")"
     if declare -F _net_restricted_prereqs >/dev/null 2>&1; then
       _net_restricted_prereqs >/dev/null || {
-        _service_abort $? "restricted 前置不满足" || return $?
+        _service_abort $? svc.restricted_prerequisites_not_met || return $?
       }
     fi
     if declare -F _net_start_host_proxy >/dev/null 2>&1; then
       _net_start_host_proxy || {
-        _service_abort 1 "restricted 代理启动失败" || return $?
+        _service_abort 1 svc.failed_start_restricted_proxy || return $?
       }
     fi
     if declare -F _guest_workspace_path >/dev/null 2>&1 && declare -F _net_bridge_ready >/dev/null 2>&1; then
       ready_guest="$(_net_guest_path "$(_net_bridge_ready)")"
     fi
     [[ -n "$ready_guest" ]] || {
-      _service_abort 1 "guest 看不到 bridge ready 路径" || return $?
+      _service_abort 1 svc.guest_cannot_see_bridge_ready_path || return $?
     }
   else
     unset CAPBOX_NET_SESSION
@@ -377,10 +381,10 @@ _service_start() {
   local rd
   rd="$(_service_run_dir "$name")" || return 1
   mkdir -p "$rd" || {
-    _service_abort 1 "无法创建 $rd" || return $?
+    _service_abort 1 svc.unable_create_run_dir rd="$rd" || return $?
   }
   [[ ! -L "$rd" && -d "$rd" ]] || {
-    _service_abort 1 "服务运行目录是符号链接" || return $?
+    _service_abort 1 svc.service_run_directory_is_symlink || return $?
   }
 
   export CAPBOX_EXEC_UID_OVERRIDE="$uid"
@@ -409,10 +413,10 @@ _service_start() {
     _service_abort 6 || return $?
   fi
   if (( _bbrc != 0 )); then
-    _service_abort "$_bbrc" "无法构造 bwrap 参数（rc=${_bbrc}；常见原因：bwrap 版本不足）" || return $?
+    _service_abort "$_bbrc" svc.unable_build_bwrap_args_rc_often_old_bwrap rc="${_bbrc}" || return $?
   fi
   if ((${#args[@]} == 0)); then
-    _service_abort 4 "无法构造 bwrap 参数" || return $?
+    _service_abort 4 svc.unable_build_bwrap_args || return $?
   fi
   local -a filtered=()
   local a
@@ -429,17 +433,17 @@ _service_start() {
 
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
     _security_wrap_argv full || {
-      _service_abort $? "安全档无法应用" || return $?
+      _service_abort $? svc.security_profile_could_not_be_applied || return $?
     }
   fi
   if declare -F _resources_wrap_argv >/dev/null 2>&1; then
     _resources_wrap_argv full || {
-      _service_abort 1 "资源限额无法应用" || return $?
+      _service_abort 1 svc.resource_limits_could_not_be_applied || return $?
     }
   fi
   if declare -F _landlock_apply_argv >/dev/null 2>&1; then
     _landlock_apply_argv full || {
-      _service_abort $? "Landlock 未能启用" || return $?
+      _service_abort $? svc.landlock_could_not_be_enabled || return $?
     }
   fi
 
@@ -452,7 +456,7 @@ _service_start() {
     _idmap_enabled || idmap_rc=$?
   fi
   if (( idmap_rc == 2 )); then
-    _service_abort 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用" || return $?
+    _service_abort 1 svc.capbox_idmap_on_but_multi_uid_mapping_unavailable || return $?
   fi
   local _svc_info=0
   if (( _svc_restricted == 1 )) || [[ -n "${svc[PUBLISH]:-}" ]]; then
@@ -461,7 +465,7 @@ _service_start() {
   if (( _svc_info == 1 && idmap_rc != 0 )); then
     if declare -F _net_inject_bwrap_info_fd >/dev/null 2>&1; then
       _net_inject_bwrap_info_fd full 3 || {
-        _service_abort 1 "无法注入 --info-fd" || return $?
+        _service_abort 1 svc.unable_inject_info_fd || return $?
       }
     fi
   fi
@@ -618,7 +622,7 @@ EOS
       CAPBOX_IDMAP_SPAWN_LOG="$rd/service.log"
       bp="$(_idmap_spawn_bwrap_argv "${full[@]}")" || {
         unset -f _idmap_after_map_hook
-        _service_abort 1 "idmap 启动失败" || return $?
+        _service_abort 1 svc.idmap_start_failed || return $?
       }
       unset -f _idmap_after_map_hook
     elif (( _svc_restricted == 1 )); then
@@ -630,7 +634,7 @@ EOS
       if [[ -z "$sandboxed" ]] || ! _net_start_bridge_for_child "$sandboxed"; then
         kill "$bp" 2>/dev/null || true
         wait "$bp" 2>/dev/null || true
-        _service_abort 1 "restricted 服务网络桥未就绪" || return $?
+        _service_abort 1 svc.restricted_service_network_bridge_not_ready || return $?
       fi
       printf '%s\n' "$sandboxed" >"$rd/sandbox.pid"
     else
@@ -660,7 +664,7 @@ EOS
   done
   if (( startup_ok != 1 )); then
     kill -TERM "$bp" 2>/dev/null || true
-    _service_abort 1 "服务未就绪或启动失败（见 service logs）" || return $?
+    _service_abort 1 svc.service_not_ready_or_start_failed_see_logs || return $?
   fi
   if [[ -n "${svc[PUBLISH]:-}" ]]; then
     _net_publish_start "$name" "${svc[PUBLISH]}" || i18n_warn svc.publish_failed_start_see_logs
