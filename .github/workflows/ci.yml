@@ -53,7 +53,7 @@ jobs:
           python3 test/security/test_upgrade.py
           python3 test/security/test_package_lock.py
           python3 test/security/test_agent_workflows.py PolicyTests
-          python3 test/security/test_p1_tools.py SetupTests MCPTests
+          python3 test/security/test_envkit.py SetupTests MCPTests
           python3 test/security/test_audit_report.py
       - name: Generated documentation and examples
         run: python3 tools/generate-docs.py --check
@@ -129,7 +129,7 @@ jobs:
         run: |
           python3 test/security/test_integration.py
           python3 test/security/test_agent_workflows.py
-          python3 test/security/test_p1_tools.py
+          python3 test/security/test_envkit.py
 
       - name: Make failure logs readable
         if: failure()

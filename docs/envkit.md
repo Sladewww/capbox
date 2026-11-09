@@ -1,4 +1,4 @@
-# Installation, locked environments and MCP
+# Environment tools (setup, bundles, MCP)
 
 These commands require host Python 3.10+. They build on [runtime upgrades](upgrades.md), [strict package locks](package-locks.md) and [local tasks](agent-workflows.md).
 

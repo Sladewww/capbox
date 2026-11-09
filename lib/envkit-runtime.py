@@ -24,7 +24,7 @@ if sys.version_info < (3, 10):
     print('[capbox] 此功能需要宿主 Python 3.10+', file=sys.stderr)
     sys.exit(5)
 
-SCHEMA = 'capbox.p1.v1'
+SCHEMA = 'capbox.envkit.v1'
 BUNDLE_SCHEMA = 'capbox.bundle.v1'
 FILES = ('rootfs.tar.gz', 'package.lock', 'recipe.env')
 MAX_ARCHIVE = 4 * 1024**3
@@ -43,13 +43,13 @@ class Failure(Exception):
 
 def context():
     env = os.environ
-    keys = env['CAPBOX_P1_KEYS'].split()
-    return {'workspace': str(Path(env['CAPBOX_P1_WORKSPACE']).resolve()),
-            'rootfs': env['CAPBOX_P1_ROOTFS'], 'state': env['CAPBOX_P1_DIR'],
-            'cli': env['CAPBOX_P1_CLI'], 'lib': env['CAPBOX_P1_LIB'],
-            'version': env['CAPBOX_P1_VERSION'],
-            'config': {k:env['CAPBOX_P1_CFG_'+k] for k in keys},
-            'sources': {k:env['CAPBOX_P1_SOURCE_'+k] for k in keys}}
+    keys = env['CAPBOX_ENVKIT_KEYS'].split()
+    return {'workspace': str(Path(env['CAPBOX_ENVKIT_WORKSPACE']).resolve()),
+            'rootfs': env['CAPBOX_ENVKIT_ROOTFS'], 'state': env['CAPBOX_ENVKIT_DIR'],
+            'cli': env['CAPBOX_ENVKIT_CLI'], 'lib': env['CAPBOX_ENVKIT_LIB'],
+            'version': env['CAPBOX_ENVKIT_VERSION'],
+            'config': {k:env['CAPBOX_ENVKIT_CFG_'+k] for k in keys},
+            'sources': {k:env['CAPBOX_ENVKIT_SOURCE_'+k] for k in keys}}
 
 
 def environment(ctx):
@@ -465,4 +465,4 @@ if __name__=='__main__':
     except Failure as exc:
         print('[capbox] '+str(exc),file=sys.stderr);sys.exit(exc.code)
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError,tarfile.TarError) as exc:
-        print('[capbox] P1 操作失败: '+type(exc).__name__+': '+str(exc),file=sys.stderr);sys.exit(1)
+        print('[capbox] 环境工具操作失败: '+type(exc).__name__+': '+str(exc),file=sys.stderr);sys.exit(1)

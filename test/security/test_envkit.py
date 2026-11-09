@@ -42,7 +42,7 @@ class SetupTests(Fixture):
         self.assertFalse((self.ws/'.capbox/os/alpine').exists())
 
     def test_setup_uses_new_template_for_an_older_project(self):
-        (self.ws/'.capbox/lib/p1.sh').unlink()
+        (self.ws/'.capbox/lib/envkit.sh').unlink()
         r=self.run_cli('setup','plan','--json')
         self.assertEqual(r.returncode,0,r.stderr)
 

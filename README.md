@@ -10,9 +10,9 @@ Development CLI: **0.4.0**. Published releases and their migration notes are lis
 
 CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and review guest-modified project code before executing it on the host. [Security model](SECURITY.md).
 
-## Installation, portable environments and MCP
+## Environment tools (setup, bundles, MCP)
 
-Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [P1 workflows](docs/p1-workflows.md) for usage and limits.
+Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits.
 
 ## Offline audit reports
 
