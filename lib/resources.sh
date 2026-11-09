@@ -617,17 +617,17 @@ _resources_fail_closed_check() {
   [[ "$(_resources_mode)" == "require" ]] || return 0
   local missing=()
   if [[ -n "${CAPBOX_MEMORY_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_MEMORY:-}" != cgroup:* ]]; then
-    missing+=("MEMORY_MAX(need cgroup memory.max, not prlimit)")
+    missing+=("MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)")
   fi
   if [[ -n "${CAPBOX_PIDS_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_PIDS:-}" != cgroup:* ]]; then
-    missing+=("PIDS_MAX(need cgroup pids.max)")
+    missing+=("PIDS_MAX(需要 cgroup pids.max)")
   fi
   if [[ -n "${CAPBOX_CPU_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_CPU:-}" != cgroup:* ]]; then
-    missing+=("CPU_MAX(need cgroup cpu.max)")
+    missing+=("CPU_MAX(需要 cgroup cpu.max)")
   fi
   if [[ -n "${CAPBOX_DISK_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_DISK:-}" != loop:* ]]; then
     _resources_probe_disk || true
-    missing+=("DISK_MAX(${CAPBOX_DISK_DETAIL:-not applied as private loop})")
+    missing+=("DISK_MAX(${CAPBOX_DISK_DETAIL:-未按私有 loop 兑现})")
   fi
   if (( ${#missing[@]} > 0 )); then
     log_err "CAPBOX_RESOURCES_MODE=require：以下限额无法精确兑现: ${missing[*]}"
@@ -649,11 +649,11 @@ _resources_wrap_argv() {
   local cgroup_ok=0
   if _resources_setup_cgroup; then
     cgroup_ok=1
-    local cg="${CAPBOX_RESOURCES_CGROUP_LEAF:?cgroup leaf missing after setup}"
+    local cg="${CAPBOX_RESOURCES_CGROUP_LEAF:?setup 后缺少 cgroup leaf}"
     local -a inner=("${_rw_cmd[@]}")
     _rw_cmd=(
       /bin/bash -c
-      'if ! echo $$ >"$1/cgroup.procs"; then printf "cgroup.procs write failed\n" >&2; exit 1; fi; shift; exec "$@"'
+      'if ! echo $$ >"$1/cgroup.procs"; then printf "写入 cgroup.procs 失败\n" >&2; exit 1; fi; shift; exec "$@"'
       bash
       "$cg"
       "${inner[@]}"
