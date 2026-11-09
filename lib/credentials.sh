@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Host credential store + guest placeholder preparation for restricted proxy injection.
+# 宿主凭据库 + guest 占位符准备（restricted 代理注入用）。
 [[ -f "${BASH_SOURCE[0]%/*}/credentials-runtime.py" ]] || return 5
 
 _credentials_command() {
@@ -34,18 +34,18 @@ HELP
   esac
 }
 
-# Prepare inject map / guest env for restricted launches. No-op when unused.
+# 为 restricted 启动准备 inject map / guest env；未使用时为空操作。
 _credentials_prepare_restricted() {
   local allow="${CAPBOX_NET_ALLOW:-}" out rc=0
   unset CAPBOX_CRED_INJECT_MAP CAPBOX_CRED_GUEST_ENV_FILE CAPBOX_CRED_CA_CERT || true
   [[ -n "$allow" ]] || return 0
-  # Skip prepare when store empty — prepare still succeeds with active=false.
+  # 库为空则跳过 prepare — 仍成功，active=false。
   out="$(_credentials_command prepare --allow "$allow" --session "${CAPBOX_NET_SESSION:-oneshot}")" || rc=$?
   if (( rc != 0 )); then
     log_err "凭据会话准备失败"
     return "$rc"
   fi
-  # Parse tiny JSON without requiring jq.
+  # 解析小 JSON，不依赖 jq。
   local active inject envf cacert
   active="$(CAPBOX_CRED_JSON="$out" python3 -c 'import json,os; d=json.loads(os.environ["CAPBOX_CRED_JSON"]); print("1" if d.get("active") else "0")')" || return 1
   if [[ "$active" != "1" ]]; then
@@ -76,7 +76,7 @@ _credentials_append_bwrap_args() {
       name="${line%%=*}"
       value="${line#*=}"
       [[ "$name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-      # Placeholders only — never real secrets in this file.
+      # 仅占位符 — 此文件绝不能含真实密钥。
       _cred_arr+=(--setenv "$name" "$value")
     done <"$envf"
   fi
@@ -85,7 +85,7 @@ _credentials_append_bwrap_args() {
     private="$(_capbox_host_state_dir)" || return 1
     bundle="$private/credentials/sessions/${CAPBOX_NET_SESSION:-oneshot}/ca-bundle.pem"
     mkdir -p "$(dirname -- "$bundle")"
-    # Concatenate system trust + CapBox CA for guest SSL_CERT_FILE.
+    # 拼接系统信任根与 CapBox CA，供 guest SSL_CERT_FILE 使用。
     : >"$bundle"
     chmod 600 "$bundle"
     for candidate in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
