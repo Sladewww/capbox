@@ -165,3 +165,50 @@ Only `/workspace` and its descendants are accepted as cwd. The server does not e
 Messages are UTF-8 JSON-RPC lines, at most 1MiB per input message. Invalid JSON, oversized messages, unknown tools/parameters, bad IDs and policy override attempts are rejected. stdout contains protocol messages only; diagnostics use stderr. Tool-side failures use `isError`; log cursors remain byte offsets. Large diffs beyond the MCP result budget require local CLI export. Requests are processed serially with a bounded CLI invocation timeout; the server does not maintain a separate execution engine.
 
 Closing the MCP connection does not request cancellation of already accepted tasks. Their normal host lifetime and outer-supervisor limits still apply. Use the client UI's tool review controls and CapBox cancellation when needed; logs and patches remain untrusted task data.
+
+## 5. Five-minute path: CapBox as an outer Linux sandbox (Claude Code / Codex)
+
+Cloneable recipe for putting CapBox in front of Claude Code / Codex-style agents as the **outer Linux sandbox** — no Docker, no KVM. Guest work stays under fixed MCP defaults; review patches before anything lands on the host tree.
+
+Trust floor (do not weaken for the daily path):
+
+- workspace **isolated** (same `--isolate` rules as the CLI)
+- profile **untrusted**
+- network **none** (no open net as default advice)
+- tools cannot raise policy or change root
+- real API keys stay on the host (`secret set`); guests only see placeholders
+
+### Steps (~5 minutes)
+
+1. **Install the template** outside business workspaces and put it on `PATH` (see [README](../README.md#install-the-template)). Confirm `capbox version` and `bwrap --version` (≥ 0.12.0). Host Python 3.10+ is required for MCP.
+
+2. **Initialize a project workspace** (never `$HOME` or `/`):
+
+```sh
+cd /path/to/project
+capbox init --agent --distro alpine
+capbox doctor
+# Prebuild / restore a rootfs so guest argv can run (init alone is not enough for execute):
+# e.g. recipe apply, or copy a known Alpine rootfs into .capbox/os/alpine for local smoke tests.
+```
+
+3. **Wire the MCP client** with the checked-in daily entry. Copy [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json), replace both absolute paths, and point Claude Code / Codex / another stdio MCP client at it. Bare `mcp serve` is enough — do **not** add `--net open` or `--workspace-mode shared` for this path.
+
+4. **Optional host secret** (only if the agent must call an allowlisted HTTPS API). Keep the key on the host; use the restricted example and [credentials.md](credentials.md):
+
+```sh
+printf '%s' "$PROVIDER_API_KEY" | capbox --root /path/to/project secret set provider --value-stdin
+capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.example.com
+# Client args: mcp serve --net restricted  (still isolated + untrusted)
+```
+
+5. **Run a trivial guest task from the client** (or any MCP tools/call UI):
+
+- `capbox_policy` → confirm `mcp.workspace_mode=isolated`, `profile=untrusted`, `net=none`
+- `capbox_execute` with argv like `["sh","-c","printf ok"]` and a short `timeout`
+- `capbox_status` / `capbox_logs` until succeeded
+- `capbox_cancel` if you need to stop a long task; `capbox_diff` exports an isolated patch and **never applies** it
+
+6. **Stop here for the daily loop.** Widening network or sharing the workspace is an explicit opt-in (section 4), not the cloneable default. nsjail / macOS / hosted runtimes are out of scope until an external adopter signal.
+
+Regression lock: `test_default_mcp_entry_runs_bounded_guest_task` in `test/security/test_envkit.py` starts bare `mcp serve`, asserts the fixed policy block, executes a bounded guest command, and checks status/logs success.
