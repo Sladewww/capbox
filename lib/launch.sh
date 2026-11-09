@@ -115,6 +115,11 @@ build_bwrap_args() {
   a+=(--setenv TERM "${TERM:-xterm-256color}")
   a+=(--setenv LANG "${LANG:-C.UTF-8}")
 
+  # Host credential proxy: placeholders only (real secrets stay on the host inject map).
+  if declare -F _credentials_append_bwrap_args >/dev/null 2>&1; then
+    _credentials_append_bwrap_args a || return $?
+  fi
+
   # restricted 模式由 net.sh 注入桥接代理；此处仅处理用户显式 CAPBOX_PROXY（open 模式）
   if [[ -n "${CAPBOX_PROXY:-}" ]]; then
     local _mode

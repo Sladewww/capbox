@@ -15,5 +15,5 @@
   },
   "states": ["preparing", "running", "succeeded", "failed", "cancelled", "timed_out", "lost"],
   "output_event": {"schema": "capbox.agent.v1", "type": "output", "task_id": "32 lowercase hex characters", "stream": "stdout or stderr", "offset": 0, "next_offset": 3, "data_base64": "YWJj"},
-  "scope": "local host lifetime; no memory checkpoint, network control server, automatic patch apply or secret broker"
+  "scope": "local host lifetime; host credential proxy rewrites allowlisted HTTP(S) headers with placeholders in guest env; no memory checkpoint, network control server, or automatic patch apply"
 }

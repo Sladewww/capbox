@@ -272,28 +272,131 @@ def git(ctx, args, *, work=None, index=None, data=None):
     return proc.stdout
 
 
+def is_git_workspace_root(ctx, source):
+    try:
+        top = Path(git(ctx, ['rev-parse', '--show-toplevel'], work=source).decode().strip()).resolve()
+    except AgentError:
+        return False
+    return top == source.resolve()
+
+
+def list_isolate_names(ctx, source):
+    """Return relative paths for the isolate view: dirty Git tree or filesystem walk."""
+    if is_git_workspace_root(ctx, source):
+        # Tracked working-tree files plus untracked, still honoring .gitignore.
+        # CapBox credential exclusions still win after this listing.
+        raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], work=source)
+        names = []
+        for item in raw.split(b'\0'):
+            if not item:
+                continue
+            names.append(item.decode('utf-8', 'strict'))
+        return sorted(set(names)), 'git'
+    if not source.is_dir() or source.is_symlink():
+        raise AgentError('--isolate 既不是可读的 Git 仓库根目录，也无法遍历工作区目录', 2)
+    names = []
+    for directory, dirs, files in os.walk(source, followlinks=False):
+        relative = Path(directory).relative_to(source)
+        dirs[:] = [d for d in dirs if not excluded((relative / d).as_posix())]
+        for name in files:
+            rel = (relative / name).as_posix() if str(relative) != '.' else name
+            if excluded(rel):
+                continue
+            names.append(rel)
+    if not names and not any(source.iterdir()):
+        # Empty project is still a valid synthetic baseline.
+        return [], 'fs'
+    return sorted(set(names)), 'fs'
+
+
+def is_overlay_whiteout(path):
+    try:
+        st = path.lstat()
+    except OSError:
+        return False
+    if stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) == 0 and os.minor(st.st_rdev) == 0:
+        return True
+    return path.name.startswith('.wh.') and path.name != '.wh..wh..opq'
+
+
+def merge_overlay_upper(upper, dest_rootfs):
+    """Apply overlay upper onto an independent rootfs copy (copy-up + whiteouts)."""
+    if upper.is_symlink() or not upper.is_dir():
+        raise AgentError('--isolate 拒绝不安全的 overlay upper（符号链接或非目录）')
+    for directory, dirs, files in os.walk(upper, followlinks=False, topdown=True):
+        rel_dir = Path(directory).relative_to(upper)
+        # Opaque directory marker used by some overlay implementations.
+        opaque = Path(directory) / '.wh..wh..opq'
+        if opaque.exists() or opaque.is_symlink():
+            target_dir = dest_rootfs / rel_dir if str(rel_dir) != '.' else dest_rootfs
+            if target_dir.exists():
+                for child in list(target_dir.iterdir()):
+                    if child.is_dir() and not child.is_symlink():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink(missing_ok=True)
+        for name in list(dirs) + list(files):
+            src = Path(directory) / name
+            rel = (rel_dir / name).as_posix() if str(rel_dir) != '.' else name
+            if src.is_symlink():
+                raise AgentError('--isolate overlay upper 含符号链接，已拒绝: ' + rel)
+            if name == '.wh..wh..opq':
+                continue
+            if name.startswith('.wh.'):
+                target_name = name[4:]
+                target = dest_rootfs / rel_dir / target_name if str(rel_dir) != '.' else dest_rootfs / target_name
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                elif target.exists() or target.is_symlink():
+                    target.unlink()
+                continue
+            if is_overlay_whiteout(src):
+                target = dest_rootfs / rel
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                elif target.exists() or target.is_symlink():
+                    target.unlink()
+                continue
+            st = src.lstat()
+            dst = dest_rootfs / rel
+            if stat.S_ISDIR(st.st_mode):
+                dst.mkdir(parents=True, exist_ok=True)
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                raise AgentError('--isolate overlay upper 含不支持的特殊文件: ' + rel)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists() or dst.is_symlink():
+                if dst.is_dir() and not dst.is_symlink():
+                    shutil.rmtree(dst)
+                else:
+                    dst.unlink()
+            shutil.copy2(src, dst)
+
+
 def isolate(ctx, job):
-    source = Path(ctx['workspace'])
-    upper = Path(ctx['rootfs']).parent.parent / 'run/overlay/active/upper'
-    if upper.exists() and (upper.is_symlink() or any(upper.iterdir())):
-        raise AgentError('--isolate 首版不支持已有 overlay upper；请先准备独立的完整 rootfs')
-    if Path(git(ctx, ['rev-parse', '--show-toplevel'], work=source).decode().strip()).resolve() != source:
-        raise AgentError('--isolate 必须在 Git 仓库根目录使用', 2)
-    names = git(ctx, ['ls-files', '--cached', '-z'], work=source).split(b'\0')
+    source = Path(ctx['workspace']).resolve()
+    if not source.is_dir() or source.is_symlink():
+        raise AgentError('--isolate 需要可读的工作区目录', 2)
+    upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
+    if upper.exists() and upper.is_symlink():
+        raise AgentError('--isolate 拒绝符号链接形式的 overlay upper')
+    try:
+        names, mode = list_isolate_names(ctx, source)
+    except AgentError:
+        raise
+    except OSError as exc:
+        raise AgentError('--isolate 无法枚举工作区文件') from exc
     view = job / 'workspace'
     view.mkdir(mode=0o755)  # enclosing job stays 0700; mapped non-root users can read the view
     baseline, skipped, total = {}, [], 0
-    for raw in sorted(set(names)):
-        if not raw:
-            continue
-        name = raw.decode('utf-8', 'strict')
+    for name in names:
         relative = safe_relative(name)
         if excluded(name):
             skipped.append(name)
             continue
         src = source / relative
         if not src.exists() and not src.is_symlink():
-            continue  # preserve a working-tree deletion
+            continue  # preserve a working-tree deletion of a tracked path
         try:
             data, st = read_regular(source, name)
         except OSError as exc:
@@ -309,19 +412,25 @@ def isolate(ctx, job):
         baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(),
                           'executable': bool(st.st_mode & 0o111)}
     # Review metadata is outside the guest view. Never run Git using guest .git/config.
+    # Non-Git and dirty Git both get a synthetic baseline so task diff keeps working.
     index = job / 'review.git'
     git(ctx, ['init', '--bare', str(index)])
     git(ctx, ['add', '--force', '--all', '--', '.'], work=view, index=index)
     write_json(job / 'baseline.json', baseline)
+    write_json(job / 'isolate-meta.json', {'mode': mode,
+                                           'overlay_merged': bool(upper.exists() and any(upper.iterdir()))})
     state = view / '.capbox'
     state.mkdir()
     (state / 'bin').mkdir()
     shutil.copy2(ctx['cli'], state / 'bin/capbox')
     shutil.copytree(ctx['lib'], state / 'lib', symlinks=False)
     (state / 'os').mkdir()
-    # Private independent rootfs: no hardlinks to the original mutable image.
-    shutil.copytree(ctx['rootfs'], state / 'os' / ctx['config']['DISTRO'], symlinks=True)
-    ctx = dict(ctx, workspace=str(view), rootfs=str(state / 'os' / ctx['config']['DISTRO']))
+    # Private independent rootfs: no hardlinks to the live mutable image / upper.
+    dest_rootfs = state / 'os' / ctx['config']['DISTRO']
+    shutil.copytree(ctx['rootfs'], dest_rootfs, symlinks=True)
+    if upper.exists() and upper.is_dir() and any(upper.iterdir()):
+        merge_overlay_upper(upper, dest_rootfs)
+    ctx = dict(ctx, workspace=str(view), rootfs=str(dest_rootfs))
     return ctx, skipped
 
 
@@ -584,7 +693,7 @@ def parser():
     start.add_argument('--cwd', default='/workspace')
     start.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
     start.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
-    start.add_argument('--isolate', action='store_true', help='复制 Git tracked 工作文件与独立 rootfs；diff 后导出')
+    start.add_argument('--isolate', action='store_true', help='复制工作区文件与独立 rootfs（Git 脏树/非 Git/overlay 合并）；diff 后导出')
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
     start.add_argument('command', nargs=argparse.REMAINDER)
     listing = commands.add_parser('list')

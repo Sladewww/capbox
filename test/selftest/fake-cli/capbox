@@ -55,7 +55,7 @@ ROOTFS="$CAPBOX_DIR/os/$DISTRO"
 PROXY="$(cfg CAPBOX_PROXY '')"
 MIRROR="$(cfg CAPBOX_MIRROR cn)"
 BWRAP="${CAPBOX_BWRAP:-/usr/bin/bwrap}"
-VERSION="0.4.0"
+VERSION="0.5.0"
 
 log() { printf '[capbox] %s\n' "$*" >&2; }
 die() { local c="$1"; shift; printf '[capbox] 错误：%s\n' "$*" >&2; exit "$c"; }

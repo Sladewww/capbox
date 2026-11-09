@@ -193,9 +193,16 @@ _net_start_host_proxy() {
   pidf="$(_net_proxy_pidf)"
   rm -f "$sock" "$ready" "$pidf" 2>/dev/null || true
   _net_validate_allowlist "${CAPBOX_NET_ALLOW:-}" || return 2
-  # 后台代理
+  if declare -F _credentials_prepare_restricted >/dev/null 2>&1; then
+    _credentials_prepare_restricted || return $?
+  fi
+  # 后台代理（inject map 仅宿主可读，不挂进 guest）
+  local inject_args=()
+  if [[ -n "${CAPBOX_CRED_INJECT_MAP:-}" && -f "${CAPBOX_CRED_INJECT_MAP}" ]]; then
+    inject_args+=(--inject-map "${CAPBOX_CRED_INJECT_MAP}")
+  fi
   nohup python3 "$py" proxy --sock "$sock" --allow "$CAPBOX_NET_ALLOW" --ready "$ready" \
-    ${CAPBOX_DEBUG:+--log} >>"$(_net_proxy_log)" 2>&1 &
+    "${inject_args[@]}" ${CAPBOX_DEBUG:+--log} >>"$(_net_proxy_log)" 2>&1 &
   echo $! >"$pidf"
   local i
   for i in $(seq 1 50); do

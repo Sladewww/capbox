@@ -183,7 +183,7 @@ source "$_capbox_lib_dir/common.sh" || {
   printf '[capbox] 错误: 无法加载 %s/common.sh\n' "$_capbox_lib_dir" >&2
   exit 1
 }
-for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade envkit; do
+for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade envkit credentials; do
   if [[ ! -f "$_capbox_lib_dir/$_capbox_module.sh" ]]; then
     printf '[capbox] 错误: 安装不完整，缺少 %s/%s.sh\n' "$_capbox_lib_dir" "$_capbox_module" >&2
     exit 5
@@ -250,6 +250,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   recipe check|apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
   snapshot create|list|restore|rm   rootfs 快照 / 回滚
   image export|import|lock|cache    镜像与离线缓存；lock save|verify|restore
+  secret set|ls|rm|import           宿主凭据（真实 key 不进沙箱；见 docs/credentials.md）
   audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
@@ -374,7 +375,7 @@ capbox_main() {
 
   # 危险操作：禁止把 $HOME 或 / 当成工作区 RW bind 进容器
   case "$cmd" in
-    bootstrap | init | upgrade | setup | bundle | mcp | task | policy | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
+    bootstrap | init | upgrade | setup | bundle | mcp | task | policy | secret | exec | run | do | shell | up | cp | pkg | ls | ps | recipe | service | snapshot | image | audit | metrics | doctor)
       if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
         _capbox_require_safe_workspace || return 1
       fi
@@ -488,6 +489,10 @@ capbox_main() {
     image)
       _require_decl cmd_image image "lib/image.sh" || return 1
       cmd_image "$@"
+      ;;
+    secret)
+      _require_decl cmd_secret secret "lib/credentials.sh" || return 1
+      cmd_secret "$@"
       ;;
     audit)
       _require_decl cmd_audit audit "lib/audit.sh" || return 1
