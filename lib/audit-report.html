@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-@@SCRIPT_HASH@@'; style-src 'sha256-@@STYLE_HASH@@'; img-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>CapBox · 审计报告</title>
+<style data-app>
+:root{color-scheme:light;--bg:#f5f6fa;--panel:#fff;--ink:#202637;--muted:#71798d;--line:#e8eaf1;--indigo:#5146d8;--teal:#148774;--red:#cf4262;--amber:#a86a19;--soft:#f0efff;font-family:Inter,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}button,input,select{font:inherit}button,a,input,select,summary{outline-offset:4px}button{cursor:pointer}a{color:inherit;text-decoration:none}button:disabled{cursor:default;opacity:.45}button:focus-visible,a:focus-visible{outline:3px solid #9d97f7}input,select{accent-color:var(--indigo)}
+.sidebar{position:fixed;inset:0 auto 0 0;width:212px;background:#171b2e;color:#d4d7e5;padding:32px 22px;display:flex;flex-direction:column;z-index:2}.brand{display:flex;align-items:center;gap:11px;color:white;font-size:23px;font-weight:700;letter-spacing:-.7px}.mark{display:grid;grid-template-columns:repeat(2,8px);gap:3px;transform:rotate(-7deg)}.mark i{display:block;width:8px;height:8px;border-radius:2px;background:#a79cff}.mark i:nth-child(2){background:#d5d0ff}.mark i:nth-child(3){background:#6759db}.side-kicker{font-size:10px;letter-spacing:2px;color:#8088a3;margin:47px 12px 13px}.nav{display:grid;gap:8px}.nav a{padding:12px;border-radius:8px;display:flex;gap:12px;align-items:center;color:#aeb5cd;font-size:13px}.nav a:first-child{background:#2b2c4d;color:#e0dbff}.nav a:hover{background:#272c43;color:white}.nav-icon{width:15px;text-align:center;font-size:16px}.side-bottom{margin-top:auto;padding:20px 11px 0;border-top:1px solid #303449;font-size:11px;color:#959db6;line-height:1.9}.side-bottom strong{display:block;color:#d4d9eb;font-weight:500}.dot{display:inline-block;width:6px;height:6px;background:#58c8ab;border-radius:50%;margin-right:6px}
+main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:flex;justify-content:space-between;align-items:center;gap:20px}.breadcrumb{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.breadcrumb span{color:#aaaec0;padding:0 10px}.local-tag{flex-shrink:0;font-size:11px;color:var(--teal);background:#e7f4ee;border:1px solid #d8e9e1;border-radius:20px;padding:6px 11px}.page-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:25px;margin:26px 0 25px}h1{font-size:30px;letter-spacing:-1px;font-weight:680;margin:0 0 9px}h1 small{font-size:13px;color:var(--muted);font-weight:400;letter-spacing:0;margin-left:12px}.subtitle{overflow-wrap:anywhere;margin:0;color:var(--muted);font-size:12px;line-height:1.8}.actions{display:flex;gap:9px;flex-shrink:0}.button{border:1px solid #dcdfea;background:white;color:#4e586e;border-radius:7px;padding:9px 13px;font-size:12px;line-height:1.4}.button:hover{border-color:#a9a3e3;background:#faf9ff}.button.primary{background:var(--indigo);border-color:var(--indigo);color:#fff}.button.primary:hover{background:#4439c5}.coverage-note{display:flex;gap:9px;background:#eeedf9;border:1px solid #e2dff6;border-radius:8px;color:#625b87;padding:11px 14px;line-height:1.7;font-size:11px;margin-bottom:20px}.coverage-note strong{font-weight:600;color:#4d436e}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:22px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 20px 17px;box-shadow:0 2px 3px #1f234003}.stat-label{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}.stat-icon{display:grid;place-items:center;width:26px;height:26px;border-radius:7px;background:var(--soft);color:var(--indigo);font-size:14px}.card.failure .stat-icon{color:var(--red);background:#fcecf0}.card.warning .stat-icon{color:var(--amber);background:#fff4e3}.card.latency .stat-icon{color:var(--teal);background:#eaf5f1}.stat-number{font-size:32px;letter-spacing:-1px;margin:10px 0 7px;font-weight:650;font-variant-numeric:tabular-nums}.card.failure .stat-number{color:var(--red)}.stat-foot{font-size:10px;color:#9298a9}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}.charts{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(260px,1fr);gap:20px;margin-bottom:24px}.panel-head{display:flex;justify-content:space-between;align-items:center;padding:19px 21px 0;gap:12px}.panel-title{font-size:13px;font-weight:600;margin:0}.panel-sub{font-size:10px;color:#9299aa;margin:6px 0 0}.legend{display:flex;gap:14px;font-size:10px;color:var(--muted);white-space:nowrap}.legend i{display:inline-block;width:6px;height:6px;border-radius:2px;margin-right:5px;background:#8e85e5}.legend i.fail{background:#d7637c}.chart-area{padding:20px 20px 13px;min-height:230px}.chart-area svg{width:100%;height:185px;display:block;overflow:visible}.chart-area svg text{font-family:inherit;font-size:10px;fill:#9097a7}.empty-chart{text-align:center;padding:60px 10px;color:var(--muted);font-size:12px}.kind-list{padding:12px 20px 15px;min-height:230px}.kind-row{display:grid;grid-template-columns:85px minmax(20px,1fr) 40px;gap:10px;align-items:center;border:0;background:none;width:100%;padding:10px 0;color:#4d576c;text-align:left;font-size:11px}.kind-row:hover{color:var(--indigo)}.kind-row span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kind-row strong{text-align:right;font-weight:500;font-variant-numeric:tabular-nums}.kind-row progress{height:6px;width:100%;border:0;border-radius:4px;overflow:hidden;background:#eeedf8}.kind-row progress::-webkit-progress-bar{background:#eeedf8;border-radius:4px}.kind-row progress::-webkit-progress-value{background:#8176d9;border-radius:4px}.kind-row progress::-moz-progress-bar{background:#8176d9;border-radius:4px}.section-title{font-size:15px;font-weight:620;margin:0 0 14px;display:flex;justify-content:space-between;align-items:center}.section-title span{font-weight:400;font-size:11px;color:var(--muted)}.toolbar{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;padding:16px 19px;border-bottom:1px solid var(--line)}.field{display:grid;gap:6px}.field label{font-size:10px;color:#7c8498}.search-field{flex:1;min-width:190px}.field input,.field select{border:1px solid #e1e4ed;border-radius:6px;background:white;height:34px;min-width:110px;padding:0 10px;color:#4e586c;font-size:11px}.field input:focus,.field select:focus{outline:2px solid #c0b8ef;border-color:#a398db}.field input[type=date]{min-width:131px}.search-field input{width:100%;background:#fafbfe}.table-wrap{overflow:auto}.events-table{border-collapse:collapse;width:100%;font-size:11px;table-layout:fixed}.events-table th{background:#fafbfe;color:#8b93a6;text-align:left;font-weight:500;letter-spacing:.2px;height:39px;border-bottom:1px solid var(--line);padding:0 17px}.events-table td{padding:13px 17px;border-bottom:1px solid #eff1f6;vertical-align:middle;color:#566075}.events-table tbody tr:hover{background:#fbfaff}.events-table th:nth-child(1){width:170px}.events-table th:nth-child(2){width:112px}.events-table th:nth-child(3){width:94px}.events-table th:nth-child(5){width:98px}.events-table th:nth-child(6){width:62px}.events-table td:nth-child(4){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#343c50;font-family:"Cascadia Code",Consolas,monospace}.time-cell{font-variant-numeric:tabular-nums;font-family:"Cascadia Code",Consolas,monospace;font-size:10px;white-space:nowrap}.kind-pill{background:#f0effa;border:1px solid #e9e6f7;color:#75649e;border-radius:4px;padding:3px 6px;font-size:10px;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}.status-pill{font-size:10px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.status-pill:before{content:"";width:5px;height:5px;border-radius:50%;background:#a1a7b5}.status-pill.ok,.status-pill.start{color:var(--teal)}.status-pill.ok:before,.status-pill.start:before{background:#43ac8b}.status-pill.fail{color:var(--red)}.status-pill.fail:before{background:#da5a77}.status-pill.warn{color:var(--amber)}.status-pill.warn:before{background:#dc9c46}.detail-button{background:none;border:0;color:#8f94aa;font-size:17px;padding:0 8px}.detail-button:hover{color:var(--indigo)}.table-empty{padding:54px 20px;text-align:center;color:var(--muted);font-size:12px}.pager{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;color:#9298aa;font-size:10px;gap:15px}.pager-controls{display:flex;gap:8px;align-items:center}.pager .button{padding:5px 9px;font-size:10px}.about{margin-top:24px;border:1px solid var(--line);border-radius:9px;background:#fff;padding:15px 19px;color:#71798d;font-size:11px;line-height:1.9}.about summary{cursor:pointer;font-size:12px;font-weight:600;color:#596176}.about ul{padding-left:18px;margin:12px 0 6px}.about pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;background:#f8f9fc;padding:12px;border-radius:6px;color:#777f93}.bottom-line{display:flex;justify-content:space-between;gap:12px;margin-top:24px;font-size:10px;color:#a2a8b8}.noscript{padding:20px;background:#fff2d8;color:#725018}.hidden,[hidden]{display:none!important}dialog{padding:0;width:min(680px,calc(100vw - 30px));max-height:85vh;border:1px solid #e1dced;border-radius:13px;box-shadow:0 28px 90px #17203b30;color:var(--ink)}dialog::backdrop{background:#10162f70;backdrop-filter:blur(3px)}.dialog-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line)}.dialog-head h2{font-size:16px;margin:0}.close-button{border:0;background:#f1f2f7;color:#737a8e;border-radius:5px;padding:5px 9px}.dialog-content{padding:10px 24px 24px;overflow:auto;max-height:65vh}dl{display:grid;grid-template-columns:94px minmax(0,1fr);font-size:12px;gap:15px 10px;margin:20px 0}dt{color:#969caf}dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#424c63;font-family:"Cascadia Code",Consolas,monospace;font-size:11px}.raw-label{font-size:11px;color:#8991a3;margin:22px 0 8px}.raw-data{width:100%;height:160px;resize:vertical;background:#f8f9fc;border:1px solid var(--line);border-radius:7px;padding:12px;line-height:1.7;color:#586279;font:10px/1.7 "Cascadia Code",Consolas,monospace}.view-message{font-size:11px;color:var(--red);padding:0 20px 12px}
+@media(min-width:1770px){main{margin-right:auto}}@media(max-width:1180px){main{padding:29px 25px}.sidebar{width:185px;padding:30px 16px}main{margin-left:185px}.cards{gap:10px}.card{padding:16px}.charts{grid-template-columns:minmax(0,1.7fr) minmax(230px,1fr)}.events-table{min-width:750px}}
+@media(max-width:830px){.sidebar{position:static;width:auto;padding:18px 22px;display:block}.brand{font-size:20px}.side-kicker,.side-bottom{display:none}.nav{display:flex;gap:7px;margin-top:16px}.nav a{padding:8px 13px}.nav-icon{display:none}main{margin:0;padding:23px 19px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.charts{grid-template-columns:1fr}.kind-list{min-height:0}.chart-area{min-height:210px}.page-heading{align-items:flex-start}.page-heading h1 small{display:block;margin:7px 0 0}.toolbar{gap:9px}.field{flex:1}.search-field{flex-basis:100%}.field input,.field select{width:100%}.actions .button{padding:8px 10px}.bottom-line{display:block;line-height:1.9}}
+@media(max-width:480px){.page-heading{display:block}.actions{margin-top:16px}.topline .breadcrumb{font-size:10px}.stat-number{font-size:28px}.cards{gap:10px}.card{padding:14px}.legend{gap:8px}.pager{align-items:flex-start;gap:8px}.pager-controls{flex-shrink:0}.panel-head{padding:17px 16px 0}.toolbar{padding:14px}.stat-foot{font-size:9px}}
+@media print{.sidebar,.actions,.toolbar,.pager-controls,.detail-button{display:none}main{margin:0;padding:0;max-width:none}body{background:#fff}.cards,.charts{break-inside:avoid}.about{break-inside:avoid}.table-wrap{overflow:visible}.events-table{min-width:0}.events-table th:nth-child(1){width:145px}.page-heading{margin-top:15px}.bottom-line{color:#888}}
+</style>
+</head>
+<body>
+<aside class="sidebar" aria-label="报告导航">
+  <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>CapBox</div>
+  <div class="side-kicker">WORKSPACE INSIGHTS</div>
+  <nav class="nav"><a href="#overview"><span class="nav-icon" aria-hidden="true">▦</span>审计总览</a><a href="#events"><span class="nav-icon" aria-hidden="true">≡</span>事件记录</a><a href="#about"><span class="nav-icon" aria-hidden="true">ⓘ</span>数据说明</a></nav>
+  <div class="side-bottom"><strong><span class="dot"></span>离线报告 · 只读</strong>数据保存在此文件中<br>没有网络请求或后台服务</div>
+</aside>
+<main>
+  <div class="topline"><div class="breadcrumb">工作区<span>/</span><b id="project-name">—</b><span>/</span>审计</div><div class="local-tag">● 本地生成</div></div>
+  <header class="page-heading" id="overview"><div><h1>审计报告<small>AUDIT REPORT</small></h1><p class="subtitle" id="report-meta">正在读取本地报告数据…</p></div><div class="actions"><button class="button" id="reset" type="button">重置筛选</button><button class="button primary" id="export" type="button">↓ 导出筛选 JSON</button></div></header>
+  <noscript><p class="noscript">启用浏览器 JavaScript 后可查看此离线报告；不需要联网。原始审计记录仍保存在项目 JSONL 文件中。</p></noscript>
+  <div class="coverage-note"><span aria-hidden="true">ⓘ</span><div id="coverage-note">此报告为生成时的审计快照。</div></div>
+  <section class="cards" aria-label="筛选后的统计">
+    <article class="card"><div class="stat-label">事件总数<span class="stat-icon" aria-hidden="true">▦</span></div><div class="stat-number" id="total-count">—</div><div class="stat-foot" id="total-foot">当前筛选内的审计事件</div></article>
+    <article class="card failure"><div class="stat-label">失败事件<span class="stat-icon" aria-hidden="true">↗</span></div><div class="stat-number" id="failure-count">—</div><div class="stat-foot">status=fail 或退出码非 0</div></article>
+    <article class="card warning"><div class="stat-label">警告事件<span class="stat-icon" aria-hidden="true">△</span></div><div class="stat-number" id="warning-count">—</div><div class="stat-foot">按原始 warn 状态统计</div></article>
+    <article class="card latency"><div class="stat-label">执行耗时 P95<span class="stat-icon" aria-hidden="true">◷</span></div><div class="stat-number" id="p95">—</div><div class="stat-foot" id="p95-foot">仅统计含 ms 的 exec 记录</div></article>
+  </section>
+  <section class="charts" aria-label="事件图表">
+    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">事件趋势</h2><p class="panel-sub">当前筛选 · UTC 时间</p></div><div class="legend"><span><i></i>所有事件</span><span><i class="fail"></i>其中失败</span></div></div><div class="chart-area" id="timeline"></div></article>
+    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">事件类型</h2><p class="panel-sub">点击类型进一步筛选 · 前 7 项</p></div></div><div class="kind-list" id="kind-chart"></div></article>
+  </section>
+  <section id="events" aria-label="事件记录">
+    <h2 class="section-title">事件记录<span id="filtered-label">—</span></h2>
+    <div class="panel">
+      <form class="toolbar" id="filters" role="search">
+        <div class="field search-field"><label for="search">搜索事件</label><input id="search" type="search" placeholder="搜索命令、对象、详情、策略…" maxlength="256" autocomplete="off"></div>
+        <div class="field"><label for="kind">事件类型</label><select id="kind"><option value="">全部类型</option></select></div>
+        <div class="field"><label for="status">状态</label><select id="status"><option value="">全部状态</option></select></div>
+        <div class="field"><label for="from">起始日期（UTC）</label><input id="from" type="date"></div>
+        <div class="field"><label for="to">结束日期（含当天）</label><input id="to" type="date"></div>
+        <div class="field"><label for="order">排序</label><select id="order"><option value="newest">最新在前</option><option value="oldest">最早在前</option><option value="duration">耗时从高到低</option></select></div>
+      </form>
+      <div class="view-message" id="view-message" role="status" hidden></div>
+      <div class="table-wrap"><table class="events-table"><thead><tr><th scope="col">时间 · UTC</th><th scope="col">类型</th><th scope="col">状态</th><th scope="col">命令 / 对象 / 详情</th><th scope="col">耗时</th><th scope="col"><span class="hidden">详情</span></th></tr></thead><tbody id="event-rows"></tbody></table></div>
+      <div id="empty" class="table-empty" hidden>没有匹配的事件。调整筛选条件或重新生成报告。</div>
+      <div class="pager" aria-live="polite"><span id="page-info">—</span><div class="pager-controls"><button class="button" id="previous" type="button">上一页</button><span id="page-number">1 / 1</span><button class="button" id="next" type="button">下一页</button></div></div>
+    </div>
+  </section>
+  <details class="about" id="about"><summary>数据范围与审计边界</summary><ul id="coverage-details"></ul><pre id="coverage-json"></pre></details>
+  <footer class="bottom-line"><span>CapBox / Audit Explorer</span><span>命令、路径和输出可能含敏感信息，分享前请检查。</span></footer>
+</main>
+<dialog id="event-detail" aria-labelledby="detail-title"><div class="dialog-head"><h2 id="detail-title">事件详情</h2><button class="close-button" id="close-detail" type="button" aria-label="关闭事件详情">✕</button></div><div class="dialog-content"><dl id="detail-fields"></dl><div class="raw-label">规范化记录 · 常见凭据已做尽力脱敏</div><textarea class="raw-data" id="raw-data" readonly aria-label="规范化 JSON 记录"></textarea></div></dialog>
+<script id="report-data" type="application/json">@@DATA@@</script>
+<script data-app>
+'use strict';
+(() => {
+  const data = JSON.parse(document.getElementById('report-data').textContent);
+  const $ = id => document.getElementById(id);
+  const fmt = value => new Intl.NumberFormat('zh-CN').format(value);
+  const failed = event => event.status === 'fail' || (typeof event.exit === 'number' && event.exit !== 0);
+  const time = value => new Date(value).toISOString().replace('T', ' ').slice(0, 19);
+  const duration = value => typeof value !== 'number' ? '—' : value >= 1000 ? (value / 1000).toFixed(2) + ' s' : fmt(Math.round(value)) + ' ms';
+  const text = (tag, content, className) => { const node = document.createElement(tag); node.textContent = content; if (className) node.className = className; return node; };
+  const counts = (events, key) => { const result = new Map(); events.forEach(event => result.set(event[key], (result.get(event[key]) || 0) + 1)); return [...result].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])); };
+  const indexed = data.events.map(event => ({event, search: Object.values(event).join(' ').normalize('NFKC').toLocaleLowerCase()}));
+  let filtered = data.events.slice();
+  let page = 0;
+  const pageSize = 50;
+  document.title = 'CapBox 审计 · ' + data.project;
+  $('project-name').textContent = data.project;
+  $('report-meta').textContent = '生成于 ' + time(data.generated_at) + ' UTC  ·  来源 ' + data.source;
+  const c = data.coverage;
+  const warnings = [];
+  if (c.source_missing) warnings.push('生成时尚无审计文件');
+  if (c.omitted_prefix_bytes) warnings.push('源文件较大，已省略前 ' + fmt(c.omitted_prefix_bytes) + ' 字节');
+  if (c.omitted_records) warnings.push('另有 ' + fmt(c.omitted_records) + ' 条较早匹配记录未保留');
+  const bad = c.invalid_records + c.oversized_records + c.incomplete_records;
+  if (bad) warnings.push('跳过 ' + fmt(bad) + ' 条损坏、过长或未写完的记录');
+  if (c.truncated_fields) warnings.push(fmt(c.truncated_fields) + ' 个过长字段已截断');
+  $('coverage-note').textContent = '本报告包含 ' + fmt(data.events.length) + ' 条审计事件，所有筛选与统计仅针对这些记录。' + (warnings.length ? ' ' + warnings.join('；') + '。' : ' 数据为生成时快照，不会实时更新。');
+  const facts = [
+    '最多扫描源文件末尾 32MiB，按文件顺序保留最后 ' + fmt(c.limit) + ' 条匹配事件；图表按事件时间排列。',
+    '事件条数不等于任务数：一次执行可能产生安全策略、资源和 exec 等多条事件。start/stop/skip 不会自动当作执行成功。',
+    '失败依据 status=fail 或非零退出码；警告依据 status=warn。耗时 P95 仅计算带有效 ms 的 exec 记录，不代表 CPU/内存采样或完整调用链。',
+    '无效 JSON、重复键、非法数值、无时区时间和未完成行会被跳过；未知字段不导出。超长文本截断，常见凭据尽力脱敏，无法识别所有秘密。',
+    '仅展示选定的 JSONL，不自动汇总轮转文件、其它项目或私有隔离任务副本。',
+    '本文件只读，不调用 CapBox、不运行审计中的命令、不请求网络；日志来自现有审计源，不具备独立签名或完整性认证。',
+    '导出 JSON 仅包含当前匹配记录；打印只包含当前表格页。类型与状态下拉展示最多 200 项，其余可用文本搜索。'
+  ];
+  facts.forEach(value => $('coverage-details').append(text('li', value)));
+  $('coverage-json').textContent = JSON.stringify(c, null, 2);
+  for (const field of ['kind', 'status']) {
+    counts(data.events, field).slice(0,200).forEach(([value, count]) => {
+      const option = text('option', value + ' · ' + fmt(count)); option.value = value; $(field).append(option);
+    });
+  }
+  function trend(events) {
+    const host = $('timeline'); host.replaceChildren();
+    if (!events.length) { host.append(text('div', '没有可展示的事件', 'empty-chart')); return; }
+    const first = Math.min(...events.map(e => e.time));
+    const last = Math.max(...events.map(e => e.time));
+    const span = Math.max(last-first, 1000);
+    const bins = Array.from({length:24}, () => ({total:0, fail:0}));
+    events.forEach(event => { const bin = bins[Math.min(23, Math.floor((event.time-first)/span*24))]; bin.total++; if (failed(event)) bin.fail++; });
+    const max = Math.ceil(Math.max(...bins.map(bin => bin.total), 1) / 3) * 3;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 940 180'); svg.setAttribute('role','img'); svg.setAttribute('aria-label','UTC 事件趋势，24 个时间区间，紫色为所有事件，红色为其中失败');
+    function shape(tag, attrs, label) { const node = document.createElementNS(ns, tag); for (const [key,value] of Object.entries(attrs)) node.setAttribute(key,String(value)); if(label !== undefined) node.textContent=label; svg.append(node); return node; }
+    for (let row=0;row<4;row++) { const y=15+row*42; shape('line',{x1:37,y1:y,x2:931,y2:y,stroke:'#eff0f6','stroke-width':1}); shape('text',{x:28,y:y+4,'text-anchor':'end'},fmt(Math.round(max*(1-row/3)))); }
+    bins.forEach((bin,index) => {
+      const x=45+index*36.5; const height=bin.total/max*126;
+      const bar=shape('rect',{x,y:141-height,width:23,height:Math.max(height,bin.total?2:0),rx:3,fill:'#8e85e5'});
+      const label=document.createElementNS(ns,'title');label.textContent=time(first+span*index/24)+' UTC：'+fmt(bin.total)+' 条，其中失败 '+fmt(bin.fail)+' 条';bar.append(label);
+      if(bin.fail)shape('rect',{x,y:141-bin.fail/max*126,width:23,height:bin.fail/max*126,rx:3,fill:'#d7637c'});
+    });
+    [0,6,12,18,24].forEach((index) => { const stamp=time(first+span*index/24);shape('text',{x:45+index*36.5,y:170,'text-anchor':index===24?'end':index===0?'start':'middle'},span>86400000?stamp.slice(5,16):stamp.slice(11,19)); });
+    host.append(svg);
+  }
+  function kinds(events) {
+    const host=$('kind-chart');host.replaceChildren();
+    if(!events.length){host.append(text('div','暂无类型分布','empty-chart'));return;}
+    counts(events,'kind').slice(0,7).forEach(([kind,count]) => {
+      const row=text('button','', 'kind-row');row.type='button';row.title='筛选类型：'+kind;row.append(text('span',kind));
+      const bar=document.createElement('progress');bar.max=events.length;bar.value=count;bar.setAttribute('aria-label',kind+' 占比');row.append(bar,text('strong',fmt(count)));
+      row.addEventListener('click',() => { if(![...$('kind').options].some(o=>o.value===kind)){const option=text('option',kind);option.value=kind;$('kind').append(option);} $('kind').value=kind;apply(); });host.append(row);
+    });
+  }
+  function detail(event) {
+    const fields=$('detail-fields');fields.replaceChildren();
+    const labels={ts:'时间（UTC）',kind:'事件类型',status:'状态',exit:'退出码',ms:'耗时（ms）',object:'对象',cmd:'命令',detail:'详情',profile:'安全档',net:'网络',uid:'UID',distro:'发行版'};
+    Object.entries(labels).forEach(([key,label]) => {if(event[key]!==undefined)fields.append(text('dt',label),text('dd',String(event[key])));});
+    $('raw-data').value=JSON.stringify(event,null,2);$('event-detail').showModal();
+  }
+  function table() {
+    const host=$('event-rows');host.replaceChildren();
+    const pages=Math.max(1,Math.ceil(filtered.length/pageSize));page=Math.min(page,pages-1);
+    filtered.slice(page*pageSize,(page+1)*pageSize).forEach(event => {
+      const row=document.createElement('tr');row.append(text('td',time(event.ts),'time-cell'));
+      const kind=document.createElement('td');kind.append(text('span',event.kind,'kind-pill'));row.append(kind);
+      const status=document.createElement('td');const known=['ok','fail','warn','start','stop','skip'].includes(event.status)?event.status:'';
+      status.append(text('span',event.status,'status-pill '+(failed(event)?'fail':known)));row.append(status);
+      const message=event.cmd||event.object||event.detail||'—';const summary=text('td',message);summary.title=message;row.append(summary,text('td',duration(event.ms)));
+      const control=document.createElement('td');const button=text('button','···','detail-button');button.type='button';button.setAttribute('aria-label','查看事件 '+event.id+' 的详情');button.addEventListener('click',()=>detail(event));control.append(button);row.append(control);host.append(row);
+    });
+    $('empty').hidden=filtered.length!==0;
+    $('page-info').textContent=filtered.length?'第 '+fmt(page*pageSize+1)+'–'+fmt(Math.min((page+1)*pageSize,filtered.length))+' 条 / 共 '+fmt(filtered.length)+' 条':'共 0 条事件';
+    $('page-number').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page>=pages-1;
+  }
+  function apply() {
+    const query=$('search').value.normalize('NFKC').toLocaleLowerCase();
+    const from=$('from').value?Date.parse($('from').value+'T00:00:00Z'):-Infinity;
+    const to=$('to').value?Date.parse($('to').value+'T00:00:00Z')+86400000:Infinity;
+    const invalid=from>=to;
+    $('view-message').hidden=!invalid;$('view-message').textContent=invalid?'起始日期晚于结束日期，请调整筛选。':'';
+    filtered=indexed.filter(({event,search})=>!invalid&&(!query||search.includes(query))&&(!$('kind').value||event.kind===$('kind').value)&&(!$('status').value||event.status===$('status').value)&&event.time>=from&&event.time<to).map(item=>item.event);
+    const order=$('order').value;
+    filtered.sort((a,b)=>order==='duration'?(b.ms??-1)-(a.ms??-1)||b.time-a.time:order==='oldest'?a.time-b.time||a.id-b.id:b.time-a.time||b.id-a.id);
+    page=0;
+    $('total-count').textContent=fmt(filtered.length);$('total-foot').textContent='报告内 '+fmt(data.events.length)+' 条记录中的匹配结果';
+    $('failure-count').textContent=fmt(filtered.filter(failed).length);$('warning-count').textContent=fmt(filtered.filter(e=>e.status==='warn').length);
+    const elapsed=filtered.filter(e=>e.kind==='exec'&&typeof e.ms==='number').map(e=>e.ms).sort((a,b)=>a-b);
+    $('p95').textContent=elapsed.length?duration(elapsed[Math.ceil(elapsed.length*.95)-1]):'—';$('p95-foot').textContent=elapsed.length?'基于 '+fmt(elapsed.length)+' 条 exec 耗时记录':'没有可用的 exec 耗时记录';
+    $('filtered-label').textContent=fmt(filtered.length)+' / '+fmt(data.events.length)+' 条';
+    $('export').disabled=filtered.length===0;trend(filtered);kinds(filtered);table();
+  }
+  let debounce;
+  $('search').addEventListener('input',()=>{clearTimeout(debounce);debounce=setTimeout(apply,120);});
+  ['kind','status','from','to','order'].forEach(id=>$(id).addEventListener('change',apply));
+  $('filters').addEventListener('submit',event=>event.preventDefault());
+  $('reset').addEventListener('click',()=>{$('filters').reset();clearTimeout(debounce);apply();});
+  $('previous').addEventListener('click',()=>{if(page>0){page--;table();}});$('next').addEventListener('click',()=>{if((page+1)*pageSize<filtered.length){page++;table();}});
+  $('close-detail').addEventListener('click',()=>$('event-detail').close());
+  $('export').addEventListener('click',()=>{
+    const payload={schema:data.schema,generated_at:data.generated_at,project:data.project,source:data.source,coverage:data.coverage,view_filters:{query:$('search').value,kind:$('kind').value,status:$('status').value,from_utc:$('from').value,to_utc_inclusive:$('to').value,order:$('order').value},events:filtered};
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='capbox-audit-filtered.json';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  apply();
+})();
+</script>
+</body>
+</html>

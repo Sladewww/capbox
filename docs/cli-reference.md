@@ -56,7 +56,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   recipe check|apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
   snapshot create|list|restore|rm   rootfs 快照 / 回滚
   image export|import|lock|cache    镜像与离线缓存；lock save|verify|restore
-  audit tail|path|clear             JSONL 审计日志
+  audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
   help, --help, -h                  显示本帮助
@@ -282,6 +282,42 @@ options:
   --net {none,restricted}
   --workspace-mode {isolated,shared}
   --max-timeout MAX_TIMEOUT
+```
+
+## capbox audit --help
+
+```text
+用法: capbox audit <report|tail|path|clear> [参数]
+
+  report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
+  tail [N]   显示最近 N 条（默认 50）
+  path       打印审计文件路径
+  clear      清空审计文件（需确认意图：直接执行即清空）
+
+CAPBOX_AUDIT=off|summary|full
+CAPBOX_AUDIT_CMD=summary|full|off
+```
+
+## capbox audit report --help
+
+```text
+usage: capbox audit report [-h] --output OUTPUT [--input INPUT]
+                           [--limit LIMIT] [--since SINCE] [--until UNTIL]
+                           [--kind KIND] [--status STATUS] [--force] [--json]
+
+导出可搜索、筛选的离线 HTML 审计报告，不启动服务
+
+options:
+  -h, --help       show this help message and exit
+  --output OUTPUT  工作区外的 HTML 文件；父目录必须已存在
+  --input INPUT    显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl
+  --limit LIMIT    保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）
+  --since SINCE    起始时间（包含）；ISO 8601 时区或 UTC 日期
+  --until UNTIL    结束时间（不包含）；ISO 8601 时区或 UTC 日期
+  --kind KIND      只导出此类型，可重复
+  --status STATUS  只导出此状态，可重复
+  --force          原子替换当前用户已有的普通输出文件
+  --json           输出机器可读的生成结果
 ```
 
 ## capbox pkg --help

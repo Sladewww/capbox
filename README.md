@@ -14,6 +14,10 @@ CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and
 
 Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [P1 workflows](docs/p1-workflows.md) for usage and limits.
 
+## Offline audit reports
+
+`capbox audit report --output /path/outside/project/audit.html` exports a self-contained report with event trends, failure counts, filters, search and details. Open the HTML locally; no server or network is needed. See [audit reports](docs/audit-reports.md) for scope, export controls and sensitive-data handling.
+
 ## Requirements
 
 Linux, Bash 4.4+, and **bubblewrap >= 0.12.0**. Package installation may require updating the distro's bubblewrap package or building a supported upstream version. Check `bwrap --version` after installation.

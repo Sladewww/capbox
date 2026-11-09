@@ -18,6 +18,7 @@
 
 __pycache__/
 *.pyc
+/test/browser/node_modules/
 
 # 项目状态树（bootstrap/init 生成）
 .capbox/
