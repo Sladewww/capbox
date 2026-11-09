@@ -362,4 +362,39 @@ class BundleTests(Fixture):
             if task:self.run_cli('task','cancel',task);self.run_cli('task','rm',task)
 
 
+    def test_default_mcp_entry_runs_bounded_guest_task(self):
+        """P0 cut 3: bare mcp serve (isolated/untrusted/none) runs a trivial agent task end-to-end."""
+        (self.ws/'probe.txt').write_text('host-side\n')
+        proc=subprocess.Popen(self.cli+['mcp','serve'],env=self.env,
+                              stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        def send(message,response=True):
+            proc.stdin.write(json.dumps(message)+'\n');proc.stdin.flush()
+            return json.loads(proc.stdout.readline()) if response else None
+        task=None
+        try:
+            send(initialization()[0]);send(initialization()[1],False)
+            policy=send(request(2,'tools/call',{'name':'capbox_policy','arguments':{}}))
+            mcp=policy['result']['structuredContent']['mcp']
+            self.assertEqual(mcp['workspace_mode'],'isolated')
+            self.assertEqual(mcp['profile'],'untrusted')
+            self.assertEqual(mcp['net'],'none')
+            self.assertTrue(mcp['tools_cannot_raise_policy'])
+            started=send(request(3,'tools/call',{'name':'capbox_execute','arguments':{
+                'argv':['sh','-c','printf five-min-ok'],'timeout':15}}))
+            self.assertFalse(started['result']['isError'],started)
+            task=started['result']['structuredContent']['task_id']
+            waited=self.run_cli('task','wait',task,'--timeout','20','--json')
+            self.assertEqual(waited.returncode,0,waited.stdout+waited.stderr)
+            self.assertEqual(json.loads(waited.stdout)['status'],'succeeded')
+            status=send(request(4,'tools/call',{'name':'capbox_status','arguments':{'task_id':task}}))
+            self.assertEqual(status['result']['structuredContent']['status'],'succeeded')
+            logs=send(request(5,'tools/call',{'name':'capbox_logs','arguments':{'task_id':task}}))
+            self.assertEqual(logs['result']['content'][0]['text'],'five-min-ok')
+            # Isolated guest must not mutate the host tree for this trivial command.
+            self.assertEqual((self.ws/'probe.txt').read_text(),'host-side\n')
+        finally:
+            proc.stdin.close();proc.wait(timeout=10);proc.stdout.close();proc.stderr.close()
+            if task:self.run_cli('task','cancel',task);self.run_cli('task','rm',task)
+
+
 if __name__=='__main__':unittest.main()

@@ -12,7 +12,7 @@ CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and
 
 ## Environment tools (setup, bundles, MCP)
 
-Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits.
+Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits. For a cloneable **~5-minute daily path** (CapBox as an outer Linux sandbox in front of Claude Code / Codex-style agents: isolated + untrusted + no network), see [Five-minute path](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex).
 
 ## Offline audit reports
 
