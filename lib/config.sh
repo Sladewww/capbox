@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Configuration parsing, validation and persistence. Never source project data.
+# 配置解析、校验与持久化。绝不 source 项目数据。
 
 # 配置项（不含 CAPBOX_ 前缀），config get/set/list 与文件读写都用这个顺序
 readonly CAPBOX_CFG_KEYS=(
@@ -279,8 +279,7 @@ _cfg_validate() {
   return 0
 }
 
-# 单引号安全转义，用于写 config.env
-# 把任意字符串转成可安全嵌入 shell 命令的 POSIX 单引号形式。# 写回整个配置文件（保持 §2 的顺序与注释）
+# 写回整个配置文件（保持 §2 的顺序与注释）
 config_save() {
   local f="$CAPBOX_DIR/config.env" private tmp k v
   [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || {
@@ -292,7 +291,7 @@ config_save() {
   {
     printf '# CapBox 配置（KEY=value；不作为 shell 执行；环境变量优先）\n'
     for k in "${CAPBOX_CFG_KEYS[@]}"; do
-      # An implicit compat default must not pin strict's rootfs to writable.
+      # 隐式 compat 默认值不得把 strict 的 rootfs 钉成可写。
       if [[ "$k" == ROOTFS_RO && -z "${CAPBOX_CFG_EXPLICIT[$k]:-}" ]]; then
         continue
       fi
@@ -300,8 +299,8 @@ config_save() {
       printf 'CAPBOX_%s=%s\n' "$k" "$(_shq "$v")"
     done
   } >"$tmp" || { rm -f -- "$tmp"; return 1; }
-  # Keep the existing inode: long-lived guests have a read-only bind of it.
-  # All values are validated before entering this single, serialized write.
+  # 保留现有 inode：长寿命 guest 对其有只读 bind。
+  # 所有值在进入这次串行写入前已校验。
   if ! cat -- "$tmp" >"$f"; then
     rm -f -- "$tmp"
     log_err "配置写入失败: $f"
@@ -310,7 +309,7 @@ config_save() {
   rm -f -- "$tmp"
 }
 
-# Commit a complete, prevalidated batch under the same lock as config set.
+# 在与 config set 同一把锁下提交整批已校验配置。
 _config_apply_locked() {
   local line _cfg_line_key="" _cfg_line_val="" k v
   if [[ -f "$CAPBOX_DIR/config.env" ]]; then
@@ -460,8 +459,8 @@ load_config() {
     fi
   done
 
-  # Readers share the writer lock, so an in-place inode-preserving commit is
-  # never mistaken for an empty/partial configuration by another CLI process.
+  # 读者与写者共享锁，因此原地保留 inode 的提交
+  # 不会被其他 CLI 进程误当成空/半截配置。
   local config_fd="" private=""
   if [[ -d "$CAPBOX_DIR" ]]; then
     need_cmd flock '读取配置需要共享锁'
