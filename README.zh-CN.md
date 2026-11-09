@@ -5,7 +5,7 @@
 使用 bubblewrap 和用户命名空间，在独立项目目录中提供持久化 Linux 环境，供 coding agent 或可信开发任务装包、运行命令和服务。
 
 <!-- generated:version -->
-开发中的 CLI：**0.5.0**。正式版本与迁移说明见 [Releases](https://github.com/Sladewww/capbox/releases)。
+开发中的 CLI：**0.4.1**。正式版本与迁移说明见 [Releases](https://github.com/Sladewww/capbox/releases)。
 <!-- /generated:version -->
 
 guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项目的可写视图，guest 能修改项目代码。无关密钥留在工作区外，宿主执行修改后的代码前仍需审查。[安全模型](SECURITY.md)。
