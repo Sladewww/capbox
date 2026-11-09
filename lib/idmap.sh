@@ -191,7 +191,7 @@ pr, pw = os.pipe(); gr, gw = os.pipe()
 pid=os.fork()
 if pid==0:
     os.close(pr); os.close(gw)
-    # os.unshare only exists in newer Python releases; libc is the Linux ABI.
+    # 较新的 Python 才有 os.unshare；这里走 libc，对齐 Linux ABI。
     libc = ctypes.CDLL(None, use_errno=True)
     libc.unshare.argtypes = [ctypes.c_int]
     libc.unshare.restype = ctypes.c_int
@@ -202,7 +202,7 @@ if pid==0:
     os.write(pw, b'R'); os.close(pw)
     if os.read(gr, 1) != b'x':
         os._exit(1)
-    # verify chown + setgroups + setuid against host-provided private path
+    # 在宿主提供的私有路径上验证 chown + setgroups + setuid
     try:
         with open(probe_path, 'w') as f:
             f.write('x')
@@ -430,12 +430,12 @@ _capbox_idmap_decision() {
 
 
 # ---------------------------------------------------------------------------
-# Numeric uid/gid drop helper (host-built static binary for musl guests)
+# 数字 uid/gid 降权助手（宿主构建的静态二进制，供 musl guest 使用）
 # ---------------------------------------------------------------------------
-# BusyBox setpriv lacks --reuid; su needs a passwd name; alpine often has no
-# python3. Prefer a tiny static helper built from lib/guest/capbox-drop-priv.c
-# with host `gcc -static`, installed into the CapBox rootfs at
-# /run/capbox-drop-priv via a read-only bind (no rootfs writes).
+# BusyBox setpriv 没有 --reuid；su 需要 passwd 用户名；alpine 常常没有
+# python3。优先用宿主 `gcc -static` 从 lib/guest/capbox-drop-priv.c 编出
+# 小助手，再以只读 bind 挂到 CapBox rootfs 的 /run/capbox-drop-priv
+# （不写 rootfs）。
 
 _idmap_drop_priv_src() {
   local here
@@ -461,11 +461,11 @@ _idmap_drop_priv_guest_bin() {
   printf '%s' /run/capbox-drop-priv
 }
 
-# Build outside the workspace; callers bind the helper after mounting guest /run.
+# 在工作区外构建；调用方在挂上 guest /run 后再 bind 该助手。
 _idmap_ensure_drop_priv_helper() {
   local src bin guest_abs cc tmp err
   src="$(_idmap_drop_priv_src)" || {
-    CAPBOX_IDMAP_DROP_HELPER_DETAIL="missing capbox-drop-priv.c"
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="缺少 capbox-drop-priv.c"
     return 1
   }
   bin="$(_idmap_drop_priv_host_bin)" || return 1
@@ -478,13 +478,13 @@ _idmap_ensure_drop_priv_helper() {
     elif have_cmd cc; then
       cc=cc
     else
-      CAPBOX_IDMAP_DROP_HELPER_DETAIL="no gcc/cc to build static helper"
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="没有 gcc/cc，无法构建静态助手"
       return 1
     fi
     tmp="$(mktemp "$(dirname "$bin")/build.XXXXXX")" || return 1
     err="$("$cc" -static -O2 -s -o "$tmp" "$src" 2>&1)" || {
       rm -f "$tmp"
-      CAPBOX_IDMAP_DROP_HELPER_DETAIL="gcc -static failed: ${err:-unknown}"
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="gcc -static 失败: ${err:-unknown}"
       return 1
     }
     mv -f "$tmp" "$bin"
@@ -492,10 +492,10 @@ _idmap_ensure_drop_priv_helper() {
   fi
 
   if [[ -x "$bin" ]]; then
-    CAPBOX_IDMAP_DROP_HELPER_DETAIL="static helper ready for read-only bind ($bin)"
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="静态助手已就绪，可供只读 bind（$bin）"
     return 0
   fi
-  CAPBOX_IDMAP_DROP_HELPER_DETAIL="helper missing after build"
+  CAPBOX_IDMAP_DROP_HELPER_DETAIL="构建后仍缺少助手"
   return 1
 }
 

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared launch policy. This module builds arguments; it never starts a guest.
+# 共享启动策略。本模块只拼装参数，从不拉起 guest。
 
 # strict 且用户没有写过 ROOTFS_RO 时，在选择挂载方式之前打开只读 rootfs。
 # load_config 会把缺省值写成 0，所以不能靠「变量为空」判断。
@@ -115,7 +115,7 @@ build_bwrap_args() {
   a+=(--setenv TERM "${TERM:-xterm-256color}")
   a+=(--setenv LANG "${LANG:-C.UTF-8}")
 
-  # Host credential proxy: placeholders only (real secrets stay on the host inject map).
+  # 宿主凭证代理：此处只有占位符（真实密钥留在宿主 inject map）。
   if declare -F _credentials_append_bwrap_args >/dev/null 2>&1; then
     _credentials_append_bwrap_args a || return $?
   fi
