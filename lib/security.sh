@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # =============================================================================
-# CapBox - security.sh
+# CapBox —— security.sh（安全档）
 # 安全配置档：compat（默认，不削弱兼容） / untrusted / strict
 #
 # compat    : 现有行为（容器内 --cap-add ALL，无 seccomp，不额外藏路径）
@@ -8,7 +8,7 @@
 #             --disable-userns；仍允许常用包管理与服务所需操作
 # strict    : untrusted + 更严 seccomp（ptrace/perf/...）+ 默认倾向 rootfs 只读
 #
-# Linux userns 边界（务必诚实）：
+# Linux userns 边界：
 #   * 容器内 “root” 的能力受宿主 userns 与映射范围限制，不是宿主 root。
 #   * seccomp/capability 降低的是 guest 攻击面；不能替代外层沙箱。
 #   * 工作区 /workspace 默认仍 RW（设计如此）；敏感子路径可用 FS_HIDE 遮盖。

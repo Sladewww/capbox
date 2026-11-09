@@ -169,13 +169,13 @@ class MCPTests(Fixture):
         for key in ('root', 'profile', 'net', 'workspace_mode', 'max_output_bytes', 'isolate'):
             self.assertNotIn(key, schema['properties'])
         diff = next(t for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_diff')
-        self.assertIn('never applies', diff['description'].lower())
+        self.assertIn('从不', diff['description'])
 
     def test_handshake_advertises_fixed_defaults_in_instructions(self):
         out = self.exchange(initialization())
         instructions = out[0]['result']['instructions']
         self.assertIn('isolated/untrusted/none', instructions)
-        self.assertIn('cannot raise policy', instructions.lower())
+        self.assertIn('不能抬高策略', instructions)
 
     def test_policy_tool_reports_mcp_fixed_block(self):
         out = self.exchange(initialization() + [request(2, 'tools/call', {'name': 'capbox_policy', 'arguments': {}})])
@@ -193,8 +193,8 @@ class MCPTests(Fixture):
         out = self.exchange(initialization() + [request(2, 'tools/list', {'cursor': '1'})])
         err = out[1]['error']
         self.assertEqual(err['code'], -32602)
-        self.assertIn('omit cursor', err['message'].lower())
-        self.assertIn('full tool list', err['message'].lower())
+        self.assertIn('省略 cursor', err['message'])
+        self.assertIn('完整工具列表', err['message'])
 
     def test_status_timed_out_surfaces_next_step_text(self):
         class Proc:
@@ -210,8 +210,8 @@ class MCPTests(Fixture):
             'capbox_status', {'task_id': 'a' * 32})
         self.assertFalse(result['isError'])
         text = result['content'][0]['text']
-        self.assertIn('execution timeout', text.lower())
-        self.assertIn('capbox_logs', text.lower())
+        self.assertIn('执行超时', text)
+        self.assertIn('capbox_logs', text)
         self.assertEqual(result['structuredContent']['status'], 'timed_out')
 
     def test_logs_past_eof_surfaces_byte_cursor_hint(self):
@@ -227,8 +227,8 @@ class MCPTests(Fixture):
         result = MCP_STDIO.Server({'version': '0.4.2'}, args, lambda c: Proc()).call(
             'capbox_logs', {'task_id': 'b' * 32, 'offset': 99})
         text = result['content'][0]['text']
-        self.assertIn('past end-of-file', text.lower())
-        self.assertIn('next_offset', text.lower())
+        self.assertIn('文件末尾', text)
+        self.assertIn('next_offset', text)
         self.assertTrue(result['structuredContent']['cursor_past_eof'])
 
     def test_cli_failure_uses_sanitized_stderr_not_opaque_setup(self):
@@ -246,7 +246,7 @@ class MCPTests(Fixture):
 
     def test_diff_tool_still_never_auto_applies(self):
         diff = next(t for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_diff')
-        self.assertIn('never applies', diff['description'].lower())
+        self.assertIn('从不', diff['description'])
         class Proc:
             returncode = 2
             stdout = b''
@@ -255,7 +255,7 @@ class MCPTests(Fixture):
         result = MCP_STDIO.Server({'version': '0.4.2'}, args, lambda c: Proc()).call(
             'capbox_diff', {'task_id': 'd' * 32})
         self.assertTrue(result['isError'])
-        self.assertIn('never auto-applies', result['content'][0]['text'].lower())
+        self.assertIn('从不自动应用', result['content'][0]['text'])
 
     def test_restricted_policy_mentions_unbound_credential_next_step(self):
         class Proc:
@@ -266,8 +266,8 @@ class MCPTests(Fixture):
         result = MCP_STDIO.Server({'version': '0.4.2', 'config': {'NET_ALLOW': 'api.openai.com'}},
                                  args, lambda c: Proc()).call('capbox_policy', {})
         note = result['structuredContent']['mcp']['credential_note']
-        self.assertIn('secret set', note.lower())
-        self.assertIn('placeholder', note.lower())
+        self.assertIn('secret set', note)
+        self.assertIn('占位符', note)
 
 
 
