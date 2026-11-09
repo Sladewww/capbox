@@ -25,6 +25,30 @@ if sys.version_info < (3, 10):
     sys.exit(5)
 
 SCHEMA = 'capbox.envkit.v1'
+
+def mcp_defaults():
+    spec=importlib.util.spec_from_file_location('capbox_mcp_defaults', Path(__file__).with_name('mcp-defaults.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+def build_mcp_parser(parent=None):
+    defaults=mcp_defaults()
+    mcp=argparse.ArgumentParser(prog='capbox mcp', parents=[] if parent is None else [parent], add_help=True)
+    # Used both by main() and tests; keep choices/defaults centralized.
+    mcp.add_argument('action', choices=['serve'])
+    mcp.add_argument('--profile', choices=list(defaults.ALLOWED_PROFILES),
+                     default=defaults.DEFAULT_PROFILE,
+                     help='security profile (default: %(default)s)')
+    mcp.add_argument('--net', choices=list(defaults.ALLOWED_NET),
+                     default=defaults.DEFAULT_NET,
+                     help='network mode (default: %(default)s; open is rejected)')
+    mcp.add_argument('--workspace-mode', choices=list(defaults.ALLOWED_WORKSPACE_MODES),
+                     default=defaults.DEFAULT_WORKSPACE_MODE,
+                     help='task workspace (default: %(default)s)')
+    mcp.add_argument('--max-timeout', type=int, default=defaults.DEFAULT_MAX_TIMEOUT,
+                     help='max task timeout seconds (default: %(default)s)')
+    return mcp
+
 BUNDLE_SCHEMA = 'capbox.bundle.v1'
 FILES = ('rootfs.tar.gz', 'package.lock', 'recipe.env')
 MAX_ARCHIVE = 4 * 1024**3
@@ -432,10 +456,18 @@ def main():
         s=actions.add_parser(action);s.add_argument('path');s.add_argument('--json',action='store_true')
         if action=='pack':s.add_argument('--recipe')
         else:s.add_argument('--manifest-sha256')
-    mcp=families.add_parser('mcp');mcp.add_argument('action',choices=['serve']);mcp.add_argument('--profile',choices=['untrusted','strict'],default='untrusted')
-    mcp.add_argument('--net',choices=['none','restricted'],default='none')
-    mcp.add_argument('--workspace-mode',choices=['isolated','shared'],default='isolated')
-    mcp.add_argument('--max-timeout',type=int,default=600)
+    defaults=mcp_defaults()
+    mcp=families.add_parser('mcp')
+    mcp.add_argument('action',choices=['serve'])
+    mcp.add_argument('--profile',choices=list(defaults.ALLOWED_PROFILES),default=defaults.DEFAULT_PROFILE,
+                     help='security profile (default: %(default)s)')
+    mcp.add_argument('--net',choices=list(defaults.ALLOWED_NET),default=defaults.DEFAULT_NET,
+                     help='network mode (default: %(default)s; open is rejected)')
+    mcp.add_argument('--workspace-mode',choices=list(defaults.ALLOWED_WORKSPACE_MODES),
+                     default=defaults.DEFAULT_WORKSPACE_MODE,
+                     help='task workspace (default: %(default)s)')
+    mcp.add_argument('--max-timeout',type=int,default=defaults.DEFAULT_MAX_TIMEOUT,
+                     help='max task timeout seconds (default: %(default)s)')
     args=p.parse_args();ctx=context()
     if args.family=='mcp':
         mcp_ctx=dict(ctx,config=dict(ctx['config'],PROXY=''))
