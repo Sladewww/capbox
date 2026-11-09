@@ -5,7 +5,7 @@ English | [中文](README.zh-CN.md)
 A persistent Linux workspace for coding agents and trusted development tasks, using bubblewrap and user namespaces. Guest root can install packages and change its own system files. The project is available read-write at `/workspace`.
 
 <!-- generated:version -->
-Development CLI: **0.4.1**. Published releases and their migration notes are listed in [Releases](https://github.com/Sladewww/capbox/releases).
+Development CLI: **0.4.2**. Published releases and their migration notes are listed in [Releases](https://github.com/Sladewww/capbox/releases).
 <!-- /generated:version -->
 
 CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and review guest-modified project code before executing it on the host. [Security model](SECURITY.md).

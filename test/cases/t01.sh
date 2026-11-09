@@ -16,7 +16,7 @@ done
 
 run_cmd "$CAPBOX_BIN" version
 assert_rc 0 "version 退出码"
-assert_out_contains "0.4.1" "version 输出当前 CLI 版本 0.4.1"
+assert_out_contains "0.4.2" "version 输出当前 CLI 版本 0.4.2"
 
 case_finish
 exit 0
