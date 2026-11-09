@@ -661,7 +661,7 @@ EOS
   fi
   unset CAPBOX_EXEC_UID_OVERRIDE CAPBOX_EXEC_GID_OVERRIDE
 
-  # Only the host supervisor can publish startup.status. A PID alone is not readiness.
+  # 只有宿主 supervisor 能发布 startup.status；仅有 PID 不代表已就绪。
   local i
   local startup_ok=0 startup_state=""
   for (( i=0; i < (ready_timeout + 5) * 10; i++ )); do
@@ -671,7 +671,7 @@ EOS
       [[ "$startup_state" == failed || "$startup_state" == stopped ]] && break
       kill -0 "$bp" 2>/dev/null || break
     else
-      # No Python supervisor: confirm the sandbox process survives initial setup.
+      # 无 Python supervisor：确认沙箱进程在初始设置后仍存活。
       kill -0 "$bp" 2>/dev/null || break
       (( i >= 3 )) && { startup_ok=1; break; }
     fi
@@ -716,7 +716,7 @@ _service_stop() {
     return 0
   fi
   pid="$(cat "$rd/supervisor.pid")"
-  # The authenticated supervisor stops its own child group. sandbox.pid may be stale.
+  # 已校验身份的 supervisor 自行停止其子进程组；sandbox.pid 可能过期。
   kill -TERM "$pid" 2>/dev/null || true
   local i max
   # 秒 → 100ms 轮询次数

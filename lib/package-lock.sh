@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Fixed versions are installed through the normal package wrapper and then verified.
+# 固定版本经常规包包装器安装后校验。
 _package_lock_tool() {
   local action="$1" file="$2" distro="${3:-$CAPBOX_DISTRO}"
   if (( $# >= 3 )); then shift 3; else shift 2; fi

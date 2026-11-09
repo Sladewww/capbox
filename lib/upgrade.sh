@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Runtime upgrades use an explicitly selected local template and private backups.
+# 运行时升级使用显式选定的本地模板与私有备份。
 _upgrade_assert_stopped() {
   if daemon_running; then
     log_err '升级前请先 capbox down'; return 1
@@ -18,7 +18,7 @@ _upgrade_assert_stopped() {
       log_err "升级前请先 capbox service stop $name"; return 1
     fi
   done
-  # Pre-0.3.5 has no private process identities. Do not trust its PID to send signals.
+  # 0.3.5 之前没有私有进程身份；不要信任其 PID 去发信号。
   for dir in "$CAPBOX_DIR"/run/services/*; do
     if [[ -e "$dir/supervisor.pid" ]]; then
       log_err '发现旧版运行记录，请先用旧 CLI 停服并确认没有运行中的旧进程'
