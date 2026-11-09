@@ -280,13 +280,13 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --profile {untrusted,strict}
-                        security profile (default: untrusted)
+                        安全配置档（默认: untrusted)
   --net {none,restricted}
-                        network mode (default: none; open is rejected)
+                        网络模式（默认: none；拒绝 open）
   --workspace-mode {isolated,shared}
-                        task workspace (default: isolated)
+                        任务工作区（默认: isolated)
   --max-timeout MAX_TIMEOUT
-                        max task timeout seconds (default: 600)
+                        任务超时上限秒数（默认: 600)
 ```
 
 ## capbox audit --help
