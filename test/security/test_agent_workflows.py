@@ -224,14 +224,41 @@ class TaskTests(Fixture):
         self.run_cli('task','cancel',tasks[1],check=True);self.wait(tasks[1],143)
 
 
-    def test_existing_overlay_upper_is_not_silently_omitted(self):
+    def test_overlay_upper_is_merged_into_private_rootfs(self):
         self.init_git()
         upper=self.ws/'.capbox/run/overlay/active/upper'
         upper.mkdir(parents=True)
-        (upper/'installed-tool').write_text('fixture')
-        r=self.run_cli('task','start','--isolate','--','true')
-        self.assertNotEqual(r.returncode,0)
-        self.assertIn('overlay upper',r.stderr)
+        (upper/'installed-tool').write_text('fixture-from-upper')
+        host_marker=(upper/'installed-tool').read_text()
+        task=self.start('--isolate','--','sh','-c','test -f /installed-tool && grep -q fixture-from-upper /installed-tool && echo ok > /workspace/merged.txt')
+        self.wait(task)
+        self.assertEqual((self.ws/'merged.txt').read_text() if (self.ws/'merged.txt').exists() else '','')
+        # guest wrote into private isolate workspace; export via diff presence
+        d=json.loads(self.run_cli('task','diff',task,'--json').stdout)
+        self.assertIn('merged.txt',d['changed_files'])
+        # host upper must remain unchanged
+        self.assertEqual((upper/'installed-tool').read_text(),host_marker)
+        self.assertFalse((self.ws/'.capbox/os/alpine/installed-tool').exists())
+
+
+    def test_non_git_isolate_and_diff(self):
+        (self.ws/'app.txt').write_text('plain\n')
+        (self.ws/'.env').write_text('fixture-secret\n')
+        task=self.start('--isolate','--','sh','-c','test -f /workspace/app.txt && test ! -e /workspace/.env && echo from-task > /workspace/out.txt')
+        self.wait(task)
+        d=json.loads(self.run_cli('task','diff',task,'--json').stdout)
+        self.assertIn('out.txt',d['changed_files'])
+        self.assertNotIn(b'fixture-secret',base64.b64decode(d['patch_base64']))
+
+
+    def test_dirty_git_includes_untracked(self):
+        self.init_git()
+        (self.ws/'scratch.txt').write_text('untracked-before\n')
+        task=self.start('--isolate','--','sh','-c','test -f /workspace/scratch.txt && echo edited >> /workspace/scratch.txt && echo brand-new > /workspace/fresh.txt')
+        self.wait(task)
+        d=json.loads(self.run_cli('task','diff',task,'--json').stdout)
+        self.assertIn('scratch.txt',d['changed_files'])
+        self.assertIn('fresh.txt',d['changed_files'])
 
 
     def test_source_symlink_rejected(self):

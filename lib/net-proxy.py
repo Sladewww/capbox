@@ -11,10 +11,18 @@ import select
 import socket
 import sys
 import threading
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+import json
+import hashlib
+import re
+import ssl
+import subprocess
+import tempfile
+import time
 
 BUF = 65536
 BRIDGE_PORT_DEFAULT = 18787
+PLACEHOLDER_RE = re.compile(rb"capbox-sec-[0-9a-f]{32}")
 
 
 def enter_network_namespace(child: int, command: List[str]) -> None:
@@ -261,7 +269,159 @@ def _read_headers(conn: socket.socket) -> bytes:
 
 
 
-def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
+
+def load_inject_map(path: Optional[str]) -> Dict[str, Any]:
+    if not path:
+        return {"entries": []}
+    # Host-only 0600 file; never bind into the guest.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, encoding="utf-8") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat_is_reg(st.st_mode) or (st.st_mode & 0o077):
+            raise OSError("inject map must be a regular file mode 0600")
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise OSError("invalid inject map")
+    data.setdefault("entries", [])
+    return data
+
+
+def stat_is_reg(mode: int) -> bool:
+    return (mode & 0o170000) == 0o100000
+
+
+def _domain_match(host: str, pattern: str) -> bool:
+    host = _norm_host(host)
+    pattern = _norm_host(pattern)
+    if pattern.startswith("*."):
+        base = pattern[2:]
+        return ("." in base) and host.endswith("." + base) and host != base
+    return host == pattern
+
+
+def _resolve_entry_value(entry: Dict[str, Any], cache: Dict[str, Tuple[str, float]]) -> str:
+    name = entry.get("name", "")
+    if entry.get("command"):
+        now = time.time()
+        hit = cache.get(name)
+        refresh = float(entry.get("refresh_seconds") or 0)
+        if hit and (refresh <= 0 or now - hit[1] < refresh):
+            return hit[0]
+        proc = subprocess.run(
+            ["/bin/bash", "-c", entry["command"]],
+            capture_output=True, text=True, timeout=30,
+            env={k: os.environ[k] for k in ("PATH", "HOME", "LANG", "XDG_RUNTIME_DIR") if k in os.environ},
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            raise OSError(f"credential command failed for {name}")
+        value = proc.stdout.strip()
+        if refresh > 0:
+            cache[name] = (value, now)
+        return value
+    value = entry.get("value")
+    if not value:
+        raise OSError(f"credential missing value for {name}")
+    return str(value)
+
+
+def rewrite_headers_for_credentials(
+    header_lines: List[str],
+    host: str,
+    inject: Dict[str, Any],
+    cache: Dict[str, Tuple[str, float]],
+    log: bool,
+) -> Tuple[List[str], Optional[str]]:
+    """Replace placeholders in request headers when host is authorized. Header-only.
+
+    The placeholder token is replaced with the raw secret value. Agents typically
+    already wrap env values (e.g. Authorization: Bearer $KEY); we do not re-apply
+    format strings during substitution. format is reserved for future whole-header
+    injection. Bodies and query strings are never rewritten.
+    """
+    if not inject.get("entries"):
+        return header_lines, None
+    blob = "\r\n".join(header_lines)
+    if "capbox-sec-" not in blob:
+        return header_lines, None
+    by_token: Dict[str, Dict[str, Any]] = {}
+    for entry in inject["entries"]:
+        for token in (entry.get("placeholders") or {}).values():
+            by_token[str(token)] = entry
+    rebuilt: List[str] = []
+    for line in header_lines:
+        if ":" not in line:
+            rebuilt.append(line)
+            continue
+        name, value = line.split(":", 1)
+        new_value = value
+        for token, entry in by_token.items():
+            if token not in new_value:
+                continue
+            domains = entry.get("domains") or []
+            if not any(_domain_match(host, d) for d in domains):
+                msg = f"placeholder used for unauthorized host {host} (secret={entry.get('name')})"
+                if log:
+                    print(f"capbox-net CRED_DENY {msg}", file=sys.stderr)
+                return header_lines, msg
+            secret = _resolve_entry_value(entry, cache)
+            new_value = new_value.replace(token, secret)
+        rebuilt.append(f"{name.strip()}: {new_value.lstrip()}")
+    return rebuilt, None
+
+
+def mint_mitm_cert(ca_key_path: str, ca_cert_path: str, host: str) -> Tuple[bytes, bytes]:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+    import datetime as dt
+
+    with open(ca_key_path, "rb") as fh:
+        ca_key = serialization.load_pem_private_key(fh.read(), password=None)
+    with open(ca_cert_path, "rb") as fh:
+        ca_cert = x509.load_pem_x509_certificate(fh.read())
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    now = dt.datetime.now(dt.timezone.utc)
+    try:
+        import ipaddress
+        san = [x509.IPAddress(ipaddress.ip_address(host))]
+    except ValueError:
+        san = [x509.DNSName(host)]
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName(san), critical=False)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    return (
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        cert.public_bytes(serialization.Encoding.PEM),
+    )
+
+
+def host_needs_mitm(host: str, inject: Dict[str, Any]) -> bool:
+    for entry in inject.get("entries") or []:
+        if any(_domain_match(host, d) for d in (entry.get("domains") or [])):
+            return True
+    return False
+
+
+def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Optional[Dict[str, Any]] = None, cache: Optional[Dict[str, Tuple[str, float]]] = None) -> None:
+    inject = inject or {"entries": []}
+    cache = cache if cache is not None else {}
     try:
         head = _read_headers(conn)
         if not head:
@@ -300,6 +460,64 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
                 return
             if log:
                 print(f"capbox-net ALLOW CONNECT {host}:{port}", file=sys.stderr)
+            # Credential-bound hosts: TLS MITM so we can rewrite Authorization headers.
+            if host_needs_mitm(host, inject) and inject.get("ca_key") and inject.get("ca_cert"):
+                try:
+                    upstream_tcp = _dial(host, port, allow)
+                except OSError:
+                    conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                    conn.close()
+                    return
+                conn.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                try:
+                    key_pem, cert_pem = mint_mitm_cert(inject["ca_key"], inject["ca_cert"], host)
+                    ctx_client = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    ctx_client.minimum_version = ssl.TLSVersion.TLSv1_2
+                    # Keep PEM files until after wrap_socket loads them into the context.
+                    tmp = tempfile.mkdtemp(prefix="capbox-mitm-")
+                    try:
+                        kpath = os.path.join(tmp, "k.pem")
+                        cpath = os.path.join(tmp, "c.pem")
+                        with open(kpath, "wb") as fh:
+                            fh.write(key_pem)
+                        with open(cpath, "wb") as fh:
+                            fh.write(cert_pem)
+                        os.chmod(kpath, 0o600)
+                        os.chmod(cpath, 0o600)
+                        ctx_client.load_cert_chain(cpath, kpath)
+                        client_tls = ctx_client.wrap_socket(conn, server_side=True)
+                    finally:
+                        try:
+                            os.unlink(kpath)
+                            os.unlink(cpath)
+                            os.rmdir(tmp)
+                        except OSError:
+                            pass
+                    ctx_up = ssl.create_default_context()
+                    ctx_up.minimum_version = ssl.TLSVersion.TLSv1_2
+                    upstream = ctx_up.wrap_socket(upstream_tcp, server_hostname=host)
+                    # Read one HTTP request from guest, rewrite headers, forward.
+                    req = _read_headers(client_tls)
+                    if not req:
+                        client_tls.close(); upstream.close(); return
+                    header_blob, body = req.split(b"\r\n\r\n", 1)
+                    lines = header_blob.decode("iso-8859-1", "replace").split("\r\n")
+                    rebuilt, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
+                    if violation:
+                        client_tls.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                        client_tls.close(); upstream.close(); return
+                    # First line is request line; rebuild absolute-form-less request.
+                    out = ("\r\n".join(rebuilt) + "\r\n\r\n").encode("iso-8859-1", "replace") + body
+                    upstream.sendall(out)
+                    _relay(client_tls, upstream)
+                except Exception as exc:  # noqa: BLE001
+                    if log:
+                        print(f"capbox-net MITM error: {exc}", file=sys.stderr)
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
+                return
             try:
                 upstream = _dial(host, port, allow)
             except OSError:
@@ -346,6 +564,13 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool) -> None:
             return
 
         skip = {"proxy-connection", "proxy-authorization", "connection", "keep-alive", "te", "transfer-encoding"}
+        # Credential placeholder rewrite (header values only).
+        rewritten, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
+        if violation:
+            conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+            conn.close()
+            return
+        lines = rewritten
         out_headers = []
         saw_host = False
         for line in lines[1:]:
@@ -388,6 +613,8 @@ def cmd_proxy(args: argparse.Namespace) -> int:
     if not allow:
         print("capbox-net: allowlist empty", file=sys.stderr)
         return 2
+    inject = load_inject_map(getattr(args, "inject_map", None))
+    cache: Dict[str, Tuple[str, float]] = {}
     sock_path = args.sock
     if os.path.exists(sock_path):
         os.unlink(sock_path)
@@ -403,7 +630,7 @@ def cmd_proxy(args: argparse.Namespace) -> int:
     try:
         while True:
             conn, _ = server.accept()
-            t = threading.Thread(target=handle_client, args=(conn, allow, args.log), daemon=True)
+            t = threading.Thread(target=handle_client, args=(conn, allow, args.log, inject, cache), daemon=True)
             t.start()
     except KeyboardInterrupt:
         return 0
@@ -481,6 +708,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_proxy.add_argument("--allow", required=True)
     p_proxy.add_argument("--ready")
     p_proxy.add_argument("--log", action="store_true")
+    p_proxy.add_argument("--inject-map", help="host-only credential inject map (0600 JSON)")
     p_proxy.set_defaults(func=cmd_proxy)
 
     p_br = sub.add_parser("bridge")

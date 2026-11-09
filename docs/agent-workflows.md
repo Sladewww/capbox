@@ -49,7 +49,7 @@ These are deterministic policy previews, not a complete syscall-denial tracer. T
 
 ## Isolated workspace and reviewable diff
 
-`--isolate` first copies Git-tracked **working-tree** files, including their uncommitted contents, into a private task workspace. It also makes an independent rootfs copy, without hardlinks. Stop other writers, services and daemon before copying a live rootfs; no online database consistency guarantee is made.
+`--isolate` copies the current workspace view into a private task tree and makes an independent rootfs copy (no hardlinks to the live image). For a Git repository root it includes tracked working-tree contents **and** untracked files still allowed by `.gitignore`, while CapBox credential exclusions always win. For a non-Git directory it walks regular files only (no `.gitignore`). A nonempty overlay upper is merged into the private rootfs (copy-up + whiteouts) rather than refused. Stop other writers, services and daemon before copying a live rootfs; no online database consistency guarantee is made.
 
 ```sh
 task_id=$(capbox task start --isolate --net none -- sh -c 'printf "task result\n" > task-result.txt' |
@@ -67,11 +67,12 @@ The MVP exports a Git binary-capable patch; it **does not apply it to the origin
 
 Supported scope and limits:
 
-- Run from a Git repository root. Only tracked regular working-tree files are copied; untracked files and Git history/config are omitted. Source paths are opened relative to pinned directory descriptors without following links.
+- Git roots copy tracked + untracked (non-ignored) regular working-tree files; non-Git projects walk the directory tree with CapBox exclusions only (no `.gitignore`). Git history/config is never copied. Source paths are opened relative to pinned directory descriptors without following links.
 - `.capbox`, `.git`, common credential paths (`.env`, `.env.*`, `.secrets`, `.ssh`, `.aws`, `.azure`, `.gnupg`, `.kube`, `.docker`), PEM/key files and `id_rsa*` are excluded. This cannot recognize every secret; review tracked files before submission. `.gitignore` is not a confidentiality rule.
 - Symlinks, hardlinks, special files and submodule directories are not supported. File enumeration and diff reject such content instead of following links into the host. Host Git uses private metadata outside the guest and disables external diff/textconv and hooks.
-- The working-file set is limited to 10,000 files / 100MiB; exported patch size to 16MiB. A nonempty existing overlay upper is refused rather than silently omitted. Rootfs copies consume additional disk and startup time. They are full copies, not instant snapshots, and existing disk quotas still cover only their configured guest data path.
+- The working-file set is limited to 10,000 files / 100MiB; exported patch size to 16MiB. A nonempty overlay upper is merged into the private rootfs; the host upper is left untouched. Rootfs copies consume additional disk and startup time. They are full copies, not instant snapshots, and existing disk quotas still cover only their configured guest data path.
+- Dirty isolate snapshots the current dirty tree; `task diff` compares against that snapshot baseline, not against `HEAD`. Non-Git isolate builds a synthetic bare index for the same reason.
 - `diff` is available only after an isolated task finishes. `lost` tasks cannot be exported automatically. Changes to the private rootfs are disposable and are not part of the workspace patch.
 - Existing exec/file/bind settings are still enforced. Absolute binds referring to the original workspace may be invalid in the private copy; they are not silently granted access to the source.
 
-This implementation keeps patch application and credential provisioning with the trusted host caller. The optional [stdio MCP adapter](envkit.md) exposes a fixed subset of this CLI; it does not open a network listener.
+This implementation keeps patch application with the trusted host caller. For API keys that must not enter the guest, use the [host credential proxy](credentials.md). The optional [stdio MCP adapter](envkit.md) exposes a fixed subset of this CLI; it does not open a network listener.
