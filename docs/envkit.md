@@ -125,7 +125,7 @@ Client configuration formats vary. This server implements [stdio transport](http
 | `capbox_diff` | Export a completed isolated task patch; no apply |
 | `capbox_policy` | Server's fixed requested launch policy |
 
-Only `/workspace` and its descendants are accepted as cwd. The server does not expose host package installation, upgrade, configuration mutation, arbitrary host files or shell commands. Task argv executes through the normal sandbox launcher with the fixed policy. An isolated workspace requires a Git repository root; there is no silent fallback to shared mode.
+Only `/workspace` and its descendants are accepted as cwd. The server does not expose host package installation, upgrade, configuration mutation, arbitrary host files or shell commands. Task argv executes through the normal sandbox launcher with the fixed policy. Default `isolated` workspace mode uses the same `--isolate` rules as the CLI (Git dirty trees, non-Git walks, overlay merge); there is no silent fallback to shared mode.
 
 Messages are UTF-8 JSON-RPC lines, at most 1MiB per input message. Invalid JSON, oversized messages, unknown tools/parameters, bad IDs and policy override attempts are rejected. stdout contains protocol messages only; diagnostics use stderr. Tool-side failures use `isError`; log cursors remain byte offsets. Large diffs beyond the MCP result budget require local CLI export. Requests are processed serially with a bounded CLI invocation timeout; the server does not maintain a separate execution engine.
 
