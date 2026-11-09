@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
     for name in ['README.md', 'README.zh-CN.md', 'CONTRIBUTING.md']:
         path = REPO / name
         text = path.read_text()
-        chinese = True  # README.md / README.zh-CN.md 统一中文；CONTRIBUTING 验收行本就中文
+        chinese = name != 'README.md'  # README.md English; README.zh-CN.md + CONTRIBUTING Chinese
         if '<!-- generated:version -->' in text:
             line = (f'开发中的 CLI：**{version}**。正式版本与迁移说明见 '
                     '[Releases](https://github.com/Sladewww/capbox/releases)。' if chinese else

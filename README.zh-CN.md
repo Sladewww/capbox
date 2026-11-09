@@ -1,6 +1,6 @@
 # CapBox
 
-中文 · [主 README](README.md)
+[English](README.md) | 中文
 
 使用 bubblewrap 和用户命名空间，在独立项目目录中提供持久化 Linux 环境，供 coding agent 或可信开发任务装包、运行命令和服务。
 
@@ -12,7 +12,7 @@ guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项
 
 ## 环境工具（setup / bundle / MCP）
 
-`setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [环境工具](docs/envkit.md)。
+`setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [环境工具](docs/envkit.md)。MCP 日常入口（`isolated` / `untrusted` / `none`）见 [外层 Linux 沙箱路径](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex)。
 
 ## 离线审计可视化
 
@@ -22,15 +22,9 @@ guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项
 
 Linux、Bash 4.4+、bubblewrap **≥ 0.12.0**。安装后检查 `bwrap --version`；发行版自带的旧版本可能不满足要求。宿主还必须允许相应用户命名空间。
 
-Alpine 包安装脚本需要宿主 Python 3.10+ 和 libseccomp。升级、严格包锁及部分辅助功能也使用 Python 3.10+。Landlock 和身份辅助程序需要可用的 `gcc -static` 工具链。`doctor` 用来核对实际能力。
+Alpine 包安装脚本需要宿主 Python 3.10+ 和 libseccomp。升级、严格包锁及部分辅助功能也使用 Python 3.10+。Landlock 和身份辅助程序需要可用的 `gcc -static` 工具链。`doctor` 用来核对实际能力；CI 兼容范围见 [测试](docs/testing.md)。
 
 普通运行无需宿主 root；磁盘配额另需宿主 loop/mount 授权，仅覆盖指定 guest 数据目录。CPU、内存和进程限额依赖 cgroup 委派；`require` 会拒绝无法兑现的已配置额度。
-
-## 本地 Agent 任务
-
-`capbox task start -- CMD` 返回持久 task ID，支持重连、按游标读取日志和取消。`task start --isolate` 创建独立工作文件与 rootfs 副本，结束后导出 diff 供审阅。`policy show` / `policy check URL` 解释请求的策略及网络规则。
-
-接口、超时语义、隔离范围和审阅示例见 [Local Agent workflows](docs/agent-workflows.md)。
 
 ## 安装模板
 
@@ -93,6 +87,12 @@ capbox exec -- curl --version
 
 需要跨调用共享整机时用 `capbox up --systemd`，随后 `capbox exec --daemon -- CMD`。无 systemd 用户总线时，使用能够跨调用存活的后台托管。
 
+## 本地 Agent 任务
+
+`capbox task start -- CMD` 返回持久 task ID，支持重连、按游标读取日志和取消。`task start --isolate` 创建独立工作文件与 rootfs 副本，结束后导出 diff 供审阅。`policy show` / `policy check URL` 解释请求的策略及网络规则。
+
+接口、超时语义、隔离范围和审阅示例见 [本地 Agent 工作流](docs/agent-workflows.md)。
+
 ## 配置校验与包锁
 
 ```sh
@@ -100,6 +100,7 @@ capbox recipe check capbox.recipe
 capbox recipe apply capbox.recipe
 capbox image lock save
 capbox image lock verify
+# 按记录的精确包版本重建：
 capbox recipe apply --locked /path/to/package.lock capbox.recipe
 ```
 
@@ -114,6 +115,7 @@ capbox recipe apply --locked /path/to/package.lock capbox.recipe
 ```sh
 "$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade check --from "$HOME/.local/share/capbox"
 "$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade apply --from "$HOME/.local/share/capbox"
+# 需要时：
 "$HOME/.local/share/capbox/bin/capbox" --root /path/to/project upgrade rollback
 ```
 
@@ -121,9 +123,14 @@ capbox recipe apply --locked /path/to/package.lock capbox.recipe
 
 ## 文档与验证
 
-- [CLI 参考](docs/cli-reference.md) 和 [配置默认值](docs/configuration.md)：自动从运行代码生成，CI 检查漂移。
-- [架构](docs/architecture.md) · [测试范围](docs/testing.md) · [贡献指南](CONTRIBUTING.md)。
-- [Wiki](https://github.com/Sladewww/capbox/wiki)：按版本维护的运维与应用手册。
+| 文档 | 用途 |
+|---|---|
+| [生成的 CLI 参考](docs/cli-reference.md) | 实际命令帮助 |
+| [生成的配置默认值](docs/configuration.md) | 实际内置默认 |
+| [架构](docs/architecture.md) | 模块边界与启动策略 |
+| [测试](docs/testing.md) | CI 矩阵与能力要求 |
+| [Wiki](https://github.com/Sladewww/capbox/wiki) | 按版本维护的中文运维与应用示例 |
+| [贡献指南](CONTRIBUTING.md) | 提交前检查 |
 
 <!-- generated:tests -->
 验收用例：**41**（T01–T41）。框架自测验证测试工具；真实 guest 与宿主边界回归单独运行。
@@ -134,4 +141,3 @@ MIT — [LICENSE](LICENSE)。
 ### 宿主凭据代理
 
 真实 API key 留在宿主私有目录；guest 只看到 `capbox-sec-…` 占位符。`restricted` 网络下由宿主代理按 `NET_ALLOW` 授权域名改写请求头（不含 body/query）。详见 [docs/credentials.md](docs/credentials.md)。日常 MCP 入口是 `mcp serve`（默认 isolated/untrusted/none）；需要凭据时代理时显式加 `--net restricted`，见 [docs/envkit.md](docs/envkit.md) 与 [examples/](examples/)。
-
