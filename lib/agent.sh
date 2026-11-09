@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Agent commands use the existing exec launcher; private records never enter a guest.
+# Agent 命令走现有 exec 启动器；私有记录永不进入 guest。
 _agent_command() {
   need_cmd python3
   local private key
@@ -16,7 +16,7 @@ _agent_command() {
 }
 
 cmd_task() {
-  # Serialize submission with runtime upgrades. Readers and workers use private records.
+  # 与运行时升级串行化提交；读端与 worker 使用私有记录。
   if [[ "${1:-}" == start ]]; then
     need_cmd flock
     with_lock upgrade -- _agent_command task "$@"

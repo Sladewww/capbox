@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 [[ -f "${BASH_SOURCE[0]%/*}/envkit-runtime.py" && -f "${BASH_SOURCE[0]%/*}/mcp-stdio.py" ]] || return 5
-# Installation plans, portable snapshots and the stdio adapter share validated context.
+# 安装计划、可移植快照与 stdio 适配器共用已校验的上下文。
 _envkit_command() {
   need_cmd python3
   local key lib="${BASH_SOURCE[0]%/*}"
