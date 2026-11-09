@@ -64,11 +64,6 @@ When editing README, `docs/`, Wiki, comments, CLI help, or error strings:
 - CN and EN should read like human tech notes, not machine-translated marketing.
 - Copy-only edits must not change runtime behavior or loosen default trust boundaries (`isolated` / `untrusted` / `none`, no auto-apply of diffs, secrets on host).
 
-## PR and commit attribution
-
-- Git author for CapBox commits: `Sladewww <dsgmbot115@qq.com>` only. Do not add a self-referential `Co-authored-by`.
-- PR title, body, and test plan: no Author, Requested by, or co-author notes.
-
 ## Network / recipe / resources
 
 - `CAPBOX_NET=none|restricted|open`（`host`=`open`）。未知值失败，不回退 open。`restricted` 需 `CAPBOX_NET_ALLOW` + python3/nsenter；原始网络被 unshare，仅代理出站。oneshot 与 `capbox up` 都挂 allowlist 桥。无端口=仅 80/443；子域写 `*.host`。
