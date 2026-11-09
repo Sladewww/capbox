@@ -88,7 +88,18 @@ Limits:
 Built-in services mirror common provider env names and API domains (see
 `lib/credentials-services.json`).
 
+## MCP daily path
+
+`capbox mcp serve` defaults to isolated / untrusted / **no network**. To let an agent call an approved HTTPS API without putting the real key in the guest:
+
+1. `secret set` / `secret import` on the host (see Quick start above).
+2. Put the provider host in `CAPBOX_NET_ALLOW` (never rely on silent widening).
+3. Start MCP with an explicit `--net restricted` flag. Leave workspace mode at the default (`isolated`).
+
+Do not put secrets in the MCP client JSON, and do not switch to `--workspace-mode shared` or an open network mode for convenience. Example client args and full notes: [envkit.md](envkit.md#host-secrets-with-mcp-restricted-only).
+
 ## Related
 
 - Network allowlist: [configuration.md](configuration.md), [cli-reference.md](cli-reference.md)
 - Agent tasks / isolate: [agent-workflows.md](agent-workflows.md)
+- Fixed-scope MCP adapter: [envkit.md](envkit.md)

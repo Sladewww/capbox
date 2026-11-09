@@ -133,5 +133,5 @@ MIT — [LICENSE](LICENSE)。
 
 ### 宿主凭据代理
 
-真实 API key 留在宿主私有目录；guest 只看到 `capbox-sec-…` 占位符。`restricted` 网络下由宿主代理按 `NET_ALLOW` 授权域名改写请求头（不含 body/query）。详见 [docs/credentials.md](docs/credentials.md)。
+真实 API key 留在宿主私有目录；guest 只看到 `capbox-sec-…` 占位符。`restricted` 网络下由宿主代理按 `NET_ALLOW` 授权域名改写请求头（不含 body/query）。详见 [docs/credentials.md](docs/credentials.md)。日常 MCP 入口是 `mcp serve`（默认 isolated/untrusted/none）；需要凭据时代理时显式加 `--net restricted`，见 [docs/envkit.md](docs/envkit.md) 与 [examples/](examples/)。
 

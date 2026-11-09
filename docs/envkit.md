@@ -89,19 +89,18 @@ Bundles use the existing safe image extraction semantics, including permission/o
 
 ## 4. A fixed-scope stdio MCP adapter
 
-Initialize/prebuild the workspace before starting the server:
+Initialize/prebuild the workspace before starting the server. The daily agent entry is bare `mcp serve` — defaults already pin the trust boundary:
 
 ```sh
 capbox --root /path/to/project mcp serve
-# Explicitly use the shared project instead of private Git task copies:
+# Opt-in only (widens the boundary; do not use as the daily default):
 capbox --root /path/to/project mcp serve --workspace-mode shared
-# Restrict network destinations in host config first:
-capbox --root /path/to/project mcp serve --net restricted --max-timeout 600
+capbox --root /path/to/project mcp serve --net restricted
 ```
 
-Defaults: isolated Git task workspace, `untrusted` profile, `none` network, maximum execution timeout 600 seconds and 8MiB retained output per stream. Startup accepts `strict` and `restricted` explicitly; restricted needs `NET_ALLOW`. No tool call may change workspace root, profile, network mode, output budget or maximum timeout. The adapter clears configured upstream PROXY values; restricted mode uses its own allowlist bridge. Host configuration supplies resource limits; the adapter does not invent or claim cgroup delegation.
+Defaults: **isolated** task workspace (same `--isolate` rules as the CLI: Git dirty trees, non-Git walks, overlay merge), **`untrusted`** profile, **`none`** network, maximum execution timeout **600** seconds and **8MiB** retained output per stream. Startup accepts `strict` and `restricted` explicitly; restricted needs `NET_ALLOW`. No tool call may change workspace root, profile, network mode, output budget or maximum timeout. The adapter clears configured upstream PROXY values; restricted mode uses its own allowlist bridge. Host configuration supplies resource limits; the adapter does not invent or claim cgroup delegation.
 
-Configure your MCP client to launch the CLI with an absolute template executable path and these arguments. For clients using a `mcpServers` block, an example is:
+Configure your MCP client to launch the CLI with an absolute template executable path. Bare `mcp serve` is enough for the daily path (isolated / untrusted / no network). For clients using a `mcpServers` block:
 
 ```json
 {
@@ -113,6 +112,42 @@ Configure your MCP client to launch the CLI with an absolute template executable
   }
 }
 ```
+
+Checked-in copies: [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json) (daily defaults) and [`examples/mcpServers.capbox.restricted.json`](../examples/mcpServers.capbox.restricted.json) (host credential proxy).
+
+### Host secrets with MCP (restricted only)
+
+Real API keys stay on the host. Set them before starting MCP; never put keys in client config, tool argv, or the guest environment. Restricted network is an explicit opt-in — do **not** use `open` or shared mode for this path:
+
+```sh
+# 1) Store the key on the host (stdin / import; never --value on argv)
+printf '%s' "$OPENAI_API_KEY" | capbox --root /path/to/project secret set openai --value-stdin
+
+# 2) Allow only the provider host(s); CapBox will not widen NET_ALLOW for you
+capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.openai.com
+
+# 3) Start MCP with restricted net (still isolated + untrusted by default)
+capbox --root /path/to/project mcp serve --net restricted
+```
+
+Client config for the credential-aware entry (fixed root; no open net; no shared workspace):
+
+```json
+{
+  "mcpServers": {
+    "capbox": {
+      "command": "/absolute/path/to/template/bin/capbox",
+      "args": [
+        "--root", "/absolute/path/to/project",
+        "mcp", "serve",
+        "--net", "restricted"
+      ]
+    }
+  }
+}
+```
+
+Guest tasks only see `capbox-sec-…` placeholders; the host allowlist proxy rewrites matching request headers. Details and trust model: [credentials.md](credentials.md). `capbox_policy` reports the fixed MCP policy, including `mcp.workspace_mode` / `mcp.net` / `mcp.tools_cannot_raise_policy`.
 
 Client configuration formats vary. This server implements [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization/version negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) and [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). It supports protocol versions `2025-11-25` and `2025-06-18`; unknown versions negotiate the newest supported version. It does not advertise MCP's optional task-augmented protocol: task IDs are CapBox tool results.
 
