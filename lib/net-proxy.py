@@ -359,7 +359,11 @@ def rewrite_headers_for_credentials(
                 continue
             domains = entry.get("domains") or []
             if not any(_domain_match(host, d) for d in domains):
-                msg = f"placeholder used for unauthorized host {host} (secret={entry.get('name')})"
+                msg = (
+                    "凭据未绑定到该主机: placeholder used for unauthorized host %s (secret=%s). "
+                    "把该 host 加入密钥 domains 与 CAPBOX_NET_ALLOW，或改用已绑定域名。"
+                    % (host, entry.get("name"))
+                )
                 if log:
                     print(f"capbox-net CRED_DENY {msg}", file=sys.stderr)
                 return header_lines, msg
