@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # =============================================================================
-# CapBox - rootfs.sh
+# CapBox —— rootfs.sh（rootfs 生命周期）
 # rootfs 生命周期：镜像定位/缓存/下载/解包、镜像源与代理注入、首次引导、init。
 # 依赖 common.sh 已 source。
 # =============================================================================
@@ -141,7 +141,7 @@ _tarball_ok() {
   return 0
 }
 
-# fetch_tarball DISTRO [--url URL] [--force]
+# fetch_tarball DISTRO [--url URL] [--force]：获取发行版 tarball
 # 命中 cache/ 直接复用；否则按备选源下载。输出最终 tarball 路径到 stdout。
 fetch_tarball() {
   local distro="${1:-alpine}"
@@ -225,7 +225,7 @@ fetch_tarball() {
   return 0
 }
 
-# extract_rootfs TARBALL DESTDIR
+# extract_rootfs TARBALL DESTDIR：解包 rootfs
 # 解包到空目录；先解到临时目录再原子替换，避免半成品 rootfs。
 extract_rootfs() {
   local tarball="${1:-}"
@@ -348,7 +348,7 @@ _rootfs_write_file() {
   return 0
 }
 
-# inject_mirrors [DISTRO]
+# inject_mirrors [DISTRO]：注入镜像源
 # 按契约 §6 写入 apk/apt 源与 apt 修正项；CAPBOX_MIRROR=none 直接返回。
 inject_mirrors() {
   local distro="${1:-$CAPBOX_DISTRO}"
@@ -441,7 +441,7 @@ inject_mirrors() {
 
 # ---------- 4. 代理注入（容器内配置文件） -------------------------------------
 
-# inject_proxy_files [DISTRO]
+# inject_proxy_files [DISTRO]：注入容器内代理配置
 # 把代理写进容器内的 profile.d / npm / pip 配置；失败不致命。
 inject_proxy_files() {
   local distro="${1:-$CAPBOX_DISTRO}"
@@ -478,7 +478,7 @@ inject_proxy_files() {
     printf 'https-proxy=%s\n' "$p"
   } | _rootfs_write_file "$npmrc" || return 1
 
-  # pip
+  # pip 配置
   local pipconf="$rootfs/etc/pip.conf"
   {
     printf '[global]\n'
@@ -491,7 +491,7 @@ inject_proxy_files() {
 
 # ---------- 5. 首次引导 -------------------------------------------------------
 
-# run_bootstrap [DISTRO]
+# run_bootstrap [DISTRO]：首次引导
 # 在容器内用一次性容器跑 lib/guest/bootstrap.sh；失败只告警（rootfs 仍可用）。
 run_bootstrap() {
   local distro="${1:-$CAPBOX_DISTRO}"
@@ -525,7 +525,7 @@ run_bootstrap() {
   return 0
 }
 
-# ---------- 6. init -----------------------------------------------------------
+# ---------- 6. init（初始化 rootfs） ------------------------------------------
 
 cmd_init() {
   local distro="$CAPBOX_DISTRO"
