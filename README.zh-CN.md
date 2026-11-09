@@ -14,6 +14,10 @@ guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项
 
 `setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [P1 工作流](docs/p1-workflows.md)。
 
+## 离线审计可视化
+
+`capbox audit report --output /path/outside/project/audit.html` 生成可直接打开的 HTML 报告，包含事件趋势、失败统计、搜索、筛选、分页与详情。无需服务或联网。数据范围、导出选项与分享注意见 [审计报告](docs/audit-reports.md)。
+
 ## 宿主要求
 
 Linux、Bash 4.4+、bubblewrap **≥ 0.12.0**。安装后检查 `bwrap --version`；发行版自带的旧版本可能不满足要求。宿主还必须允许相应用户命名空间。

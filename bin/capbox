@@ -250,7 +250,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   recipe check|apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
   snapshot create|list|restore|rm   rootfs 快照 / 回滚
   image export|import|lock|cache    镜像与离线缓存；lock save|verify|restore
-  audit tail|path|clear             JSONL 审计日志
+  audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
   help, --help, -h                  显示本帮助

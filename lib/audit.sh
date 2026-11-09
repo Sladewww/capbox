@@ -135,8 +135,9 @@ cmd_audit() {
   case "$sub" in
     -h|--help|"")
       cat <<'H'
-用法: capbox audit <tail|path|clear> [N]
+用法: capbox audit <report|tail|path|clear> [参数]
 
+  report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
   tail [N]   显示最近 N 条（默认 50）
   path       打印审计文件路径
   clear      清空审计文件（需确认意图：直接执行即清空）
@@ -149,6 +150,13 @@ H
     path)
       printf '%s\n' "$(_audit_path)"
       return 0
+      ;;
+    report)
+      need_cmd python3
+      local report_lib="${BASH_SOURCE[0]%/*}"
+      env "CAPBOX_AUDIT_REPORT_SOURCE=$(_audit_path)" \
+        "CAPBOX_AUDIT_REPORT_WORKSPACE=$CAPBOX_WORKSPACE" \
+        python3 "$report_lib/audit-report.py" "$@"
       ;;
     clear)
       local f="$(_audit_path)"
@@ -165,7 +173,7 @@ H
       return 0
       ;;
     *)
-      die 2 "audit: 未知子命令 $sub（tail|path|clear）"
+      die 2 "audit: 未知子命令 $sub（report|tail|path|clear）"
       ;;
   esac
 }
