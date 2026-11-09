@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Local task lifecycle, policy explanations and reviewable workspace copies.
+"""本地任务生命周期、策略说明与可审阅的工作区副本。
 
-Only exec launches guest commands. This host controller treats task output and
-workspace contents as data, and never executes scripts supplied by the guest.
+只有 exec 会在 guest 内启动命令。本宿主控制器把任务输出与工作区内容当数据，
+永不执行 guest 提供的脚本。
 """
 import argparse
 import base64
@@ -128,11 +128,11 @@ def effective(ctx, args):
     values['LANDLOCK'] = {'value': cfg.get('LANDLOCK') or ('on' if profile == 'strict' else 'off'),
                           'source': sources.get('LANDLOCK', 'default') if cfg.get('LANDLOCK') else 'profile'}
     return {'kind': 'policy', 'values': values,
-            'scope': 'new oneshot launch; not an existing daemon',
-            'limits': 'requested, verified by the exec launcher at startup',
-            'notes': ['pkg install/update temporarily use network when NET=none',
-                      'IDMAP auto/on may alter the nested-userns restriction; see doctor',
-                      'rootfs RO may have an overlay; /workspace is writable by default']}
+            'scope': '新的 oneshot 启动；不是已有 daemon',
+            'limits': '按请求设置，由 exec 启动器在启动时校验',
+            'notes': ['NET=none 时 pkg install/update 会临时使用网络',
+                      'IDMAP auto/on 可能放宽嵌套 userns 限制；见 doctor',
+                      '只读 rootfs 可能带 overlay；/workspace 默认可写']}
 
 
 def net_module(ctx):
@@ -176,18 +176,18 @@ def network_check(ctx, args):
                 except socket.gaierror:
                     result.update(decision='deny', reason='dns_resolution_failed')
     result['policy_source'] = policy['values']['NET']['source']
-    result['notes'] = 'Policy preview only. DNS can change; the proxy rechecks at connection time. No TCP connection made.'
+    result['notes'] = '仅策略预览。DNS 可能变化；代理在连接时会再校验。未建立 TCP 连接。'
     return result
 
 
 def clean_environment(ctx):
-    # Keep the launch prerequisites, not host API keys, SSH agents or Git config.
+    # 只保留启动前置项，不含宿主 API 密钥、SSH agent 或 Git 配置。
     env = {k: os.environ[k] for k in ('PATH', 'HOME', 'LANG', 'TERM', 'XDG_RUNTIME_DIR', 'XDG_STATE_HOME') if k in os.environ}
     for k, value in ctx['config'].items():
         if k == 'ALLOW_OLD_BWRAP' or (k == 'ROOTFS_RO' and ctx['sources'].get(k, 'default') == 'default'):
             continue
         env['CAPBOX_' + k] = value
-    # Explicit cgroup delegation is outside config.env in the existing launcher.
+    # 显式 cgroup 委托在现有启动器中不走 config.env。
     if 'CAPBOX_CGROUP_ROOT' in os.environ:
         env['CAPBOX_CGROUP_ROOT'] = os.environ['CAPBOX_CGROUP_ROOT']
     return env
@@ -207,7 +207,7 @@ def excluded(name):
 
 
 def read_regular(root, name):
-    """Open every component relative to a pinned directory, never through links."""
+    """相对钉住的目录逐级打开每一段，从不跟随链接。"""
     parts = safe_relative(name).parts
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -281,10 +281,10 @@ def is_git_workspace_root(ctx, source):
 
 
 def list_isolate_names(ctx, source):
-    """Return relative paths for the isolate view: dirty Git tree or filesystem walk."""
+    """返回 isolate 视图的相对路径：脏 Git 树或文件系统遍历。"""
     if is_git_workspace_root(ctx, source):
-        # Tracked working-tree files plus untracked, still honoring .gitignore.
-        # CapBox credential exclusions still win after this listing.
+        # 已跟踪工作树文件 + 未跟踪文件，仍遵守 .gitignore。
+        # 列出后 CapBox 凭据排除规则仍优先。
         raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], work=source)
         names = []
         for item in raw.split(b'\0'):
@@ -304,7 +304,7 @@ def list_isolate_names(ctx, source):
                 continue
             names.append(rel)
     if not names and not any(source.iterdir()):
-        # Empty project is still a valid synthetic baseline.
+        # 空项目仍是合法的合成基线。
         return [], 'fs'
     return sorted(set(names)), 'fs'
 
@@ -320,12 +320,12 @@ def is_overlay_whiteout(path):
 
 
 def merge_overlay_upper(upper, dest_rootfs):
-    """Apply overlay upper onto an independent rootfs copy (copy-up + whiteouts)."""
+    """把 overlay upper 应用到独立 rootfs 副本（copy-up + whiteout）。"""
     if upper.is_symlink() or not upper.is_dir():
         raise AgentError('--isolate 拒绝不安全的 overlay upper（符号链接或非目录）')
     for directory, dirs, files in os.walk(upper, followlinks=False, topdown=True):
         rel_dir = Path(directory).relative_to(upper)
-        # Opaque directory marker used by some overlay implementations.
+        # 部分 overlay 实现使用的不透明目录标记。
         opaque = Path(directory) / '.wh..wh..opq'
         if opaque.exists() or opaque.is_symlink():
             target_dir = dest_rootfs / rel_dir if str(rel_dir) != '.' else dest_rootfs
@@ -387,7 +387,7 @@ def isolate(ctx, job):
     except OSError as exc:
         raise AgentError('--isolate 无法枚举工作区文件') from exc
     view = job / 'workspace'
-    view.mkdir(mode=0o755)  # enclosing job stays 0700; mapped non-root users can read the view
+    view.mkdir(mode=0o755)  # 外层 job 仍为 0700；映射后的非 root 用户可读该视图
     baseline, skipped, total = {}, [], 0
     for name in names:
         relative = safe_relative(name)
@@ -396,7 +396,7 @@ def isolate(ctx, job):
             continue
         src = source / relative
         if not src.exists() and not src.is_symlink():
-            continue  # preserve a working-tree deletion of a tracked path
+            continue  # 保留已跟踪路径在工作树上的删除
         try:
             data, st = read_regular(source, name)
         except OSError as exc:
@@ -411,8 +411,8 @@ def isolate(ctx, job):
         dst.chmod(0o755 if st.st_mode & 0o111 else 0o644)
         baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(),
                           'executable': bool(st.st_mode & 0o111)}
-    # Review metadata is outside the guest view. Never run Git using guest .git/config.
-    # Non-Git and dirty Git both get a synthetic baseline so task diff keeps working.
+    # 审阅元数据在 guest 视图外。从不使用 guest 的 .git/config 跑 Git。
+    # 非 Git 与脏 Git 都给合成基线，保证 task diff 可用。
     index = job / 'review.git'
     git(ctx, ['init', '--bare', str(index)])
     git(ctx, ['add', '--force', '--all', '--', '.'], work=view, index=index)
@@ -425,7 +425,7 @@ def isolate(ctx, job):
     shutil.copy2(ctx['cli'], state / 'bin/capbox')
     shutil.copytree(ctx['lib'], state / 'lib', symlinks=False)
     (state / 'os').mkdir()
-    # Private independent rootfs: no hardlinks to the live mutable image / upper.
+    # 私有独立 rootfs：不硬链到线上可变镜像 / upper。
     dest_rootfs = state / 'os' / ctx['config']['DISTRO']
     shutil.copytree(ctx['rootfs'], dest_rootfs, symlinks=True)
     if upper.exists() and upper.is_dir() and any(upper.iterdir()):
@@ -496,8 +496,8 @@ def start_task(ctx, root, args):
         argv = [ctx['cli'], '--root', ctx['workspace']]
         if ctx['allow_once']:
             argv += ['--allow-old-bwrap']
-        # The controller owns the deadline. GNU timeout creates a separate process
-        # group, which would otherwise escape cancellation of the CLI group.
+        # 截止时间由本控制器掌握。GNU timeout 会另建进程组，
+        # 否则取消 CLI 进程组时它会漏网。
         argv += ['exec', '--timeout', '0', '--cwd', args.cwd]
         if args.net:
             argv += ['--net', args.net]
@@ -508,8 +508,8 @@ def start_task(ctx, root, args):
                                       'origin': origin, 'workspace': ctx['workspace'],
                                       'config': ctx['config'], 'sources': ctx['sources'],
                                       'skipped': skipped, 'max_output_bytes': args.max_output_bytes})
-        # Worker lifetime is independent of this CLI. An outer supervisor can still
-        # terminate the entire host session; state then becomes lost, never success.
+        # worker 生命周期独立于本 CLI。外层监督器仍可结束整个宿主会话；
+        # 那时状态变为 lost，绝不会标成成功。
         log = os.open(job / 'controller.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             worker = subprocess.Popen([sys.executable, '-I', str(Path(__file__).resolve()),
@@ -540,7 +540,7 @@ def start_task(ctx, root, args):
 
 
 def pdeathsig(parent):
-    # A dead controller must not leave its CLI/bwrap descendants running.
+    # 控制器死后不能留下仍在跑的 CLI/bwrap 子进程。
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent:
         os._exit(125)
@@ -635,7 +635,7 @@ def log_chunk(job, stream, offset, limit):
         with os.fdopen(fd, 'rb') as f:
             size = os.fstat(f.fileno()).st_size
             if offset > size:
-                # Keep empty-read compatibility for clients that poll past EOF, but mark it.
+                # 兼容越过 EOF 轮询的客户端空读，但打上标记。
                 return {'task_id': job.name, 'stream': stream, 'offset': offset,
                         'next_offset': offset, 'data_base64': '',
                         'size': size, 'eof': True, 'cursor_past_eof': True,
@@ -683,7 +683,7 @@ def diff_task(ctx, job, as_json):
     result = {'kind': 'workspace_diff', 'task_id': job.name, 'changed_files': sorted(
         name for name in set(current) | set(baseline) if current.get(name) != baseline.get(name)),
         'origin_changed': conflicts, 'patch_base64': base64.b64encode(patch).decode(),
-        'notes': 'Export only; review the patch and source baseline before applying. CapBox never auto-applies isolate diffs — apply on the host only after review.'}
+        'notes': '仅导出；应用前请审阅补丁与源基线。CapBox 从不自动应用 isolate diff —— 审阅后只在宿主上应用。'}
     if as_json:
         emit(result)
     else:

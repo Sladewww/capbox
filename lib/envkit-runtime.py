@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host readiness plans and content-locked offline environment snapshots."""
+"""宿主就绪计划与内容锁定的离线环境快照。"""
 import argparse
 import ctypes
 import ctypes.util
@@ -34,19 +34,19 @@ def mcp_defaults():
 def build_mcp_parser(parent=None):
     defaults=mcp_defaults()
     mcp=argparse.ArgumentParser(prog='capbox mcp', parents=[] if parent is None else [parent], add_help=True)
-    # Used both by main() and tests; keep choices/defaults centralized.
+    # main() 与测试共用；选项与默认值集中在此。
     mcp.add_argument('action', choices=['serve'])
     mcp.add_argument('--profile', choices=list(defaults.ALLOWED_PROFILES),
                      default=defaults.DEFAULT_PROFILE,
-                     help='security profile (default: %(default)s)')
+                     help='安全配置档（默认: %(default)s)')
     mcp.add_argument('--net', choices=list(defaults.ALLOWED_NET),
                      default=defaults.DEFAULT_NET,
-                     help='network mode (default: %(default)s; open is rejected)')
+                     help='网络模式（默认: %(default)s；拒绝 open）')
     mcp.add_argument('--workspace-mode', choices=list(defaults.ALLOWED_WORKSPACE_MODES),
                      default=defaults.DEFAULT_WORKSPACE_MODE,
-                     help='task workspace (default: %(default)s)')
+                     help='任务工作区（默认: %(default)s)')
     mcp.add_argument('--max-timeout', type=int, default=defaults.DEFAULT_MAX_TIMEOUT,
-                     help='max task timeout seconds (default: %(default)s)')
+                     help='任务超时上限秒数（默认: %(default)s)')
     return mcp
 
 BUNDLE_SCHEMA = 'capbox.bundle.v1'
@@ -169,7 +169,7 @@ def readiness(ctx, probe):
                   'status':seccomp})
     items.append({'id':'python-safe-extract','required':True,
                   'status':'available' if hasattr(tarfile,'data_filter') and hasattr(os.path,'ALLOW_MISSING') else 'unsupported',
-                  'detail':'Bundle restore requires the security-patched tarfile data filter and realpath ALLOW_MISSING'})
+                  'detail':'环境包恢复需要带安全补丁的 tarfile data filter 与 realpath ALLOW_MISSING'})
     if probe and shutil.which('gcc'):
         with tempfile.TemporaryDirectory(prefix='capbox-setup-') as temporary:
             p=subprocess.run(['gcc','-static','-x','c','-o',str(Path(temporary)/'probe'),'-'],
@@ -178,7 +178,7 @@ def readiness(ctx, probe):
                           'status':'available' if p.returncode==0 else 'unavailable'})
     else:
         items.append({'id':'gcc-static','required':landlock,'status':'not_probed',
-                      'detail':'setup check --probe tests the host static toolchain'})
+                      'detail':'setup check --probe 会探测宿主静态工具链'})
     supported = platform.system()=='Linux' and platform.machine() in ('x86_64','aarch64')
     ready = supported and all(i['status']=='available' for i in items if i['required'])
     sysctls={}
@@ -188,8 +188,8 @@ def readiness(ctx, probe):
             sysctls[name]=path.read_text().strip()
     return {'kind':'host_readiness','dependencies_ready':ready,'host':dict(os_release(),architecture=platform.machine(),supported=supported),
             'runtime_version':ctx['version'],'project_version':installed_version(ctx),'components':items,'kernel_policy':sysctls,
-            'userns_execution':'not_probed; run doctor after init',
-            'resource_enforcement':'not_probed; configured limits still require real launch/delegation',
+            'userns_execution':'未探测；init 后请跑 doctor',
+            'resource_enforcement':'未探测；已配置限额仍需真实启动/委托才生效',
             'workspace_runtime':str(Path(ctx['state'])/'lib/version.sh')}
 
 
@@ -208,16 +208,16 @@ def install_plan(ctx, report, source):
         commands=[]
     followup=[[ctx['cli'],'--root',ctx['workspace'],'setup','check','--probe','--json']]
     if source:
-        # Existing upgrade owns validation, stopping rules, backups and recovery.
+        # 既有 upgrade 负责校验、停服规则、备份与恢复。
         source=str(real_directory(Path(source)))
         followup += [[str(Path(source)/'bin/capbox'),'--root',ctx['workspace'],'upgrade',action,'--from',source]
                      for action in ('check','apply')]
         followup += [[str(Path(source)/'bin/capbox'),'--root',ctx['workspace'],'upgrade','rollback']]
     return {'kind':'installation_plan','executed':False,'package_commands':commands,'followup_commands':followup,
-            'notes':['Distro packages may contain bubblewrap below 0.12.0; rerun setup check.',
-                     'No host packages, sysctls, AppArmor settings or project runtime were changed.',
-                     'Stop services, daemon, tasks and other writers before upgrade apply.',
-                     'No automatic download or execution of remote installers.']}
+            'notes':['发行版包装的 bubblewrap 可能低于 0.12.0；请重跑 setup check。',
+                     '未改动宿主软件包、sysctl、AppArmor 或项目运行时。',
+                     'upgrade apply 前请停掉 services、daemon、tasks 及其他写入者。',
+                     '不会自动下载或执行远程安装脚本。']}
 
 
 def real_directory(path):
@@ -263,7 +263,7 @@ def digest(path):
 
 
 def publish_directory(source,dest):
-    # Atomic no-replace publication also prevents concurrent init/pack clobbering.
+    # 原子且不覆盖的发布，也避免并发 init/pack 互相踩踏。
     libc=ctypes.CDLL(None,use_errno=True)
     try:rename=libc.renameat2
     except AttributeError as exc:raise Failure('需要支持 renameat2 的 Linux C 库') from exc
@@ -289,8 +289,8 @@ def copy_artifact(source,dest):
 
 
 def validate_launch_directories(root):
-    # The normal host launcher creates these mountpoints/config parents. Reject
-    # links here so importing an image cannot redirect those host-side writes.
+    # 常规宿主启动器会创建这些挂载点/配置父目录。在此拒绝链接，
+    # 防止导入镜像把宿主侧写入重定向走。
     paths=('etc','proc','sys','dev','tmp','run','root','workspace','var','var/log',
            'var/lib/capbox-data','home','mnt','etc/apk','etc/profile.d','etc/apt/apt.conf.d','etc/ssl/certs')
     for name in paths:
@@ -391,7 +391,7 @@ def pack(ctx,args):
                   'runtime_version':ctx['version'],'config':config,'files':{name:digest(private/name) for name in FILES}}
         (private/'manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
         for file in private.iterdir():file.chmod(0o600)
-        # Destination must still be absent; rename cannot replace a populated directory.
+        # 目标仍须不存在；rename 不能替换已有内容的目录。
         publish_directory(private,dest)
         json_output({'kind':'bundle_packed','path':str(dest),'manifest_sha256':digest(dest/'manifest.json'),
                      'files':manifest['files']})
@@ -400,7 +400,7 @@ def pack(ctx,args):
 
 
 def restore(ctx,args):
-    # Stage all input and verify that immutable copy, not a path writable by a guest.
+    # 暂存全部输入并校验这份不可变副本，而非 guest 可写路径。
     parent=real_directory(Path(ctx['state'])/'os')
     target=parent/ctx['config']['DISTRO']
     if target.exists() or target.is_symlink():raise Failure('restore 只接受不存在的 rootfs，不覆盖已有环境')
@@ -413,7 +413,7 @@ def restore(ctx,args):
         if hashlib.sha256(json.dumps(staged_manifest,sort_keys=True).encode()).hexdigest()!=pinned:
             raise Failure('复制期间环境包清单发生变化')
         manifest=staged_manifest
-        # Extract using the existing filtered image importer, under the target FS.
+        # 用现有带过滤的镜像导入器解包，落在目标文件系统上。
         stage=Path(tempfile.mkdtemp(prefix='.bundle-',dir=parent))
         promoted=False
         try:
@@ -428,7 +428,7 @@ def restore(ctx,args):
             verify_env=environment(ctx)
             verify_env.update(CAPBOX_SECURITY_PROFILE='untrusted',CAPBOX_NET='none',CAPBOX_IDMAP='off')
             success(cli(ctx,'image','lock','verify',bundle/'package.lock',env=verify_env,timeout=120),'恢复后包清单不匹配')
-            # A pinned data-only lock is convenient for subsequent drift checks.
+            # 钉住的纯数据锁便于后续漂移检查。
             state=real_directory(Path(ctx['state'])/'state')
             lock=state/'package.lock'
             if lock.is_symlink():raise Failure('目标包锁不能是符号链接')
@@ -436,7 +436,7 @@ def restore(ctx,args):
             staged.write_bytes(read_file(bundle/'package.lock',4*1024**2));staged.chmod(0o600)
             os.replace(staged,lock)
             json_output({'kind':'bundle_restored','rootfs':str(target),'config_applied':False,
-                         'notes':'Target policy is preserved. Review recipe.env before explicitly applying configuration.'})
+                         'notes':'目标策略保持不变。显式应用配置前请审阅 recipe.env。'})
         except BaseException:
             if promoted:shutil.rmtree(target)
             raise
@@ -460,14 +460,14 @@ def main():
     mcp=families.add_parser('mcp')
     mcp.add_argument('action',choices=['serve'])
     mcp.add_argument('--profile',choices=list(defaults.ALLOWED_PROFILES),default=defaults.DEFAULT_PROFILE,
-                     help='security profile (default: %(default)s)')
+                     help='安全配置档（默认: %(default)s)')
     mcp.add_argument('--net',choices=list(defaults.ALLOWED_NET),default=defaults.DEFAULT_NET,
-                     help='network mode (default: %(default)s; open is rejected)')
+                     help='网络模式（默认: %(default)s；拒绝 open）')
     mcp.add_argument('--workspace-mode',choices=list(defaults.ALLOWED_WORKSPACE_MODES),
                      default=defaults.DEFAULT_WORKSPACE_MODE,
-                     help='task workspace (default: %(default)s)')
+                     help='任务工作区（默认: %(default)s)')
     mcp.add_argument('--max-timeout',type=int,default=defaults.DEFAULT_MAX_TIMEOUT,
-                     help='max task timeout seconds (default: %(default)s)')
+                     help='任务超时上限秒数（默认: %(default)s)')
     args=p.parse_args();ctx=context()
     if args.family=='mcp':
         mcp_ctx=dict(ctx,config=dict(ctx['config'],PROXY=''))
