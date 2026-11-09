@@ -63,7 +63,7 @@ _net_guest_path() {
   case "$1" in "$shared"/*) printf '/run/capbox-net/%s' "${1##*/}" ;; *) return 1 ;; esac
 }
 
-# Only host-written readiness signals are visible to the guest; never argv/PIDs/sockets.
+# 仅宿主写入的就绪信号对 guest 可见；绝不暴露 argv/PID/socket。
 _net_append_ready_bind() {
   local -n _ready_args="$1"
   [[ "$(_net_mode)" == restricted ]] || return 0
@@ -555,7 +555,7 @@ def wait_child():
             except Exception:
                 pass
         time.sleep(0.05)
-    raise SystemExit("publish: child netns not ready")
+    raise SystemExit("publish: 子 netns 尚未就绪")
 
 child=wait_child()
 
@@ -578,7 +578,7 @@ def splice(a,b):
 
 def handle(client):
     try:
-        # Dial guest from inside its netns; shuttle bytes via stdio of nsenter helper
+        # 从 guest 自己的 netns 内拨号；经 nsenter 助手的 stdio 搬运字节
         helper = (
             "import socket,sys,os,select\n"
             f"g=socket.create_connection(('{guest_addr}',{guest_port}))\n"
