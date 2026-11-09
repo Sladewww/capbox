@@ -5,6 +5,12 @@ CASE_TITLE="审计：summary 参数、脱敏与覆盖面"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
 case_begin "$1" "$CASE_TITLE" "$2"
 
+if is_fake_cli; then
+  skip_case "假 CLI 桩不覆盖本用例（仅真 CLI 验收）"
+  case_finish
+  exit 0
+fi
+
 AUDIT_LIB="$(cd "$(dirname "$CAPBOX_BIN")/../lib" && pwd)/audit.sh"
 assert_file_exists "$AUDIT_LIB" "CLI 库中有 audit.sh"
 
@@ -62,12 +68,6 @@ fi
 assert_file_contains "$unit_log" 'FULL_OUTPUT_OK' "full 模式写入封顶后的 output"
 
 # --- 2) help 与 audit 自身不记 ---
-if is_fake_cli; then
-  _ok "假 CLI 桩：跳过真实命令覆盖面"
-  case_finish
-  exit 0
-fi
-
 if ! rootfs_ready "$(config_distro)"; then
   _fail "前置条件未满足：rootfs 不存在，无法测 exec/shell 覆盖面"
   case_finish
