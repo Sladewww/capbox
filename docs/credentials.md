@@ -2,7 +2,7 @@
 
 CapBox 可以把真实 API key 留在宿主，让受限网络沙箱经既有白名单代理访问已批准的 HTTPS API。guest 只看到不透明占位符，例如 `capbox-sec-<32hex>`。目标主机同时在 `CAPBOX_NET_ALLOW` 中且绑定了已存密钥时，宿主代理改写 **HTTP 请求头**（不改 body，也不改 query）。
 
-这与 Docker Sandboxes 凭据管理里的 sentinel / 代理托管模型对齐，意图上也可对照 Podman secret 注入与其它宿主侧凭据中介。CapBox **不**依赖 Docker 或 Podman，v1 不做 OAuth 浏览器流，也不要求 OS keychain（文件存放在宿主私有 `0700` 目录下）。
+CapBox 不依赖 Docker 或 Podman。v1 不做 OAuth 浏览器流，也不要求 OS keychain；密钥文件放在宿主私有 `0700` 目录下。
 
 ## 快速开始
 

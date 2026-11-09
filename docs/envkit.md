@@ -168,11 +168,11 @@ guest 任务只看到 `capbox-sec-…` 占位符；宿主白名单代理改写�
 关闭 MCP 连接不会请求取消已接受的任务。它们仍受普通宿主寿命与外层监督器限制。需要时用客户端 UI 的工具审阅控件与 CapBox 取消；日志与补丁仍是不可信任务数据。
 
 <a id="5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex"></a>
-## 5. 五分钟路径：CapBox 作为外层 Linux 沙箱（Claude Code / Codex）
+## 5. 外层 Linux 沙箱路径（Claude Code / Codex）
 
-可克隆配方：把 CapBox 放在 Claude Code / Codex 类 Agent 前面当**外层 Linux 沙箱** — 不用 Docker，不用 KVM。guest 工作落在固定 MCP 默认下；补丁先审再进宿主树。
+把 CapBox 接到 Claude Code / Codex 这类 Agent 前面，作为外层 Linux 沙箱。不需要 Docker 或 KVM。guest 使用固定 MCP 默认；补丁先导出，再在宿主侧审阅应用。
 
-日常路径不要放宽的底线：
+日常默认：
 
 - 工作区 **isolated**（与 CLI `--isolate` 相同）
 - 配置 **untrusted**
@@ -194,7 +194,7 @@ capbox doctor
 # 例如 recipe apply，或把已知 Alpine rootfs 拷进 .capbox/os/alpine 做本地冒烟。
 ```
 
-3. **接入 MCP 客户端**：复制仓库内日常入口 [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)，换成两处绝对路径，指向 Claude Code / Codex / 其它 stdio MCP 客户端。裸 `mcp serve` 即可 — 这条路径**不要**加 `--net open` 或 `--workspace-mode shared`。
+3. **接入 MCP 客户端**：复制仓库内日常入口 [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)，换成两处绝对路径，指向 Claude Code / Codex / 其它 stdio MCP 客户端。裸 `mcp serve` 即可。这条路径不要加 `--net open` 或 `--workspace-mode shared`。
 
 4. **可选宿主密钥**（仅当 Agent 必须调用白名单 HTTPS API）。密钥留宿主；用 restricted 示例与 [credentials.md](credentials.md)：
 
@@ -209,8 +209,8 @@ capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.example.com
 - `capbox_policy` → 确认 `mcp.workspace_mode=isolated`、`profile=untrusted`、`net=none`
 - `capbox_execute`，argv 如 `["sh","-c","printf ok"]`，配较短 `timeout`
 - `capbox_status` / `capbox_logs` 直到成功
-- 长任务可用 `capbox_cancel`；`capbox_diff` 导出隔离补丁且**从不应用**
+- 长任务可用 `capbox_cancel`；`capbox_diff` 只导出隔离补丁，不自动应用
 
-6. 放宽网络或共享工作区属于第 4 节的显式 opt-in，不是可克隆默认。nsjail / macOS / 托管运行时不在当前范围，除非有外部采用方信号。
+6. 更宽网络或 `--workspace-mode shared` 只能按第 4 节在启动参数里显式打开。不支持 nsjail、macOS、托管运行时。
 
 回归锁：`test/security/test_envkit.py` 里的 `test_default_mcp_entry_runs_bounded_guest_task` 启动裸 `mcp serve`，断言固定策略块，执行有界 guest 命令，并检查 status/logs 成功。
