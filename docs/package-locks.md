@@ -1,8 +1,8 @@
-# Strict package locks
+# 严格包锁
 
-Requires host Python **3.10+**.
+需要宿主 Python **3.10+**。
 
-`image lock save` creates a JSON schema-1 lock with distro, architecture and the complete installed package/version set. It refuses an empty inventory, failed package query or incomplete dpkg package state.
+`image lock save` 生成 schema-1 JSON 锁，记录发行版、架构和完整已安装包/版本集合。空清单、包查询失败或不完整的 dpkg 状态会被拒绝。
 
 ```sh
 capbox image lock save
@@ -12,10 +12,10 @@ capbox image lock restore /path/to/package.lock
 capbox recipe apply --locked /path/to/package.lock capbox.recipe
 ```
 
-`verify` compares the complete current set: missing packages, extra packages and version mismatches are errors. `restore` installs exact `name=version` arguments through `capbox pkg`, then verifies the result. The normal network exception for package installation and the Alpine script compatibility filter remain in effect.
+`verify` 比对当前完整集合：缺包、多余包、版本不符都是错误。`restore` 经 `capbox pkg` 安装精确的 `name=version`，再校验结果。装包时的常规网络例外与 Alpine 脚本兼容过滤仍然生效。
 
-Locked recipe application checks that the lock satisfies every requested recipe package (including explicit versions) before committing configuration. An unavailable version, wrong distro/architecture, malformed lock or version mismatch fails. No unpinned fallback occurs. Existing newer packages may prevent a package manager from downgrading automatically; failure is explicit. Package-manager changes are not transactionally rolled back: back up important guest state before restoration.
+锁定配方应用会在提交配置前检查锁是否满足配方请求的每个包（含显式版本）。版本不可用、发行版/架构不符、锁损坏或版本不匹配都会失败，不会回退到未钉死版本。已有更新包可能阻止包管理器自动降级；失败是显式的。包管理器变更不做事务回滚：恢复前请备份重要 guest 状态。
 
-Locks record package versions; they do not archive repository contents or pin host kernels. For durable reconstruction, retain trusted repository snapshots or CapBox rootfs exports as well. A successful lock restoration verifies package identity/version, not arbitrary application file contents.
+锁记录包版本，不归档软件源内容，也不钉死宿主内核。要长期可重建，请另留可信软件源快照或 CapBox rootfs 导出。锁恢复成功只验证包身份/版本，不保证任意应用文件内容。
 
-The pre-0.3.6 `package.lock` text file was an inventory, with no strict replay contract. It is rejected by `verify`/`restore`; regenerate it with `image lock save` on the environment you want to record. The file is data and is never sourced.
+0.3.6 之前的 `package.lock` 文本文件只是清单，没有严格重放契约。`verify`/`restore` 会拒绝它；在你要记录的环境上重新跑 `image lock save`。该文件是数据，从不被 source。

@@ -1,10 +1,10 @@
-# Environment tools (setup, bundles, MCP)
+# 环境工具（setup、bundle、MCP）
 
-These commands require host Python 3.10+. They build on [runtime upgrades](upgrades.md), [strict package locks](package-locks.md) and [local tasks](agent-workflows.md).
+这些命令需要宿主 Python 3.10+。它们建立在 [运行时升级](upgrades.md)、[严格包锁](package-locks.md) 与 [本地任务](agent-workflows.md) 之上。
 
-## 1. Inspect installation and upgrade requirements
+## 1. 检查安装与升级需求
 
-From a template or an initialized project:
+在模板或已初始化项目上：
 
 ```sh
 capbox setup check --json
@@ -13,34 +13,34 @@ capbox setup plan --json
 capbox --root /path/to/project setup plan --from /path/to/new-template --json
 ```
 
-`setup check` reports host/architecture, resolved dependency paths and minimum versions, libseccomp availability, the template/runtime version and installed project version. `dependencies_ready` concerns required dependencies. User-namespace execution and cgroup enforcement remain `not_probed`: use `doctor` and actual launches after initializing a guest. Reading a sysctl is not proof that the host security policy permits execution.
+`setup check` 报告宿主/架构、解析到的依赖路径与最低版本、libseccomp 是否可用、模板/运行时版本与已装项目版本。`dependencies_ready` 只谈必选依赖。用户命名空间执行与 cgroup 兑现仍是 `not_probed`：初始化 guest 后用 `doctor` 与真实启动核对。读到 sysctl 不等于宿主安全策略允许执行。
 
-`--probe` additionally compiles a fixed, trivial C program with `gcc -static` in a private temporary directory. It does not run the resulting binary or change host policy. A strict/Landlock configuration needs this static toolchain check before readiness can be confirmed.
+`--probe` 会在私有临时目录用 `gcc -static` 编译一段固定的极简 C 程序。不运行产物，也不改宿主策略。strict/Landlock 配置在确认就绪前需要这次静态工具链检查。
 
-The `python-safe-extract` component checks the secure importer's Python capabilities (`tarfile.data_filter` and `os.path.ALLOW_MISSING`). Keep Python security updates installed; an older 3.10+ patch release can still lack these capabilities, and bundle restore then fails closed.
+`python-safe-extract` 组件检查安全导入器的 Python 能力（`tarfile.data_filter` 与 `os.path.ALLOW_MISSING`）。请保持 Python 安全更新；较旧的 3.10+ 补丁版仍可能缺这些能力，此时 bundle restore 会失败关闭。
 
-`setup plan` outputs package-manager argv for recognized Debian/Ubuntu, Alpine, Fedora/RHEL and Arch families. It never executes installers, downloads a script, modifies AppArmor/sysctls or grants privileges. Package availability and bubblewrap versions vary by release; review the proposed commands, execute the appropriate host installation yourself, then repeat the check. Package-manager plans are guidance, not an additional tested host matrix.
+`setup plan` 为识别到的 Debian/Ubuntu、Alpine、Fedora/RHEL、Arch 家族输出包管理器 argv。它从不执行安装器、不下载脚本、不改 AppArmor/sysctl、不授予特权。包可用性与 bubblewrap 版本随发行版变化；审阅提议命令，自行完成合适的宿主安装，再重复 check。包管理器计划是指引，不是额外测试过的宿主矩阵。
 
-With `--from`, the plan includes commands for the existing upgrade check/apply/rollback. Setup and upgrade use the new template's code even when inspecting an older project runtime. Stop services, daemon, tasks and other exec calls with the old CLI before applying a runtime upgrade. The existing private backup and rollback protocol remains in use.
+带 `--from` 时，计划含既有 upgrade check/apply/rollback 命令。即使检查的是旧项目运行时，setup 与 upgrade 也使用新模板代码。应用运行时升级前，用旧 CLI 停掉 service、daemon、task 与其它 exec。私有备份与回滚协议不变。
 
-## 2. Starter recipes and strict replay
+## 2. 入门配方与严格重放
 
-Three starter recipes are shipped under `recipes/`: Python, Node and native build tools. Use their full paths when the template is outside the project:
+`recipes/` 下附带三份入门配方：Python、Node 与原生构建工具。模板在项目外时请用完整路径：
 
 ```sh
 capbox recipe check /path/to/template/recipes/python.recipe
 capbox recipe apply /path/to/template/recipes/python.recipe
 capbox image lock save
 capbox image lock verify
-# Exact package versions; unavailable versions fail:
+# 精确包版本；版本不可用则失败：
 capbox recipe apply --locked /path/to/package.lock /path/to/template/recipes/python.recipe
 ```
 
-Starters are initial package selections, not already-locked environments. Configure task resource budgets explicitly. `recipe export FILE` returns validated `capbox.recipe.v1` JSON without sourcing or executing the recipe. Strict package replay still depends on version availability in repositories; use a bundle when an already-prepared rootfs needs offline transport.
+入门配方是初始包选择，不是已锁定环境。任务资源额度需显式配置。`recipe export FILE` 返回已校验的 `capbox.recipe.v1` JSON，不 source、不执行配方。严格包重放仍依赖软件源上的版本可用性；已准备好的 rootfs 需要离线搬运时用 bundle。
 
-## 3. Portable, content-locked environment bundles
+## 3. 可携带、内容锁定的环境包
 
-Stop writers before packing. Choose a **new directory outside the workspace**:
+打包前停掉写入方。选择**工作区外的新目录**：
 
 ```sh
 capbox bundle pack /path/outside/project/python-environment --recipe /path/to/template/recipes/python.recipe
@@ -48,28 +48,28 @@ capbox bundle verify /path/outside/project/python-environment
 capbox bundle check /path/outside/project/python-environment
 ```
 
-A bundle contains fixed filenames:
+bundle 含固定文件名：
 
-| File | Purpose |
+| 文件 | 用途 |
 |---|---|
-| `manifest.json` | Bundle schema, distro, host architecture, source runtime version, portable configuration and SHA256 per artifact |
-| `rootfs.tar.gz` | Full current physical rootfs archive |
-| `package.lock` | Installed package names and exact versions |
-| `recipe.env` | Canonical portable configuration with `INIT=0` |
+| `manifest.json` | bundle schema、发行版、宿主架构、源运行时版本、可携带配置与各产物 SHA256 |
+| `rootfs.tar.gz` | 当前物理 rootfs 完整归档 |
+| `package.lock` | 已装包名与精确版本 |
+| `recipe.env` | 规范可携带配置，`INIT=0` |
 
-Pack refuses running managed workloads, nonempty overlay uppers and absolute host bind specifications. Other direct exec calls and external writers must also be stopped. It captures a physical rootfs, not a merged overlay or a live database snapshot. Business workspace files are not part of this archive. Config credentials/proxies, host-specific bwrap paths and UID-map ranges are not copied into the portable recipe. If a supplied recipe requests nonportable host settings or differs from the current environment, packing fails.
+pack 会拒绝仍在跑的受管负载、非空 overlay upper 与绝对宿主 bind 规格。其它直接 exec 与外部写入也须停掉。它捕获物理 rootfs，不是合并后的 overlay，也不是在线数据库快照。业务工作区文件不进此归档。配置凭据/代理、宿主特有 bwrap 路径与 UID 映射范围不拷进可携带配方。若提供的配方请求不可携带宿主设置，或与当前环境不符，打包失败。
 
-The **rootfs itself can contain credentials, proxy files, caches or application data**. Inspect and clean it before sharing. Artifacts are created privately and are never uploaded automatically. Hashes provide content integrity, not publisher authentication. Pack prints the manifest digest; preserve that digest through a trusted channel and pin it when checking or restoring:
+**rootfs 本身可能含凭据、代理文件、缓存或应用数据。** 分享前请检查并清理。产物私有创建，不会自动上传。哈希提供内容完整性，不是发布者认证。pack 打印 manifest digest；经可信渠道保存该 digest，并在 check/restore 时钉住：
 
 ```sh
 capbox bundle verify /path/to/environment --manifest-sha256 SHA256_FROM_PACK
 ```
 
-`verify` checks schema, distro, architecture, hashes, canonical recipe and archive paths/types before reporting success. `check` additionally compares the active package inventory and portable configuration, returning nonzero for drift. Neither command silently updates a lock or installs newer package versions.
+`verify` 在报告成功前检查 schema、发行版、架构、哈希、规范配方与归档路径/类型。`check` 额外比对活动包清单与可携带配置，漂移则非零退出。两者都不会静默更新锁或安装更新包。
 
-### Restore into a fresh target
+### 恢复到全新目标
 
-Use a fresh independent project with no existing rootfs and select the bundle's distro first. For Alpine, for example:
+使用尚无 rootfs 的全新独立项目，并先选好 bundle 的发行版。以 Alpine 为例：
 
 ```sh
 capbox --root /path/to/fresh-project bootstrap
@@ -81,26 +81,26 @@ capbox --root /path/to/fresh-project bundle restore /path/to/environment --manif
 capbox --root /path/to/fresh-project bundle check /path/to/environment
 ```
 
-For Ubuntu, also set `DISTRO=ubuntu` before restore. The project directory must already exist. A fresh target is required; existing rootfs data is never replaced. Input is copied into a private staging area, reverified and extracted through the filtered image importer. Archive publication is atomic with no-replace semantics. Restored package inventory is checked through an untrusted, no-network, single-UID launch; failure removes only the newly promoted rootfs.
+Ubuntu 还需在 restore 前设 `DISTRO=ubuntu`。项目目录必须已存在。目标必须是全新的；已有 rootfs 数据不会被替换。输入拷到私有暂存区，再校验，经过滤的镜像导入器解压。归档发布是原子的、不替换。恢复后的包清单经 untrusted、无网络、单 UID 启动检查；失败只删除新提升的 rootfs。
 
-Target security and resource configuration is preserved. `config_applied` is false. Review `configuration_drift` and the bundled `recipe.env` before explicitly applying source settings; do not import a less restrictive profile just to suppress a drift report. Workspace data, runtime installation, host delegation and kernel support remain separate concerns.
+目标安全与资源配置保留。`config_applied` 为 false。显式应用源设置前，先审阅 `configuration_drift` 与附带的 `recipe.env`；不要为了压掉漂移报告而导入更松的配置。工作区数据、运行时安装、宿主委派与内核支持仍是各自独立的问题。
 
-Bundles use the existing safe image extraction semantics, including permission/ownership sanitization; they are not a promise of bit-identical ACLs, owners, build results or running process state. Limits: 4GiB per artifact, 8GiB declared expanded data and 200,000 archive members. Atomic directory promotion requires Linux `renameat2`. Plan disk space and copy time accordingly.
+bundle 使用既有安全镜像解压语义（含权限/属主净化）；不承诺 ACL、属主、构建结果或运行进程状态逐位相同。限制：每产物 4GiB、声明展开数据 8GiB、归档成员 200,000。原子目录提升需要 Linux `renameat2`。请按此规划磁盘与拷贝时间。
 
-## 4. A fixed-scope stdio MCP adapter
+## 4. 固定范围的 stdio MCP 适配器
 
-Initialize/prebuild the workspace before starting the server. The daily agent entry is bare `mcp serve` — defaults already pin the trust boundary:
+启动服务前先初始化/预构建工作区。日常 Agent 入口是裸 `mcp serve` — 默认已钉死信任边界：
 
 ```sh
 capbox --root /path/to/project mcp serve
-# Opt-in only (widens the boundary; do not use as the daily default):
+# 仅显式 opt-in（会放宽边界；不要当日常默认）：
 capbox --root /path/to/project mcp serve --workspace-mode shared
 capbox --root /path/to/project mcp serve --net restricted
 ```
 
-Defaults: **isolated** task workspace (same `--isolate` rules as the CLI: Git dirty trees, non-Git walks, overlay merge), **`untrusted`** profile, **`none`** network, maximum execution timeout **600** seconds and **8MiB** retained output per stream. Startup accepts `strict` and `restricted` explicitly; restricted needs `NET_ALLOW`. No tool call may change workspace root, profile, network mode, output budget or maximum timeout. The adapter clears configured upstream PROXY values; restricted mode uses its own allowlist bridge. Host configuration supplies resource limits; the adapter does not invent or claim cgroup delegation.
+默认：**isolated** 任务工作区（与 CLI 的 `--isolate` 规则相同：Git 脏树、非 Git 遍历、overlay 合并）、**`untrusted`** 配置、**`none`** 网络、最长执行超时 **600** 秒、每路流保留输出 **8MiB**。启动时可显式接受 `strict` 与 `restricted`；restricted 需要 `NET_ALLOW`。任何工具调用都不能改工作区 root、配置、网络模式、输出预算或最大超时。适配器会清掉已配置的上游 PROXY；restricted 模式用自己的白名单桥。资源限额由宿主配置提供；适配器不发明或声称 cgroup 委派。
 
-Configure your MCP client to launch the CLI with an absolute template executable path. Bare `mcp serve` is enough for the daily path (isolated / untrusted / no network). For clients using a `mcpServers` block:
+把 MCP 客户端配成用模板可执行文件的绝对路径启动 CLI。日常路径用裸 `mcp serve` 即可（isolated / untrusted / 无网络）。使用 `mcpServers` 块的客户端示例：
 
 ```json
 {
@@ -113,24 +113,25 @@ Configure your MCP client to launch the CLI with an absolute template executable
 }
 ```
 
-Checked-in copies: [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json) (daily defaults) and [`examples/mcpServers.capbox.restricted.json`](../examples/mcpServers.capbox.restricted.json) (host credential proxy).
+仓库内副本：[`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)（日常默认）与 [`examples/mcpServers.capbox.restricted.json`](../examples/mcpServers.capbox.restricted.json)（宿主凭据代理）。
 
-### Host secrets with MCP (restricted only)
+<a id="host-secrets-with-mcp-restricted-only"></a>
+### 宿主密钥与 MCP（restricted 专用）
 
-Real API keys stay on the host. Set them before starting MCP; never put keys in client config, tool argv, or the guest environment. Restricted network is an explicit opt-in — do **not** use `open` or shared mode for this path:
+真实 API key 留在宿主。启动 MCP 前设置；不要把密钥写进客户端配置、工具 argv 或 guest 环境。受限网络是显式 opt-in — 这条路径**不要**用 `open` 或 shared：
 
 ```sh
-# 1) Store the key on the host (stdin / import; never --value on argv)
+# 1) 密钥存宿主（stdin / import；不要在 argv 上用 --value）
 printf '%s' "$OPENAI_API_KEY" | capbox --root /path/to/project secret set openai --value-stdin
 
-# 2) Allow only the provider host(s); CapBox will not widen NET_ALLOW for you
+# 2) 只放行提供商主机；CapBox 不会替你扩大 NET_ALLOW
 capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.openai.com
 
-# 3) Start MCP with restricted net (still isolated + untrusted by default)
+# 3) 用 restricted 网络启动 MCP（默认仍是 isolated + untrusted）
 capbox --root /path/to/project mcp serve --net restricted
 ```
 
-Client config for the credential-aware entry (fixed root; no open net; no shared workspace):
+带凭据入口的客户端配置（固定 root；无开放网络；无共享工作区）：
 
 ```json
 {
@@ -147,68 +148,69 @@ Client config for the credential-aware entry (fixed root; no open net; no shared
 }
 ```
 
-Guest tasks only see `capbox-sec-…` placeholders; the host allowlist proxy rewrites matching request headers. Details and trust model: [credentials.md](credentials.md). `capbox_policy` reports the fixed MCP policy, including `mcp.workspace_mode` / `mcp.net` / `mcp.tools_cannot_raise_policy`.
+guest 任务只看到 `capbox-sec-…` 占位符；宿主白名单代理改写匹配的请求头。细节与信任模型：[credentials.md](credentials.md)。`capbox_policy` 报告固定 MCP 策略，含 `mcp.workspace_mode` / `mcp.net` / `mcp.tools_cannot_raise_policy`。
 
-Client configuration formats vary. This server implements [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization/version negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) and [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). It supports protocol versions `2025-11-25` and `2025-06-18`; unknown versions negotiate the newest supported version. It does not advertise MCP's optional task-augmented protocol: task IDs are CapBox tool results.
+客户端配置格式各异。本服务器实现 [stdio 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[初始化/版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。支持协议版本 `2025-11-25` 与 `2025-06-18`；未知版本协商到已支持的最新版。不宣告 MCP 可选的 task 增强协议：task ID 是 CapBox 工具结果。
 
-| Tool | Scope |
+| 工具 | 范围 |
 |---|---|
-| `capbox_execute` | Bounded noninteractive guest argv; returns a task ID |
-| `capbox_status` | Task state and exit code |
-| `capbox_logs` | Stream text plus structured byte cursor/base64 data |
-| `capbox_cancel` | Asynchronous cancellation; poll status to confirm |
-| `capbox_diff` | Export a completed isolated task patch; no apply |
-| `capbox_policy` | Server's fixed requested launch policy |
+| `capbox_execute` | 有界非交互 guest argv；返回 task ID |
+| `capbox_status` | 任务状态与退出码 |
+| `capbox_logs` | 流文本加结构化字节游标/base64 数据 |
+| `capbox_cancel` | 异步取消；轮询 status 确认 |
+| `capbox_diff` | 导出已完成隔离任务的补丁；不应用 |
+| `capbox_policy` | 服务器固定的请求启动策略 |
 
-Only `/workspace` and its descendants are accepted as cwd. The server does not expose host package installation, upgrade, configuration mutation, arbitrary host files or shell commands. Task argv executes through the normal sandbox launcher with the fixed policy. Default `isolated` workspace mode uses the same `--isolate` rules as the CLI (Git dirty trees, non-Git walks, overlay merge); there is no silent fallback to shared mode.
+只接受 `/workspace` 及其子路径作为 cwd。服务器不暴露宿主装包、升级、配置变更、任意宿主文件或 shell 命令。任务 argv 经普通沙箱启动器、按固定策略执行。默认 `isolated` 工作区模式与 CLI `--isolate` 规则相同（Git 脏树、非 Git 遍历、overlay 合并）；不会静默退回 shared。
 
-Messages are UTF-8 JSON-RPC lines, at most 1MiB per input message. Invalid JSON, oversized messages, unknown tools/parameters, bad IDs and policy override attempts are rejected. stdout contains protocol messages only; diagnostics use stderr. Tool-side failures use `isError`; log cursors remain byte offsets. Large diffs beyond the MCP result budget require local CLI export. Requests are processed serially with a bounded CLI invocation timeout; the server does not maintain a separate execution engine.
+消息是 UTF-8 JSON-RPC 行，单条输入最多 1MiB。非法 JSON、过大消息、未知工具/参数、坏 ID 与策略覆盖尝试会被拒绝。stdout 只含协议消息；诊断走 stderr。工具侧失败用 `isError`；日志游标仍是字节偏移。超出 MCP 结果预算的大 diff 请用本地 CLI 导出。请求串行处理，带有界 CLI 调用超时；服务器不另维护执行引擎。
 
-Closing the MCP connection does not request cancellation of already accepted tasks. Their normal host lifetime and outer-supervisor limits still apply. Use the client UI's tool review controls and CapBox cancellation when needed; logs and patches remain untrusted task data.
+关闭 MCP 连接不会请求取消已接受的任务。它们仍受普通宿主寿命与外层监督器限制。需要时用客户端 UI 的工具审阅控件与 CapBox 取消；日志与补丁仍是不可信任务数据。
 
-## 5. Five-minute path: CapBox as an outer Linux sandbox (Claude Code / Codex)
+<a id="5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex"></a>
+## 5. 五分钟路径：CapBox 作为外层 Linux 沙箱（Claude Code / Codex）
 
-Cloneable recipe for putting CapBox in front of Claude Code / Codex-style agents as the **outer Linux sandbox** — no Docker, no KVM. Guest work stays under fixed MCP defaults; review patches before anything lands on the host tree.
+可克隆配方：把 CapBox 放在 Claude Code / Codex 类 Agent 前面当**外层 Linux 沙箱** — 不用 Docker，不用 KVM。guest 工作落在固定 MCP 默认下；补丁先审再进宿主树。
 
-Trust floor (do not weaken for the daily path):
+日常路径不要放宽的底线：
 
-- workspace **isolated** (same `--isolate` rules as the CLI)
-- profile **untrusted**
-- network **none** (no open net as default advice)
-- tools cannot raise policy or change root
-- real API keys stay on the host (`secret set`); guests only see placeholders
+- 工作区 **isolated**（与 CLI `--isolate` 相同）
+- 配置 **untrusted**
+- 网络 **none**（默认建议不用开放网络）
+- 工具不能抬高策略或改 root
+- 真实 API key 留在宿主（`secret set`）；guest 只见占位符
 
-### Steps (~5 minutes)
+### 步骤（约 5 分钟）
 
-1. **Install the template** outside business workspaces and put it on `PATH` (see [README](../README.md#install-the-template)). Confirm `capbox version` and `bwrap --version` (≥ 0.12.0). Host Python 3.10+ is required for MCP.
+1. **安装模板**到业务工作区外并放入 `PATH`（见 [README](../README.md#安装模板)）。确认 `capbox version` 与 `bwrap --version`（≥ 0.12.0）。MCP 需要宿主 Python 3.10+。
 
-2. **Initialize a project workspace** (never `$HOME` or `/`):
+2. **初始化项目工作区**（不要用 `$HOME` 或 `/`）：
 
 ```sh
 cd /path/to/project
 capbox init --agent --distro alpine
 capbox doctor
-# Prebuild / restore a rootfs so guest argv can run (init alone is not enough for execute):
-# e.g. recipe apply, or copy a known Alpine rootfs into .capbox/os/alpine for local smoke tests.
+# 预构建 / 恢复 rootfs，guest argv 才能跑（仅 init 不够执行）：
+# 例如 recipe apply，或把已知 Alpine rootfs 拷进 .capbox/os/alpine 做本地冒烟。
 ```
 
-3. **Wire the MCP client** with the checked-in daily entry. Copy [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json), replace both absolute paths, and point Claude Code / Codex / another stdio MCP client at it. Bare `mcp serve` is enough — do **not** add `--net open` or `--workspace-mode shared` for this path.
+3. **接入 MCP 客户端**：复制仓库内日常入口 [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)，换成两处绝对路径，指向 Claude Code / Codex / 其它 stdio MCP 客户端。裸 `mcp serve` 即可 — 这条路径**不要**加 `--net open` 或 `--workspace-mode shared`。
 
-4. **Optional host secret** (only if the agent must call an allowlisted HTTPS API). Keep the key on the host; use the restricted example and [credentials.md](credentials.md):
+4. **可选宿主密钥**（仅当 Agent 必须调用白名单 HTTPS API）。密钥留宿主；用 restricted 示例与 [credentials.md](credentials.md)：
 
 ```sh
 printf '%s' "$PROVIDER_API_KEY" | capbox --root /path/to/project secret set provider --value-stdin
 capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.example.com
-# Client args: mcp serve --net restricted  (still isolated + untrusted)
+# 客户端参数：mcp serve --net restricted  （仍是 isolated + untrusted）
 ```
 
-5. **Run a trivial guest task from the client** (or any MCP tools/call UI):
+5. **从客户端跑一条极简 guest 任务**（或任意 MCP tools/call UI）：
 
-- `capbox_policy` → confirm `mcp.workspace_mode=isolated`, `profile=untrusted`, `net=none`
-- `capbox_execute` with argv like `["sh","-c","printf ok"]` and a short `timeout`
-- `capbox_status` / `capbox_logs` until succeeded
-- `capbox_cancel` if you need to stop a long task; `capbox_diff` exports an isolated patch and **never applies** it
+- `capbox_policy` → 确认 `mcp.workspace_mode=isolated`、`profile=untrusted`、`net=none`
+- `capbox_execute`，argv 如 `["sh","-c","printf ok"]`，配较短 `timeout`
+- `capbox_status` / `capbox_logs` 直到成功
+- 长任务可用 `capbox_cancel`；`capbox_diff` 导出隔离补丁且**从不应用**
 
-6. **Stop here for the daily loop.** Widening network or sharing the workspace is an explicit opt-in (section 4), not the cloneable default. nsjail / macOS / hosted runtimes are out of scope until an external adopter signal.
+6. 放宽网络或共享工作区属于第 4 节的显式 opt-in，不是可克隆默认。nsjail / macOS / 托管运行时不在当前范围，除非有外部采用方信号。
 
-Regression lock: `test_default_mcp_entry_runs_bounded_guest_task` in `test/security/test_envkit.py` starts bare `mcp serve`, asserts the fixed policy block, executes a bounded guest command, and checks status/logs success.
+回归锁：`test/security/test_envkit.py` 里的 `test_default_mcp_entry_runs_bounded_guest_task` 启动裸 `mcp serve`，断言固定策略块，执行有界 guest 命令，并检查 status/logs 成功。

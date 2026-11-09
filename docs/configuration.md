@@ -1,8 +1,8 @@
-# Configuration defaults
+# 配置默认值
 
-Generated from `lib/config.sh`; CLI version: **0.4.2**. These are bare-initialization defaults. Explicit `--agent` and `--trusted` presets overwrite their four settings. Empty quotas mean **no quota has been configured**.
+由 `lib/config.sh` 生成；CLI 版本：**0.4.2**。下列为裸初始化默认值。显式 `--agent` 与 `--trusted` 预设会覆盖各自的四项设置。空额度表示 **尚未配置额度**。
 
-| Key | Default |
+| 键 | 默认值 |
 |---|---|
 | `CAPBOX_DISTRO` | `"alpine"` |
 | `CAPBOX_MIRROR` | `"cn"` |
@@ -35,4 +35,4 @@ Generated from `lib/config.sh`; CLI version: **0.4.2**. These are bare-initializ
 | `CAPBOX_AUDIT_CMD` | `""` |
 | `CAPBOX_ALLOW_OLD_BWRAP` | `"0"` |
 
-Precedence: built-in defaults < config.env < explicit environment. `ALLOW_OLD_BWRAP` cannot be enabled through the environment. Configuration files and recipes are parsed as data, never sourced.
+优先级：内置默认 < config.env < 显式环境变量。`ALLOW_OLD_BWRAP` 不能通过环境变量打开。配置文件与配方按数据解析，从不 source。

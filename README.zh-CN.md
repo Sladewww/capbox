@@ -1,6 +1,6 @@
 # CapBox
 
-[English](README.md) | 中文
+中文 · [主 README](README.md)
 
 使用 bubblewrap 和用户命名空间，在独立项目目录中提供持久化 Linux 环境，供 coding agent 或可信开发任务装包、运行命令和服务。
 

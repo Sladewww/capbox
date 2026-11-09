@@ -1,6 +1,6 @@
-# Runtime architecture
+# 运行时架构
 
-The CLI resolves a workspace, loads a complete runtime bundle and dispatches a command. Required modules are checked explicitly; a partially copied installation fails before running guest code.
+CLI 解析工作区、加载完整运行时包并分发命令。必选模块会显式检查；安装不完整时在跑 guest 代码前失败。
 
 ```mermaid
 flowchart TD
@@ -16,13 +16,13 @@ flowchart TD
     Report --> HTML[audit-report.html: offline filters and charts]
 ```
 
-- `lib/version.sh`: the public CLI and schema versions.
-- `lib/config.sh`: whitelist parsing, validation, serialized batch persistence and effective defaults. The caller chooses when to load configuration.
-- `lib/launch.sh`: the shared bwrap parameter builder used by exec, shell, services and daemon. It builds arguments without starting the process. Daemon's historical fallback entry delegates here and refuses missing policy modules.
-- `lib/common.sh`: runtime paths, protected filesystem utilities, locking, shared execution wrappers, status and diagnostics. Further extraction can follow separately; the public shell function interfaces remain stable.
-- `lib/service.sh` and `lib/service-supervisor.py`: service definitions, readiness, process lifetime and restart policy.
-- `lib/upgrade.sh`: stop-state checks and the project upgrade lock. `upgrade-runtime.py` stages/validates complete runtime trees, records private recovery state and restores backups after failure.
-- `lib/package-lock.sh`: runs the normal guest package wrapper. `package-lock.py` validates data, produces exact package arguments and compares the installed set.
-- `lib/audit-report.py` and its HTML template: bound and normalise a selected audit JSONL snapshot, then publish a private, self-contained report outside the workspace. Browser interactions use only embedded data; no launcher or control server is exposed.
+- `lib/version.sh`：对外 CLI 与 schema 版本。
+- `lib/config.sh`：白名单解析、校验、序列化批量落盘与有效默认值。由调用方决定何时加载配置。
+- `lib/launch.sh`：exec / shell / service / daemon 共用的 bwrap 参数构建器，只组参不启动进程。daemon 的历史兜底入口也走这里，缺策略模块则拒绝。
+- `lib/common.sh`：运行时路径、受保护文件系统工具、锁、共享执行封装、状态与诊断。后续可再拆分；对外 shell 函数接口保持稳定。
+- `lib/service.sh` 与 `lib/service-supervisor.py`：服务定义、就绪、进程寿命与重启策略。
+- `lib/upgrade.sh`：停机检查与项目升级锁。`upgrade-runtime.py` 暂存/校验完整运行时树，记录私有恢复状态，失败后回滚备份。
+- `lib/package-lock.sh`：调用常规 guest 包封装。`package-lock.py` 校验数据、生成精确包参数并比对已装集合。
+- `lib/audit-report.py` 及其 HTML 模板：对选定的审计 JSONL 快照做有界规范化，再在工作区外发布私有、自包含报告。浏览器交互只用嵌入数据；不暴露启动器或控制服务。
 
-Host launchers, process identity records, BPF and helpers remain outside the guest-visible workspace. Upgrade backups use persistent host state storage, separate from disposable runtime files. Project config and rootfs are data and are never interpreted as host shell programs.
+宿主启动器、进程身份记录、BPF 与辅助程序留在 guest 可见工作区之外。升级备份用持久宿主状态存储，与一次性运行时文件分开。项目配置与 rootfs 是数据，绝不当作宿主 shell 程序解释。
