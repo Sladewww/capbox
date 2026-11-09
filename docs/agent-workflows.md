@@ -74,4 +74,4 @@ Supported scope and limits:
 - `diff` is available only after an isolated task finishes. `lost` tasks cannot be exported automatically. Changes to the private rootfs are disposable and are not part of the workspace patch.
 - Existing exec/file/bind settings are still enforced. Absolute binds referring to the original workspace may be invalid in the private copy; they are not silently granted access to the source.
 
-This implementation keeps patch application and credential provisioning with the trusted host caller. The optional [stdio MCP adapter](p1-workflows.md) exposes a fixed subset of this CLI; it does not open a network listener.
+This implementation keeps patch application and credential provisioning with the trusted host caller. The optional [stdio MCP adapter](envkit.md) exposes a fixed subset of this CLI; it does not open a network listener.

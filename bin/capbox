@@ -183,7 +183,7 @@ source "$_capbox_lib_dir/common.sh" || {
   printf '[capbox] 错误: 无法加载 %s/common.sh\n' "$_capbox_lib_dir" >&2
   exit 1
 }
-for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade p1; do
+for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade envkit; do
   if [[ ! -f "$_capbox_lib_dir/$_capbox_module.sh" ]]; then
     printf '[capbox] 错误: 安装不完整，缺少 %s/%s.sh\n' "$_capbox_lib_dir" "$_capbox_module" >&2
     exit 5
