@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Host credential store and guest placeholder preparation for CapBox.
+"""CapBox 宿主凭据库与 guest 占位符准备。
 
-Real secret values stay on the host under the private per-project state directory.
-Guests only receive opaque placeholders; the restricted net proxy rewrites matching
-HTTP(S) request headers for allowlisted domains. No OAuth browser flows and no OS
-keychain requirement in v1 (file store 0700/0600). Header rewrite only — not body
-or query string.
+真实密钥值仅保存在宿主的按项目私有状态目录。
+guest 只收到不透明占位符；restricted 网络代理按允许名单改写匹配的
+HTTP(S) 请求头。v1 不做 OAuth 浏览器流程，也不依赖系统钥匙串
+（文件库 0700/0600）。只改写请求头——不改 body 或 query。
 """
 from __future__ import annotations
 
@@ -300,7 +299,7 @@ def resolve_secret(record: Dict[str, Any], cache: Dict[str, Tuple[str, float]]) 
         refresh = record.get('refresh_seconds') or 0
         if hit and (refresh <= 0 or now - hit[1] < refresh):
             return hit[0]
-        # Dynamic sources run on the host only; never mount this into the guest.
+        # 动态来源只在宿主执行；永不挂进 guest。
         proc = subprocess.run(
             ['/bin/bash', '-c', record['command']],
             capture_output=True, text=True, timeout=30,
@@ -341,12 +340,12 @@ def allowlist_covers(domain: str, allow: List[str]) -> bool:
     for rule in allow:
         rule_host = rule.split(':', 1)[0].strip().lower()
         if host_match(domain, rule_host) or host_match(domain, rule_host.lstrip('*.')):
-            # Also accept exact / wildcard allow rules via same single-label wildcard.
+            # 同时接受精确 / 通配允许规则（同一单标签通配语义）。
             if rule_host.startswith('*.'):
                 if host_match(domain, rule_host):
                     return True
             elif domain == rule_host or domain.endswith('.' + rule_host):
-                # CapBox NET_ALLOW exact host match (no automatic subdomain unless *. used).
+                # CapBox NET_ALLOW 精确主机匹配（除非使用 *. ，否则不自动含子域）。
                 if domain == rule_host:
                     return True
         if domain == rule_host:
@@ -361,7 +360,7 @@ def placeholder() -> str:
 
 
 def ensure_mitm_ca(ca_dir: Path) -> Tuple[Path, Path]:
-    """Create a project-local MITM CA for credential HTTPS rewrite (host-only)."""
+    """为凭据 HTTPS 改写创建项目本地 MITM CA（仅宿主）。"""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -421,7 +420,7 @@ def ensure_mitm_ca(ca_dir: Path) -> Tuple[Path, Path]:
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
-    """Prepare inject map + guest placeholder env for a restricted launch."""
+    """为 restricted 启动准备 inject map 与 guest 占位符环境。"""
     allow = [p.strip() for p in (args.allow or '').split(',') if p.strip()]
     if not allow:
         print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'empty-allow',
@@ -442,7 +441,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         if not domains:
             skipped.append({'name': rec['name'], 'reason': 'domains-not-in-NET_ALLOW'})
             continue
-        # Resolve once at prepare time for static values; commands resolved by proxy on demand.
+        # 静态值在 prepare 时解析一次；命令由代理按需解析。
         entry = {
             'name': rec['name'],
             'kind': rec['kind'],
@@ -477,7 +476,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     inject_path = session_dir / 'inject.json'
     env_path = session_dir / 'guest.env'
     write_json(inject_path, inject)
-    # guest.env is NAME=placeholder lines only — never real secrets.
+    # guest.env 只有 NAME=占位符行——从无真实密钥。
     fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as fh:
         for key in sorted(guest_env):
@@ -486,7 +485,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     if needs_mitm:
         key_path, cert_path = ensure_mitm_ca(root / 'ca')
         ca_cert = str(cert_path)
-        # Bundle path for guest trust (system certs + CapBox CA) assembled by shell.
+        # guest 信任包路径（系统证书 + CapBox CA）由 shell 组装。
         inject['ca_cert'] = ca_cert
         inject['ca_key'] = str(key_path)
         write_json(inject_path, inject)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A versioned, data-only package lock; never execute package-manager output."""
+"""版本化的纯数据包锁；永不执行包管理器输出。"""
 import argparse
 import json
 from pathlib import Path
@@ -103,7 +103,7 @@ def main():
             mismatch = sorted(n for n in packages.keys() & actual.keys()
                               if packages[n] != actual[n])
             raise ValueError(f'环境与包锁不一致：缺失 {missing}，额外 {extra}，版本差异 {mismatch}')
-        print('OK package.lock')
+        print('包锁验证通过')
 
 
 if __name__ == '__main__':
