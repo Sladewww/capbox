@@ -33,6 +33,7 @@ readonly CAPBOX_CFG_KEYS=(
   AUDIT
   AUDIT_CMD
   ALLOW_OLD_BWRAP
+  LANG
 )
 
 # 哪些配置键来自“显式配置”（环境变量或 config.env），用于区分内置默认值与用户意图
@@ -270,6 +271,16 @@ _cfg_validate() {
         log_err "CAPBOX_ALLOW_OLD_BWRAP 只能是 0 或 1（当前: '$v'）。持久放行: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1"
         return 2
       }
+      ;;
+    LANG)
+      if [[ -n "$v" ]]; then
+        if ! _capbox_parse_lang_value "$v" >/dev/null; then
+          printf '%s\n%s\n' \
+            'CAPBOX_LANG 取值无效（仅支持 zh / en 及其区域形式，例如 zh_CN、en_US）。' \
+            'Invalid CAPBOX_LANG (accepted values: zh / en and regional forms such as zh_CN, en_US).' >&2
+          return 2
+        fi
+      fi
       ;;
     *)
       log_err "未知配置项: CAPBOX_${k}"
@@ -555,6 +566,11 @@ load_config() {
   _capbox_resolve_bwrap
 
   _capbox_derive_paths
+
+  # 语言在配置加载之后解析：进程环境 CAPBOX_LANG > config.env > locale
+  if declare -F _capbox_resolve_lang >/dev/null 2>&1; then
+    _capbox_resolve_lang
+  fi
 }
 
 config_get() {

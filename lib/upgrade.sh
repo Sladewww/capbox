@@ -44,18 +44,7 @@ cmd_upgrade() {
   case "${1:-}" in
     check|apply|rollback) action="$1"; shift ;;
     -h|--help)
-      cat <<'HELP'
-用法: capbox upgrade check --from TEMPLATE [--json]
-      capbox upgrade apply --from TEMPLATE
-      capbox upgrade rollback
-
-  TEMPLATE 是工作区外、由你信任的完整 CapBox 安装目录（含 bin/lib）。
-  check 比较运行文件；apply 暂存并校验成套 bin/lib，私有备份后替换。
-  替换或冒烟检查失败时恢复原文件；rollback 恢复最近一次成功升级前的文件。
-  必须先用旧 CLI 停止所有 service/daemon，并停止其它 exec；不会替你杀进程。
-  仅更新运行文件；配置、rootfs、业务数据保持原位置。备份持久保存在工作区外的 XDG_STATE_HOME/capbox（默认 ~/.local/state/capbox）。
-  旧项目请从新版模板的 bin/capbox 调用本命令（--root 指定项目）。
-HELP
+      i18n_print help.upgrade
       return 0 ;;
   esac
   while (( $# )); do

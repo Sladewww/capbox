@@ -21,6 +21,7 @@ class ConfigurationTests(unittest.TestCase):
         runtime.mkdir(mode=0o700)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
         self.env['XDG_RUNTIME_DIR'] = str(runtime)
+        self.env['CAPBOX_LANG'] = 'zh'
         self.cli('bootstrap', check=True)
         self.config = self.ws / '.capbox/config.env'
         self.cli('config', 'set', 'NET', 'open', check=True)

@@ -34,15 +34,19 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('CAPBOX_', '_CAPBOX_'))}
     env.update(CAPBOX_DIR=str(workspace / '.capbox'), CAPBOX_WORKSPACE=str(workspace))
+    # 文档不随 locale 切换：cli-reference 固定以中文生成。
+    help_env = dict(env, CAPBOX_LANG='zh')
 
     def cli(*command):
         return subprocess.check_output([str(REPO / 'bin/capbox'), '--root', str(workspace),
-                                        *command], env=env, text=True)
+                                        *command], env=help_env, text=True)
 
     version = cli('version').split()[-1]
     count = len(list((REPO / 'test/cases').glob('t[0-9][0-9].sh')))
     sections = [('# CLI 参考\n\n由 `python3 tools/generate-docs.py` 生成；'
-                 f'不要手改命令输出。CLI 版本：**{version}**。\n')]
+                 f'不要手改命令输出。CLI 版本：**{version}**。'
+                 '本文件固定以 `CAPBOX_LANG=zh` 生成，不随 locale 切换'
+                 '（仓库文档政策：README.md 英文，README.zh-CN.md 与 docs/ 中文）。\n')]
     for command in [('--help',), ('init', '--help'), ('upgrade', '--help'),
                     ('recipe', '--help'), ('image', '--help'), ('service', '--help'),
                     ('task', '--help'), ('task', 'start', '--help'),
@@ -65,7 +69,13 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
         text += f'| `CAPBOX_{key}` | `{json.dumps(value, ensure_ascii=False)}` |\n'
     text += ('\n优先级：内置默认 < config.env < 显式环境变量。'
              '`ALLOW_OLD_BWRAP` 不能通过环境变量打开。'
-             '配置文件与配方按数据解析，从不 source。\n')
+             '配置文件与配方按数据解析，从不 source。\n'
+             '\n`CAPBOX_LANG` 可选 `zh` / `en` 及其区域形式（如 `zh_CN`、`en_US`）。'
+             '进程环境变量优先于 `config.env`，再才是 locale。'
+             '未设置时：仅 `zh_CN`、`zh_CN.*` 与纯 `zh`（含 `zh.UTF-8`）为中文；'
+             '其余（含未设置、`C`、`C.UTF-8`、`en_US`、`zh_TW`、`zh_HK`）为英文。'
+             '非法值以固定中英各一句报错并退出。'
+             '`docs/cli-reference.md` 始终以 `CAPBOX_LANG=zh` 生成，不随 locale 切换。\n')
     write_or_check('docs/configuration.md', text)
     for name in ['README.md', 'README.zh-CN.md', 'CONTRIBUTING.md']:
         path = REPO / name

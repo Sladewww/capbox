@@ -565,21 +565,7 @@ cmd_init() {
         shift
         ;;
       -h | --help)
-        cat <<'EOF'
-用法: capbox init [--distro alpine|ubuntu] [--force] [--from URL|本地路径] [--agent|--trusted]
-
-  若当前工作区还没有完整的 .capbox/，会先从已安装的 CapBox 模板脚手架
-  bin/、lib/、skill/ 到 $PWD/.capbox（不覆盖已有文件，不复制 cache/os/run）。
-
-  --distro D   选择发行版（默认取 CAPBOX_DISTRO，初始 alpine）
-  --force      忽略缓存重新下载，并覆盖已有 rootfs
-  --from P     指定镜像来源：http(s) URL 或本地 tarball 路径
-  --trusted    可信开发预设：compat + open + IDMAP=auto + RESOURCES_MODE=warn
-  --agent      agent 预设：untrusted + none + IDMAP=off + RESOURCES_MODE=require
-               MEMORY_MAX/CPU_MAX/PIDS_MAX 需按任务单独配置；空值表示未设置额度。
-               pkg install / pkg update 仍出网。其它出网在当次命令声明：
-               exec|shell|up --net restricted（需 CAPBOX_NET_ALLOW）或 --net open
-EOF
+        i18n_print help.init
         return 0
         ;;
       *)
@@ -627,12 +613,7 @@ cmd_bootstrap() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
-        cat <<'EOF'
-用法: capbox bootstrap
-
-  在当前工作区创建/补齐 .capbox/（从已安装模板复制 bin、lib、skill）。
-  不下载 rootfs；随后请运行 capbox init。
-EOF
+        i18n_print help.bootstrap
         return 0
         ;;
       *)

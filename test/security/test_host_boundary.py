@@ -24,6 +24,7 @@ class HostBoundaryTests(unittest.TestCase):
             if key.startswith("CAPBOX_"):
                 del self.env[key]
         self.env.update(CAPBOX_DIR=str(self.state),
+                        CAPBOX_LANG="zh",
                         CAPBOX_WORKSPACE=str(self.workspace),
                         XDG_RUNTIME_DIR=str(self.base), CAPBOX_IDMAP="off")
 

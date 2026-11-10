@@ -14,18 +14,7 @@ cmd_secret() {
   case "${1:-}" in
     set|ls|rm|import|prepare) _credentials_command "$@" ;;
     -h|--help|help|"")
-      cat <<'HELP'
-用法: capbox secret set|ls|rm|import
-
-  secret set <service> [--value-stdin|--command CMD]
-  secret set --custom --host HOST [--host HOST...] --env NAME [--name ID] [--value-stdin|--command CMD]
-  secret ls
-  secret rm <name>
-  secret import [service] [--all] [--force] [--dry-run]
-
-真实密钥只保存在宿主私有目录（0700/0600）。guest 仅见 capbox-sec-<32hex> 占位符；
-restricted 代理在 NET_ALLOW 授权域名上改写 HTTP(S) 请求头。详见 docs/credentials.md。
-HELP
+      i18n_print help.secret
       ;;
     *)
       log_err "未知 secret 子命令: ${1:-}"

@@ -124,26 +124,7 @@ cmd_service() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     -h|--help|"")
-      cat <<'HELP'
-用法: capbox service <start|stop|status|logs|list> NAME [options]
-
-  start NAME     按 .capbox/services/NAME.env 启动（独立 bwrap）
-  stop NAME      停止服务
-  status NAME    查看状态与诊断
-  logs NAME [-f] [-n N]
-  list           列出已定义服务
-
-示例 (.capbox/services/nginx.env):
-  CMD='nginx -g "daemon off;"'
-  USER=www-data
-  CWD=/
-  READY_TCP=127.0.0.1:18080
-  HEALTH_INTERVAL=5
-  RESTART=on-failure
-  RESTART_MAX=3
-  STOP_TIMEOUT=10
-  DEPENDS_ON=other
-HELP
+      i18n_print help.service
       return 0
       ;;
     list)
@@ -777,7 +758,7 @@ _service_logs() {
       -f|--follow) follow=1; shift ;;
       -n) lines="${2:-50}"; shift 2 || shift ;;
       -n=*) lines="${1#*=}"; shift ;;
-      -h|--help) printf '用法: capbox service logs NAME [-f] [-n N]\n'; return 0 ;;
+      -h|--help) i18n_print help.service.logs; return 0 ;;
       -*) die 2 "service logs: 未知选项 $1" ;;
       *) if [[ -z "$name" ]]; then name="$1"; shift; else die 2 "多余参数 $1"; fi ;;
     esac

@@ -21,6 +21,7 @@ class UpgradeTests(unittest.TestCase):
         self.runtime = self.base / 'runtime'
         self.runtime.mkdir(mode=0o700)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
+        self.env['CAPBOX_LANG'] = 'zh'
         self.env['XDG_RUNTIME_DIR'] = str(self.runtime)
         self.env['XDG_STATE_HOME'] = str(self.base / 'state')
         self.cli('bootstrap', check=True)

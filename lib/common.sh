@@ -8,7 +8,8 @@
 #   * 本文件由 bin/capbox 在最前面 source，source 完成后以下变量即可用：
 #       CAPBOX_DIR CAPBOX_WORKSPACE CAPBOX_ROOTFS CAPBOX_DISTRO CAPBOX_DAEMON_DIR
 #   * 所有脚本 `set -u` 友好：可选变量一律用 ${VAR:-} 取值。
-#   * 用户可见信息一律中文。
+#   * 用户可见信息按 CAPBOX_LANG / locale 选择中文或英文；未设置且未命中中文 locale 时默认英文。
+#     log_debug 始终英文。本文件此版只翻译日志前缀与 --help；其余文案后续再迁。
 # =============================================================================
 
 # ---------- 0. 自身定位 -------------------------------------------------------
@@ -56,16 +57,19 @@ else
   _C_GRN=""
 fi
 
+# shellcheck source=lib/i18n.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/i18n.sh" || return 1
+
 log_info() {
-  printf '%s[capbox]%s %s\n' "$_C_DIM" "$_C_RST" "$*" >&2
+  printf '%s%s%s %s\n' "$_C_DIM" "$_CAPBOX_LOG_PREFIX_INFO" "$_C_RST" "$*" >&2
 }
 
 log_warn() {
-  printf '%s[capbox] 警告:%s %s\n' "$_C_YEL" "$_C_RST" "$*" >&2
+  printf '%s%s%s %s\n' "$_C_YEL" "$_CAPBOX_LOG_PREFIX_WARN" "$_C_RST" "$*" >&2
 }
 
 log_err() {
-  printf '%s[capbox] 错误:%s %s\n' "$_C_RED" "$_C_RST" "$*" >&2
+  printf '%s%s%s %s\n' "$_C_RED" "$_CAPBOX_LOG_PREFIX_ERR" "$_C_RST" "$*" >&2
 }
 
 log_debug() {
@@ -1271,7 +1275,7 @@ status_oneshot() {
     case "$1" in
       --json) json=1; shift ;;
       -h | --help)
-        printf '用法: capbox status [--json]\n'
+        i18n_print help.status
         return 0
         ;;
       *) die 2 "status: 未知选项 $1" ;;
@@ -1835,16 +1839,7 @@ cmd_clean() {
       --cache) cache=1; shift ;;
       -y | --yes) shift ;;
       -h | --help)
-        cat <<'EOF'
-用法: capbox clean [--cache] [--all]
-
-  （无参数）  清理日志、临时文件、一次性 exec 残留；**保留缓存与 rootfs**
-  --cache     额外清理 cache/ 下已下载的镜像 tarball
-  --all       清理缓存并删除当前 distro 的 rootfs（最彻底，需重新 init）
-
-注意：clean 会先停止正在运行的守护容器（等价于 capbox down，优雅退出），
-      然后清理 run/tmp —— 容器内 /tmp 的后端。目录本身保留，daemon 可正常重启。
-EOF
+        i18n_print help.clean
         return 0
         ;;
       *) die 2 "clean: 未知选项 $1" ;;

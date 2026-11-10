@@ -24,7 +24,8 @@ class Fixture(unittest.TestCase):
         runtime.mkdir(mode=0o700)
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('CAPBOX_', '_CAPBOX_'))}
         self.env.update(XDG_RUNTIME_DIR=str(runtime), CAPBOX_IDMAP='off', CAPBOX_NET='none',
-                        CAPBOX_SECURITY_PROFILE='untrusted', CAPBOX_OVERLAY='off')
+                        CAPBOX_SECURITY_PROFILE='untrusted', CAPBOX_OVERLAY='off',
+                        CAPBOX_LANG='zh')
         self.cli = [str(REPO / 'bin/capbox'), '--root', str(self.ws)]
         self.run_cli('bootstrap', check=True)
 
