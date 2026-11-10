@@ -159,18 +159,7 @@ cmd_image() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     -h|--help|"")
-      cat <<'H'
-用法: capbox image <export|import|list|verify|lock|cache> ...
-
-  export NAME              导出当前 rootfs → .capbox/images/NAME.tar.zst|gz + .sha256
-  import NAME [--force]    导入到旁路目录 os/<distro>.imported-NAME；--force 才替换当前 rootfs
-  list                     列出已导出镜像
-  verify NAME              校验 SHA256
-  lock save|show|verify|restore [FILE]  保存/查看/验证/按精确版本恢复包锁
-  cache save|restore|path  离线包缓存（apk/apt 缓存目录打包）
-
-导入默认不破坏现有 rootfs；--force 会先 snapshot-bak 再替换。
-H
+      i18n_print help.image
       return 0
       ;;
     list)

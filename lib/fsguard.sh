@@ -222,16 +222,7 @@ cmd_snapshot() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     -h|--help|"")
-      cat <<'H'
-用法: capbox snapshot <create|list|restore|rm> [NAME]
-
-  create NAME   打包当前 rootfs 到 .capbox/snapshots/NAME.tar.zst|gz（保留数字属主）
-  list          列出快照
-  restore NAME  回滚 rootfs（先写到临时目录再替换，不直接毁掉现网未确认的数据）
-  rm NAME       删除快照
-
-注意：restore 会替换 os/<distro>/；请先 create 备份。不触碰无关数据目录。
-H
+      i18n_print help.snapshot
       return 0
       ;;
     list)

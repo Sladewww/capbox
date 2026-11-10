@@ -185,20 +185,7 @@ _cmd_recipe_dispatch() {
       _recipe_cmd_show "$@"
       ;;
     -h | --help | help)
-      cat <<'HELP'
-用法: capbox recipe apply [--locked LOCKFILE] [FILE]
-      capbox recipe check [FILE]
-      capbox recipe show  [FILE]
-
-  声明式 KEY=value 配方（不会被 source）。默认读：
-    ./capbox.recipe  或  .capbox/recipe.env
-
-  常用键: DISTRO PACKAGES NET NET_ALLOW MEMORY_MAX CPU_MAX PIDS_MAX MIRROR INIT
-  export FILE：导出经过校验的 JSON 配方数据（不执行）。
-  check：完整校验，不写配置。未知键、重复键或无效行均报错。
-  apply：完整校验 → 一次写回 config.env → 按需 init → 安装 PACKAGES
-  --locked：按严格包锁安装并验证；版本不可用则失败。
-HELP
+      i18n_print help.recipe
       return 0
       ;;
     *)

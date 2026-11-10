@@ -11,6 +11,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-default-policy-') as temporary:
     workspace = Path(temporary) / 'workspace'
     workspace.mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
+    env['CAPBOX_LANG'] = 'zh'
     cli = [str(REPO / 'bin/capbox'), '--root', str(workspace)]
     init = subprocess.run(cli + ['init', '--agent', '--distro', 'alpine'], env=env,
                           capture_output=True, text=True, timeout=900)

@@ -55,6 +55,7 @@ jobs:
           python3 test/security/test_agent_workflows.py PolicyTests
           python3 test/security/test_envkit.py SetupTests MCPTests
           python3 test/security/test_audit_report.py
+          python3 test/security/test_i18n.py
       - name: Generated documentation and examples
         run: python3 tools/generate-docs.py --check
 

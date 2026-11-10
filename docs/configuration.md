@@ -34,5 +34,8 @@
 | `CAPBOX_AUDIT` | `"summary"` |
 | `CAPBOX_AUDIT_CMD` | `""` |
 | `CAPBOX_ALLOW_OLD_BWRAP` | `"0"` |
+| `CAPBOX_LANG` | `""` |
 
 优先级：内置默认 < config.env < 显式环境变量。`ALLOW_OLD_BWRAP` 不能通过环境变量打开。配置文件与配方按数据解析，从不 source。
+
+`CAPBOX_LANG` 可选 `zh` / `en` 及其区域形式（如 `zh_CN`、`en_US`）。进程环境变量优先于 `config.env`，再才是 locale。未设置时：仅 `zh_CN`、`zh_CN.*` 与纯 `zh`（含 `zh.UTF-8`）为中文；其余（含未设置、`C`、`C.UTF-8`、`en_US`、`zh_TW`、`zh_HK`）为英文。非法值以固定中英各一句报错并退出。`docs/cli-reference.md` 始终以 `CAPBOX_LANG=zh` 生成，不随 locale 切换。

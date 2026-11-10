@@ -29,6 +29,7 @@ class SandboxIntegrationTests(unittest.TestCase):
             if key.startswith("CAPBOX_"):
                 del self.env[key]
         self.env.update(XDG_RUNTIME_DIR=str(self.runtime), CAPBOX_IDMAP="off",
+                        CAPBOX_LANG="zh",
                         CAPBOX_SECURITY_PROFILE="untrusted", CAPBOX_NET="none",
                         CAPBOX_OVERLAY="off")
         self.cli = [str(REPO / "bin/capbox"), "--root", str(self.workspace)]

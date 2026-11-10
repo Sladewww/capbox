@@ -181,22 +181,7 @@ cmd_audit() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     -h|--help|"")
-      cat <<'H'
-用法: capbox audit <report|tail|path|clear> [参数]
-
-  report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
-  tail [N]   显示最近 N 条（默认 50）
-  path       打印审计文件路径
-  clear      清空审计文件（需确认意图：直接执行即清空）
-
-CAPBOX_AUDIT=off|summary|full
-  summary（默认）：记下脱敏后的完整参数、status、退出码和耗时；
-                 失败可带截断短 detail。不写命令 stdout/stderr。
-  full：在 summary 之上，允许再写封顶后的脱敏 output 字段。
-CAPBOX_AUDIT_CMD=summary|full|off
-  不设置时跟随 CAPBOX_AUDIT。off 不写 cmd 字段。
-  summary 与 full 都写脱敏后的完整参数（不再是 argv0 加参数个数）。
-H
+      i18n_print help.audit
       return 0
       ;;
     path)
@@ -237,7 +222,7 @@ cmd_metrics() {
     case "$1" in
       --json) json=1; shift ;;
       -h|--help)
-        printf '用法: capbox metrics [--json]\n  显示 cgroup/磁盘/安全档/网络等真实探测结果（不编造已限额）。\n'
+        i18n_print help.metrics
         return 0
         ;;
       *) die 2 "metrics: 未知选项 $1" ;;

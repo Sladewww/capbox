@@ -160,24 +160,7 @@ cmd_exec() {
         break
         ;;
       -h | --help)
-        cat <<'EOF'
-用法: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE]
-                  [--uid N] [--gid N] [--user NAME] [--profile compat|untrusted|strict] [--] CMD...
-
-  --daemon     在常驻容器内执行（需先启动 capbox up）
-  --timeout N  一次性执行超时秒数，0=不限，默认取 CAPBOX_EXEC_TIMEOUT
-  --cwd DIR    容器内工作目录（默认 /workspace，相对路径按 /workspace 解释）
-  --root       在容器根目录 / 下执行（等价于 --cwd /）
-  --net MODE   覆盖本次 oneshot 的 CAPBOX_NET：none|restricted|open（host=open）
-               不写 config.env。与 --daemon 不能同用（守护容器的网络在 up 时确定）
-  --uid N      容器内初始 uid（默认 CAPBOX_EXEC_UID / 0）；与 --daemon 组合时在命令前降权
-  --gid N      容器内初始 gid
-  --user NAME  从 guest /etc/passwd 解析 uid:gid（可与数字 uid 二选一）
-  --profile P  覆盖 CAPBOX_SECURITY_PROFILE（仅本次 oneshot）
-
-stdout 只包含容器内命令的输出，可直接被管道消费。
-退出码透传容器内退出码；超时为 124；需要 daemon 但未运行为 3。
-EOF
+        i18n_print help.exec
         return 0
         ;;
       -*)
@@ -340,7 +323,7 @@ cmd_shell() {
         shift
         ;;
       -h | --help)
-        printf '用法: capbox shell [--daemon] [--net MODE]\n  交互式 shell（无 tty 时退化为读取 stdin 的 sh）\n  --net 只作用于一次性 shell，不写 config.env，也不能改已在跑的守护容器\n'
+        i18n_print help.shell
         return 0
         ;;
       *) die 2 "shell: 未知选项 $1" ;;
@@ -433,22 +416,7 @@ cmd_cp() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
-        cat <<'EOF'
-用法: capbox cp SRC DST
-
-路径写法（契约 §3.1：容器侧路径以 os/<distro>/ 为根）：
-  guest:/path   容器内绝对路径 → os/<distro>/path
-  host:/path    宿主路径（相对路径按当前 cwd 解析）
-  /abs/path     裸绝对路径 = 容器侧
-  rel/path      裸相对路径 = 容器侧（相对 rootfs 根）
-
-要点：**不带前缀的一律按容器侧解释**；操作宿主文件请显式写 host:。
-
-例:
-  capbox cp guest:/etc/os-release host:./os-release
-  capbox cp host:./app.conf guest:/etc/app.conf
-  capbox cp host:/tmp/a.txt /root/a.txt          # 落到 rootfs/root/a.txt
-EOF
+        i18n_print help.cp
         return 0
         ;;
       --)
@@ -528,7 +496,7 @@ cmd_ls() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
-        printf '用法: capbox ls [PATH]    列出容器内目录（默认 /workspace）\n'
+        i18n_print help.ls
         return 0
         ;;
       --)
@@ -561,7 +529,7 @@ cmd_ls() {
 cmd_ps() {
   [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]] || die 2 "用法: capbox ps"
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    printf '用法: capbox ps    列出容器内进程\n'
+    i18n_print help.ps
     return 0
   fi
   require_rootfs
@@ -598,21 +566,7 @@ cmd_pkg() {
 
   case "$sub" in
     -h | --help | "")
-      cat <<'EOF'
-用法: capbox pkg <install|remove|update|list> [--] PKG...
-
-  install PKG...   安装软件包
-  remove PKG...    卸载软件包
-  update           刷新软件源索引
-  list [PATTERN]   列出已安装包（可给过滤模式）
-
-按发行版自动分派到 apk（alpine）或 apt-get（ubuntu），
-ubuntu 自动附加 APT::Sandbox::User=root（本环境必需）。
-会话 CAPBOX_NET=none 时，install 和 update 仍会出网；remove 和 list 不会。
-这次出网不写进 config.env。pip / npm / git 不会因此获得网络。
-安装后会跑 dpkg --audit / 扫描 iU·iF 状态；有残留配置会明确报告（不掩盖）。
-启用 CAPBOX_IDMAP=auto/on 且多映射可用时，apt postinst 的 chown 更可能成功。
-EOF
+      i18n_print help.pkg
       return 0
       ;;
   esac

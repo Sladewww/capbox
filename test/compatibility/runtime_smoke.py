@@ -13,6 +13,7 @@ parser.add_argument('--require-multi', action='store_true')
 args = parser.parse_args()
 distro = os.environ.get('CAPBOX_SMOKE_DISTRO', 'alpine')
 env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
+env['CAPBOX_LANG'] = 'zh'
 with tempfile.TemporaryDirectory(prefix='capbox-compat-') as temporary:
     workspace = Path(temporary) / 'workspace'
     workspace.mkdir()

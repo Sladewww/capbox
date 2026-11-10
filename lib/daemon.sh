@@ -661,25 +661,7 @@ cmd_up() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help)
-        cat <<'EOF'
-用法: capbox up [--systemd] [--net MODE]
-
-启动常驻守护容器。
-
-默认前台阻塞。调用方的 shell 如果包了 bwrap --die-with-parent
-（DSH / 部分 coding agent 的 bash 工具），这次调用结束会杀掉整棵进程树，
-nohup/setsid 也救不了。两种活法：
-
-  1) capbox up --systemd
-     交给 systemd --user 的 transient service，进程不属于这次工具调用。
-     需要用户会话的 systemd（systemctl --user 可用）。之后 capbox down 会停这个单元。
-  2) 把 capbox up 放进活得比工具调用更久的任务（例如 bash 工具 run_in_background）。
-
-  --net MODE   只作用于这一次 up（none|restricted|open，host=open）。不写 config.env。
-               单元已在跑时不会改它的网络。
-
-停止: capbox down
-EOF
+        i18n_print help.up
         return 0
         ;;
       --systemd)
@@ -993,7 +975,7 @@ EOF
 cmd_down() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -h | --help) printf '用法: capbox down\n停止常驻守护容器\n'; return 0 ;;
+      -h | --help) i18n_print help.down; return 0 ;;
       *) die 2 "down: 未知选项 $1" ;;
     esac
   done
@@ -1144,7 +1126,7 @@ cmd_status() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
-      -h | --help) printf '用法: capbox status [--json]\n'; return 0 ;;
+      -h | --help) i18n_print help.status; return 0 ;;
       *) die 2 "status: 未知选项 $1" ;;
     esac
   done
@@ -1245,13 +1227,7 @@ cmd_logs() {
         shift
         ;;
       -h | --help)
-        cat <<'EOF'
-用法: capbox logs [-f] [-n N]
-
-  输出守护容器（bwrap 那个进程）的 stdout/stderr。
-  -f  持续跟随（Ctrl-C 退出）
-  -n  显示最后 N 行，默认 50
-EOF
+        i18n_print help.logs
         return 0
         ;;
       *) die 2 "logs: 未知选项 $1" ;;
