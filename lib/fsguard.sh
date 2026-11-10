@@ -264,7 +264,7 @@ H
       printf '%s\n' "$sum" >"${out}.sha256"
       log_info "快照已创建: $out (sha256=$sum)"
       if declare -F audit_event >/dev/null 2>&1; then
-        audit_event snapshot ok "object=$name" "detail=$out"
+        audit_event snapshot ok "object=$name" "detail=$out" "exit=0" "ms=0"
       fi
       printf '%s\n' "$out"
       return 0
@@ -304,7 +304,7 @@ H
       rm -rf "$bak" "$tmp"
       log_info "已从快照恢复: $name"
       if declare -F audit_event >/dev/null 2>&1; then
-        audit_event snapshot ok "object=$name" "detail=restored"
+        audit_event snapshot ok "object=$name" "detail=restored" "exit=0" "ms=0"
       fi
       return 0
       ;;

@@ -688,7 +688,7 @@ EOS
   _svc_restricted=0
   log_info "服务 $name 已启动（supervisor pid $(cat "$rd/supervisor.pid"), uid=$uid gid=$gid）"
   if declare -F audit_event >/dev/null 2>&1; then
-    audit_event service start "object=$name" "uid=$uid" "detail=restart=$restart"
+    audit_event service start "object=$name" "uid=$uid" "detail=restart=$restart" "exit=0" "ms=0"
   fi
   return 0
 }
@@ -743,7 +743,7 @@ _service_stop() {
   fi
   log_info "服务 $name 已停止"
   if declare -F audit_event >/dev/null 2>&1; then
-    audit_event service stop "object=$name"
+    audit_event service stop "object=$name" "exit=0" "ms=0"
   fi
   return 0
 }

@@ -184,7 +184,7 @@ _security_append_bwrap_args() {
   _sec_arr+=(--setenv CAPBOX_SECURITY_SECCOMP "$profile")
 
   if declare -F audit_event >/dev/null 2>&1; then
-    audit_event security start "profile=$profile" "detail=bpf:$(basename "$bpf")"
+    audit_event security start "profile=$profile" "detail=bpf:$(basename "$bpf")" "exit=0" "ms=0"
   fi
   return 0
 }

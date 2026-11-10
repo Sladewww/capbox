@@ -1527,10 +1527,15 @@ cmd_doctor() {
   local _bwrap_ver_ok=0
   local _bwrap_launch_ok=0
   local _bwrap_baseline_fail=0
+  local _audit_t0
+  _audit_t0=$(date +%s%3N 2>/dev/null || date +%s)
 
   # 0) 工作区安全（禁止 $HOME 或 / 作为 RW workspace）
   if _capbox_workspace_is_dangerous; then
     _doctor_fail "工作区为 $HOME 或 / ($CAPBOX_WORKSPACE)；会把整棵目录 RW bind 进容器。请用项目内 .capbox/ 或 CAPBOX_ROOT=/path/to/project"
+    if declare -F audit_command >/dev/null 2>&1; then
+      audit_command doctor 1 "$_audit_t0" "cmd=doctor" "detail=工作区不安全"
+    fi
     return 1
   else
     _doctor_pass "工作区安全 ($CAPBOX_WORKSPACE)"
@@ -1789,20 +1794,30 @@ cmd_doctor() {
   fi
 
   printf '\n'
+  local _doc_rc=0 _doc_detail=""
   if (( _bwrap_baseline_fail == 1 )); then
     printf '自检结果: 安全基线不满足（退出码 6）；%d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
-    return 6
-  fi
-  if (( DOCTOR_FAILS > 0 )); then
+    _doc_rc=6
+    _doc_detail="安全基线不满足，${DOCTOR_FAILS} 项 FAIL"
+  elif (( DOCTOR_FAILS > 0 )); then
     printf '自检结果: %d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
-    return 1
-  fi
-  if (( DOCTOR_WARNS > 0 )); then
+    _doc_rc=1
+    _doc_detail="${DOCTOR_FAILS} 项 FAIL，${DOCTOR_WARNS} 项 WARN"
+  elif (( DOCTOR_WARNS > 0 )); then
     printf '自检结果: 全部通过（%d 项 WARN）\n' "$DOCTOR_WARNS"
-    return 0
+    _doc_rc=0
+  else
+    printf '自检结果: 全部通过\n'
+    _doc_rc=0
   fi
-  printf '自检结果: 全部通过\n'
-  return 0
+  if declare -F audit_command >/dev/null 2>&1; then
+    if [[ -n "$_doc_detail" ]]; then
+      audit_command doctor "$_doc_rc" "$_audit_t0" "cmd=doctor" "detail=$_doc_detail"
+    else
+      audit_command doctor "$_doc_rc" "$_audit_t0" "cmd=doctor"
+    fi
+  fi
+  return "$_doc_rc"
 }
 
 # ---------- 15. clean ---------------------------------------------------------

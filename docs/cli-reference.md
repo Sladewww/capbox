@@ -300,7 +300,12 @@ options:
   clear      清空审计文件（需确认意图：直接执行即清空）
 
 CAPBOX_AUDIT=off|summary|full
+  summary（默认）：记下脱敏后的完整参数、status、退出码和耗时；
+                 失败可带截断短 detail。不写命令 stdout/stderr。
+  full：在 summary 之上，允许再写封顶后的脱敏 output 字段。
 CAPBOX_AUDIT_CMD=summary|full|off
+  不设置时跟随 CAPBOX_AUDIT。off 不写 cmd 字段。
+  summary 与 full 都写脱敏后的完整参数（不再是 argv0 加参数个数）。
 ```
 
 ## capbox audit report --help

@@ -16,13 +16,28 @@ _agent_command() {
 }
 
 cmd_task() {
+  case "${1:-}" in
+    -h | --help) _agent_command task "$@"; return $? ;;
+  esac
+  local t0 rc=0
+  t0=$(date +%s%3N 2>/dev/null || date +%s)
   # 与运行时升级串行化提交；读端与 worker 使用私有记录。
   if [[ "${1:-}" == start ]]; then
     need_cmd flock
     with_lock upgrade -- _agent_command task "$@"
+    rc=$?
   else
     _agent_command task "$@"
+    rc=$?
   fi
+  if declare -F audit_command >/dev/null 2>&1; then
+    if (( rc == 0 )); then
+      audit_command task "$rc" "$t0" "cmd=task $*"
+    else
+      audit_command task "$rc" "$t0" "cmd=task $*" "detail=task 失败，退出码 $rc"
+    fi
+  fi
+  return "$rc"
 }
 
 cmd_policy() { _agent_command policy "$@"; }
