@@ -1070,8 +1070,12 @@ run_bwrap_oneshot() {
 
   if (( use_idmap == 1 )); then
     if (( to > 0 )); then
-      _idmap_run_bwrap_argv "${full[@]}" &
+      # 同上：后台启动会丢 stdin，先复制再传入
+      local _oneshot_stdin_fd
+      exec {_oneshot_stdin_fd}<&0
+      _idmap_run_bwrap_argv "${full[@]}" <&"$_oneshot_stdin_fd" &
       local bp=$!
+      exec {_oneshot_stdin_fd}<&-
       local waited=0
       while kill -0 "$bp" 2>/dev/null; do
         if (( waited >= to )); then
