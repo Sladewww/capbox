@@ -100,12 +100,18 @@ _resources_probe_cgroup() {
 
   local find_out=""
   if find_out="$(_resources_find_cgroup_root)"; then
+    if ! _resources_self_cgroup_writable; then
+      CAPBOX_CGROUP_ACTIVE=""
+      CAPBOX_CGROUP_STATUS=denied
+      CAPBOX_CGROUP_DETAIL="限额根探针通过（$find_out），但进程自身 cgroup 不可写，无法迁入子 cgroup。$(_resources_cgroup_dual_hint)"
+      return 1
+    fi
     CAPBOX_CGROUP_ACTIVE="$find_out"
     CAPBOX_CGROUP_STATUS=ready
     if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
-      CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=$find_out（控制器可用）"
+      CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=$find_out（真实探针：subtree_control+memory.max 可写）"
     else
-      CAPBOX_CGROUP_DETAIL="可写 cgroup 根: $find_out（控制器可用）"
+      CAPBOX_CGROUP_DETAIL="可写 cgroup 根: $find_out（真实探针：subtree_control+memory.max 可写）"
     fi
     return 0
   fi
@@ -113,17 +119,21 @@ _resources_probe_cgroup() {
 
   if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
     CAPBOX_CGROUP_STATUS=denied
-    CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=${CAPBOX_CGROUP_ROOT} 不可用：${find_out:-不可写或子 cgroup 缺少 cpu/memory/pids 控制器}"
+    CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=${CAPBOX_CGROUP_ROOT} 不可用：${find_out:-不可写或子 cgroup 缺少可写 memory.max}"
     return 1
   fi
 
   local self cgpath err
   self="$(awk -F: '{print $NF; exit}' /proc/self/cgroup 2>/dev/null || true)"
   cgpath="/sys/fs/cgroup${self}"
-  err="$(mkdir -p "${cgpath}/.capbox-probe-$$" 2>&1 || true)"
+  err="$(mkdir "${cgpath}/.capbox-probe-$$" 2>&1 || true)"
   rmdir "${cgpath}/.capbox-probe-$$" 2>/dev/null || true
   CAPBOX_CGROUP_STATUS=denied
-  CAPBOX_CGROUP_DETAIL="无法获得可用 cgroup 父目录（self=${self:-/}）；${find_out:-mkdir 证据: ${err:-permission denied}}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?') 但当前路径无有效委派。可设置 CAPBOX_CGROUP_ROOT 指向已启用 cpu/memory/pids 的空父 cgroup。"
+  if [[ "${find_out}" == *"兑现限额需同时满足"* ]]; then
+    CAPBOX_CGROUP_DETAIL="无法获得可用 cgroup 父目录（self=${self:-/}）；${find_out}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?')"
+  else
+    CAPBOX_CGROUP_DETAIL="无法获得可用 cgroup 父目录（self=${self:-/}）；${find_out:-mkdir 证据: ${err:-permission denied}}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?') 但当前路径无有效委派。$(_resources_cgroup_dual_hint)"
+  fi
   return 1
 }
 
@@ -140,8 +150,22 @@ _resources_cgroup_try_enable() {
   fi
 }
 
-# 判定 root 是否可建子 cgroup，且子目录能出现所需控制器接口。
-# 失败时由 _resources_find_cgroup_root 在 stdout 打印原因（兼容 $()）；亦写入 CAPBOX_CGROUP_FIND_WHY。
+# 真实探针：mkdir 子 cgroup → 写 subtree_control(+memory) → 写 memory.max → rmdir。
+# 任一步失败都不算可用。失败原因写入 CAPBOX_CGROUP_FIND_WHY；_resources_find_cgroup_root 亦经 stdout 回传。
+_resources_cgroup_dual_hint() {
+  printf '%s' "兑现限额需同时满足：(1) 进程自身 cgroup 可写（才能把任务迁入子 cgroup）；(2) 限额根为空且已委派（可 mkdir、写 cgroup.subtree_control 与 memory.max）。可 systemctl --user start capbox.slice，设 CAPBOX_CGROUP_ROOT 指向该 slice，并在可写的 user scope 中运行。"
+}
+
+# 迁移进子 cgroup 时，源 cgroup 的 cgroup.procs 也必须可写。
+_resources_self_cgroup_writable() {
+  local self cgpath
+  self="$(awk -F: '($1=="0" || $1==""){print $3; exit}' /proc/self/cgroup 2>/dev/null || true)"
+  [[ "$self" == *:* ]] && self="${self##*:}"
+  [[ -n "$self" ]] || return 1
+  cgpath="/sys/fs/cgroup${self}"
+  [[ -d "$cgpath" && -w "${cgpath}/cgroup.procs" ]]
+}
+
 _resources_cgroup_root_usable() {
   local root="$1"
   local probe err=""
@@ -150,17 +174,45 @@ _resources_cgroup_root_usable() {
     return 1
   fi
   probe="$root/.capbox-ctrl-probe-$$-$RANDOM"
-  if ! mkdir -p "$probe" 2>/dev/null; then
-    err="$(mkdir -p "$probe" 2>&1 || true)"
+  if ! mkdir "$probe" 2>/dev/null; then
+    err="$(mkdir "$probe" 2>&1 || true)"
     CAPBOX_CGROUP_FIND_WHY="无法 mkdir 子目录: ${err:-permission denied}"
     return 1
   fi
-  _resources_cgroup_try_enable "$root"
-  if [[ ! -e "$probe/memory.max" && ! -e "$probe/cpu.max" && ! -e "$probe/pids.max" ]]; then
+
+  if [[ -e "$root/cgroup.subtree_control" ]]; then
+    # 真实 cgroupfs：必须能向父级写入 +memory；失败通常是父级仍有进程（EBUSY）
+    if ! echo '+memory' >"$root/cgroup.subtree_control" 2>/dev/null; then
+      err="$(echo '+memory' >"$root/cgroup.subtree_control" 2>&1 || true)"
+      rmdir "$probe" 2>/dev/null || true
+      CAPBOX_CGROUP_FIND_WHY="无法写入 cgroup.subtree_control(+memory): ${err:-EBUSY/denied}（限额根须为空且已委派；父 cgroup 内有进程时会 EBUSY）。$(_resources_cgroup_dual_hint)"
+      return 1
+    fi
+    echo '+pids' >"$root/cgroup.subtree_control" 2>/dev/null || true
+    echo '+cpu' >"$root/cgroup.subtree_control" 2>/dev/null || true
+    if [[ -n "${CAPBOX_IO_MAX:-}" ]]; then
+      echo '+io' >"$root/cgroup.subtree_control" 2>/dev/null || true
+    fi
+  else
+    # 非 cgroupfs / 单元测试桩：保留 hook 注入控制器文件
+    _resources_cgroup_try_enable "$root"
+  fi
+
+  if [[ ! -e "$probe/memory.max" ]]; then
     rmdir "$probe" 2>/dev/null || true
-    CAPBOX_CGROUP_FIND_WHY="子 cgroup 无 memory.max/cpu.max/pids.max（常见：父 cgroup 内仍有进程，subtree_control 写入 EBUSY）"
+    CAPBOX_CGROUP_FIND_WHY="子 cgroup 无 memory.max（父级未能委派 memory）。$(_resources_cgroup_dual_hint)"
     return 1
   fi
+
+  # 仅有控制器文件不够：必须能写入 memory.max（与 exec 路径一致）。
+  # 使用 >|：cgroup 文件已存在，且部分环境开了 noclobber（set -C）。
+  if ! { echo max >|"$probe/memory.max"; } 2>/dev/null; then
+    err="$( { echo max >|"$probe/memory.max"; } 2>&1 || true)"
+    rmdir "$probe" 2>/dev/null || true
+    CAPBOX_CGROUP_FIND_WHY="无法写入子 cgroup memory.max: ${err:-permission denied}。$(_resources_cgroup_dual_hint)"
+    return 1
+  fi
+
   rmdir "$probe" 2>/dev/null || true
   CAPBOX_CGROUP_FIND_WHY=""
   return 0

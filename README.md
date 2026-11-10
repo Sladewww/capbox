@@ -63,6 +63,20 @@ capbox doctor
 capbox metrics --json
 ```
 
+cgroup limits need **both**: (1) the process's own cgroup is writable (so the task can be moved), and (2) an empty, already-delegated limit root. A plain desktop/session scope usually fails (2) because it still has processes. Minimal systemd user-session example:
+
+```sh
+uid=$(id -u)
+cg="/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/capbox.slice"
+systemctl --user start capbox.slice   # empty delegated slice (condition 2)
+REAL="$HOME/.local/share/capbox/bin/capbox"
+systemd-run --user --scope --quiet --collect \
+  --setenv=CAPBOX_CGROUP_ROOT="$cg" -- \
+  "$REAL" exec -- id -u               # writable user scope (condition 1)
+```
+
+`doctor` runs a real probe (mkdir child → write `cgroup.subtree_control` → write `memory.max`); a PASS means both conditions held for that process.
+
 **Trusted development with host networking:**
 
 ```sh
