@@ -63,6 +63,20 @@ capbox doctor
 capbox metrics --json
 ```
 
+cgroup 限额需要**同时**满足：(1) 进程自身所在 cgroup 可写（才能迁入子 cgroup）；(2) 限额根为空且已委派。普通桌面/会话 scope 往往不满足 (2)（里面还有进程）。systemd 用户会话下的最小可复制例子：
+
+```sh
+uid=$(id -u)
+cg="/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/capbox.slice"
+systemctl --user start capbox.slice   # 空的已委派 slice（条件 2）
+REAL="$HOME/.local/share/capbox/bin/capbox"
+systemd-run --user --scope --quiet --collect \
+  --setenv=CAPBOX_CGROUP_ROOT="$cg" -- \
+  "$REAL" exec -- id -u               # 进程在可写 user scope（条件 1）
+```
+
+`doctor` 会对 cgroup 做真实探针（mkdir 子目录 → 写 `cgroup.subtree_control` → 写 `memory.max`）；PASS 表示当前进程下两条都成立。
+
 **可信开发，需要共享宿主网络：**
 
 ```sh

@@ -89,9 +89,9 @@ set +e
     local d
     # probe 目录以 . 开头，不能只用 "$root"/*
     while IFS= read -r -d "" d; do
-      : >"$d/memory.max"
-      : >"$d/cpu.max"
-      : >"$d/pids.max"
+      : >|"$d/memory.max"
+      : >|"$d/cpu.max"
+      : >|"$d/pids.max"
       chmod u+w "$d/memory.max" "$d/cpu.max" "$d/pids.max" 2>/dev/null || true
     done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
   }
@@ -119,7 +119,7 @@ set +e
   _resources_cgroup_try_enable() {
     local root="$1" d
     while IFS= read -r -d "" d; do
-      : >"$d/memory.max"; : >"$d/cpu.max"; : >"$d/pids.max"
+      : >|"$d/memory.max"; : >|"$d/cpu.max"; : >|"$d/pids.max"
       chmod u+w "$d/memory.max" "$d/cpu.max" "$d/pids.max" 2>/dev/null || true
     done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
   }
@@ -146,6 +146,38 @@ set +e
   else
     echo "NOTE subshell unexpectedly kept APPLIED (bash version?); wrap still uses direct call"
   fi
+  # 回归：仅有不可写的 memory.max 不算可用（真实探针要能写入）
+  # shellcheck source=/dev/null
+  source "$repo_lib/resources.sh"
+  robase="$base/roctrl"
+  mkdir -p "$robase"
+  _resources_cgroup_try_enable() {
+    local root="$1" d
+    while IFS= read -r -d "" d; do
+      : >|"$d/memory.max"; : >|"$d/cpu.max"; : >|"$d/pids.max"
+      chmod a-w "$d/memory.max" 2>/dev/null || true
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+  }
+  export CAPBOX_CGROUP_ROOT="$robase"
+  if out="$(_resources_find_cgroup_root)"; then
+    echo "FAIL: readonly memory.max should not be selected: $out"
+    exit 1
+  else
+    echo "OK readonly memory.max rejected: $out"
+  fi
+  case "$out" in
+    *memory.max*|*"自身 cgroup"*|*"空且已委派"*|*"dual"*|*"限额根"*) echo "OK deny reason mentions probe/hint" ;;
+    *)
+      # 接受中文双条件提示关键词
+      if printf '%s' "$out" | grep -qE 'memory.max|委派|可写|自身'; then
+        echo "OK deny reason mentions probe/hint"
+      else
+        echo "FAIL: deny reason too vague: $out"
+        exit 1
+      fi
+      ;;
+  esac
+
   # cleanup leaf dirs if any
   [[ -n "${CAPBOX_RESOURCES_CGROUP_LEAF:-}" && -d "${CAPBOX_RESOURCES_CGROUP_LEAF}" ]] && rmdir "${CAPBOX_RESOURCES_CGROUP_LEAF}" 2>/dev/null || true
   [[ -n "${leaf_via_subshell:-}" && -d "${leaf_via_subshell}" ]] && rmdir "${leaf_via_subshell}" 2>/dev/null || true
@@ -157,6 +189,8 @@ assert_file_contains "$unit_out" "OK noctrl rejected" "拒绝无控制器父目�
 assert_file_contains "$unit_out" "OK withctrl selected" "接受有控制器父目录"
 assert_file_contains "$unit_out" "OK override preserved and denied" "probe 不覆盖 CAPBOX_CGROUP_ROOT"
 assert_file_contains "$unit_out" "OK applied state retained in parent shell" "APPLIED_* 在父 shell 保留"
+assert_file_contains "$unit_out" "OK readonly memory.max rejected" "不可写 memory.max 被拒绝"
+assert_file_contains "$unit_out" "OK deny reason mentions probe/hint" "拒绝原因点名探针条件"
 
 # DISK_MAX 配置合法；无特权时 unavailable，有 sudo/disk 时可为 capable
 run_cmd "$CAPBOX_BIN" config set CAPBOX_DISK_MAX 1G
