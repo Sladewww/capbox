@@ -133,7 +133,7 @@ The tool compares file contents, stages a complete bin/lib bundle, validates it,
 | [CONTRIBUTING](CONTRIBUTING.md) | Checks before submitting changes |
 
 <!-- generated:tests -->
-Acceptance cases: **41** (T01–T41). Framework selftests validate the test harness; real guest and host-boundary regressions run separately.
+Acceptance cases: **42** (T01–T42). Framework selftests validate the test harness; real guest and host-boundary regressions run separately.
 <!-- /generated:tests -->
 
 MIT — [LICENSE](LICENSE).
