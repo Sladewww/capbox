@@ -71,7 +71,7 @@ _idmap_parse_spec() {
     [[ -n "$part" ]] || continue
     IFS=':' read -r g h c <<<"$part"
     [[ "$g" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$c" -gt 0 ]] || {
-      log_err "UID/GID 映射段非法: '$part'（需要 guest:host:count）"
+      i18n_err idmap.invalid_uid_gid_mapping_segment_expected_guest part="$part"
       return 2
     }
     _g+=("$g"); _h+=("$h"); _c+=("$c")
@@ -347,14 +347,14 @@ _idmap_apply_to_pid() {
   case "$sg" in allow|deny) ;; *) sg=allow ;; esac
 
   "${ua[@]}" || {
-    log_err "newuidmap 失败（pid=$pid spec=$uid_spec）"
+    i18n_err idmap.newuidmap_failed_pid_spec pid="$pid" uid_spec="$uid_spec"
     return 1
   }
   if ! printf '%s\n' "$sg" >"/proc/$pid/setgroups" 2>/dev/null; then
-    log_warn "无法写 /proc/$pid/setgroups=$sg（将继续尝试 newgidmap）"
+    i18n_warn idmap.unable_write_proc_setgroups_will_still_try pid="$pid" sg="$sg"
   fi
   "${ga[@]}" || {
-    log_err "newgidmap 失败（pid=$pid spec=$gid_spec）"
+    i18n_err idmap.newgidmap_failed_pid_spec pid="$pid" gid_spec="$gid_spec"
     return 1
   }
   return 0
@@ -422,7 +422,7 @@ _capbox_idmap_decision() {
     return 0
   fi
   if (( rc == 2 )) || [[ "${CAPBOX_IDMAP:-auto}" == "on" && "${CAPBOX_IDMAP_STATUS:-}" == "blocked" ]]; then
-    log_err "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+    i18n_err common.capbox_idmap_multi_uid_mapping_unavailable detail="$(i18n_or "${CAPBOX_IDMAP_DETAIL:-}" val.see_doctor)"
     return 2
   fi
   return 1
@@ -508,11 +508,11 @@ _idmap_wrap_argv_for_uid() {
   local -n _argv="$__wname"
   local uid gid dd=-1
   uid="$(_idmap_exec_uid)" || {
-    log_err "EXEC_UID 必须是 0..4294967295 的数字（当前: ${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-}}）"
+    i18n_err idmap.exec_uid_must_number_0_4294967295_got uid="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-}}"
     return 2
   }
   gid="$(_idmap_exec_gid)" || {
-    log_err "EXEC_GID 必须是 0..4294967295 的数字（当前: ${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-}}）"
+    i18n_err idmap.exec_gid_must_number_0_4294967295_got gid="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-}}"
     return 2
   }
   [[ "$uid" == "0" && "$gid" == "0" ]] && return 0
@@ -640,7 +640,7 @@ except Exception:
   done
 
   if [[ -z "$child" ]]; then
-    log_err "idmap：未能从 bwrap --info-fd 取得 child-pid"
+    i18n_err idmap.idmap_failed_get_child_pid_bwrap_info
     kill "$bp" 2>/dev/null || true
     wait "$bp" 2>/dev/null || true
     exec {block_fd}>&-
@@ -718,7 +718,7 @@ except Exception:
     sleep 0.05
   done
   if [[ -z "$child" ]] || ! _idmap_apply_to_pid "$child"; then
-    log_err "idmap：后台启动映射失败（见 $logf）"
+    i18n_err idmap.idmap_background_mapping_start_failed_see logf="$logf"
     kill "$bp" 2>/dev/null || true
     printf '\n' 1>&"$block_fd" 2>/dev/null || true
     exec {block_fd}>&-
@@ -729,7 +729,7 @@ except Exception:
   printf '\n' 1>&"$block_fd" 2>/dev/null || true
   if declare -F _idmap_after_map_hook >/dev/null 2>&1; then
     _idmap_after_map_hook "$child" || {
-      log_err "idmap：after_map hook 失败"
+      i18n_err idmap.idmap_after_map_hook_failed
       kill "$bp" 2>/dev/null || true
       exec {block_fd}>&-
       rm -rf "$tmp"

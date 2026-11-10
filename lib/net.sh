@@ -20,7 +20,7 @@ _net_mode() {
     restricted) printf 'restricted' ;;
     open | host | "") printf 'open' ;;
     *)
-      log_err "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的别名；当前: '${CAPBOX_NET}'）。拒绝回退到 open"
+      i18n_err config.capbox_net_must_none_restricted_open_host_2 net="${CAPBOX_NET}"
       return 2
       ;;
   esac
@@ -106,7 +106,7 @@ _net_bridge_log() { printf '%s/%s-bridge.log' "$(_net_dir)" "$(_net_session_tag)
 _net_validate_allowlist() {
   local raw="${1:-}" part
   [[ -n "$raw" ]] || {
-    log_err "CAPBOX_NET=restricted 需要非空 CAPBOX_NET_ALLOW（逗号分隔域名或 IP）"
+    i18n_err net.capbox_net_restricted_requires_non_empty_capbox
     return 2
   }
   IFS=',' read -r -a _net_allow_parts <<<"$raw"
@@ -116,13 +116,13 @@ _net_validate_allowlist() {
     part="${part%"${part##*[![:space:]]}"}"
     [[ -n "$part" ]] || continue
     if [[ ! "$part" =~ ^[A-Za-z0-9._:/*-]+$ ]]; then
-      log_err "CAPBOX_NET_ALLOW 含非法字符: $part"
+      i18n_err net.capbox_net_allow_contains_illegal_characters part="$part"
       return 2
     fi
     n=$((n + 1))
   done
   (( n > 0 )) || {
-    log_err "CAPBOX_NET_ALLOW 解析后为空"
+    i18n_err net.capbox_net_allow_empty_after_parsing
     return 2
   }
   return 0
@@ -137,7 +137,7 @@ _net_restricted_prereqs() {
   py="$(_net_proxy_py 2>/dev/null || true)"
   [[ -n "$py" ]] || miss+=("lib/net-proxy.py")
   if [[ ${#miss[@]} -gt 0 ]]; then
-    log_err "CAPBOX_NET=restricted 缺少前置: ${miss[*]}"
+    i18n_err net.capbox_net_restricted_missing_prerequisites miss="${miss[*]}"
     return 5
   fi
   _net_validate_allowlist "${CAPBOX_NET_ALLOW:-}" || return 2
@@ -208,12 +208,12 @@ _net_start_host_proxy() {
   for i in $(seq 1 50); do
     [[ -S "$sock" && -f "$ready" ]] && return 0
     if ! kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
-      log_err "restricted 代理进程退出，见 $(_net_proxy_log)"
+      i18n_err net.restricted_proxy_process_exited_see path="$(_net_proxy_log)"
       return 1
     fi
     sleep 0.05
   done
-  log_err "restricted 代理启动超时"
+  i18n_err net.restricted_proxy_start_timed_out
   return 1
 }
 
@@ -252,7 +252,7 @@ _net_start_bridge_for_child() {
   local child="${1:-}"
   local nd py sock ready pidf
   [[ -n "$child" && -r "/proc/$child/ns/net" && -r "/proc/$child/ns/user" ]] || {
-    log_err "无法进入容器 netns（child=$child）"
+    i18n_err net.unable_enter_container_netns_child child="$child"
     return 1
   }
   nd="$(_net_dir)" || return 1
@@ -262,7 +262,7 @@ _net_start_bridge_for_child() {
   pidf="$(_net_bridge_pidf)"
   rm -f "$ready" "$pidf" 2>/dev/null || true
   [[ -S "$sock" ]] || {
-    log_err "代理 sock 不存在: $sock"
+    i18n_err net.proxy_sock_does_not_exist sock="$sock"
     return 1
   }
   # 不带 -t：配合 --preserve-credentials 进入 user+net ns。
@@ -287,12 +287,12 @@ _net_start_bridge_for_child() {
   for i in $(seq 1 50); do
     [[ -f "$ready" ]] && return 0
     if ! kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
-      log_err "restricted 桥接进程退出，见 $(_net_bridge_log)"
+      i18n_err net.restricted_bridge_process_exited_see path="$(_net_bridge_log)"
       return 1
     fi
     sleep 0.05
   done
-  log_err "restricted 桥接启动超时"
+  i18n_err net.restricted_bridge_start_timed_out
   return 1
 }
 
@@ -314,7 +314,7 @@ _net_inject_bwrap_info_fd() {
       return 0
     fi
   done
-  log_err "restricted：argv 里没有 bwrap，无法注入 --info-fd"
+  i18n_err net.restricted_argv_has_no_bwrap_cannot_inject
   return 1
 }
 
@@ -353,7 +353,7 @@ _net_run_bwrap_oneshot() {
   local cwd="${1:-/workspace}"
   local to="${2:-0}"
   shift 2 || true
-  [[ $# -gt 0 ]] || die 2 "_net_run_bwrap_oneshot: 缺少命令"
+  [[ $# -gt 0 ]] || i18n_die 2 net.net_run_bwrap_oneshot_missing_command
 
   _net_restricted_prereqs >/dev/null || return $?
 
@@ -386,9 +386,9 @@ _net_run_bwrap_oneshot() {
     die 6
   fi
   if (( _bbrc != 0 )); then
-    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
+    i18n_die "$_bbrc" common.unable_build_bwrap_arguments_rc_common_causes _bbrc="$_bbrc"
   fi
-  (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数"
+  (( ${#args[@]} > 0 )) || i18n_die 4 net.unable_build_bwrap_arguments
 
   # 等宿主写入 go 文件（位于工作区 bind 内）后再 exec 原 argv。
   # --info-fd 只在非 idmap 路径注入：idmap 自己用 fd 4，两套 info-fd 会冲突。
@@ -452,7 +452,7 @@ _net_run_bwrap_oneshot() {
     sleep 0.05
   done
   if [[ -z "$child" ]]; then
-    log_err "restricted：未能从 bwrap --info-fd 取得 child-pid"
+    i18n_err net.restricted_failed_get_child_pid_bwrap_info
     kill "$bp" 2>/dev/null || true
     wait "$bp" 2>/dev/null || true
     return 1
@@ -514,7 +514,7 @@ _net_parse_publish_item() {
   if [[ "$item" =~ ^([0-9]+):([0-9.]+):([0-9]+)$ ]]; then
     _pub_host_port="${BASH_REMATCH[1]}"; _pub_guest_addr="${BASH_REMATCH[2]}"; _pub_guest_port="${BASH_REMATCH[3]}"; return 0
   fi
-  log_err "PUBLISH 项非法（期望 HOST:GUEST 或 HOST:IP:GUEST）: $item"
+  i18n_err net.invalid_publish_entry_expected_host_guest_host item="$item"
   return 2
 }
 
@@ -529,12 +529,12 @@ _net_publish_start() {
   printf '%s\n' "$mode" >"$pd/mode"
 
   if [[ "$mode" == "open" ]]; then
-    log_info "PUBLISH=$raw：NET=open 共享宿主网络，guest 端口已在宿主可见（无额外转发；不声称出站过滤）"
+    i18n_info net.publish_net_open_shares_host_network_so raw="$raw"
     return 0
   fi
 
-  have_cmd python3 || { log_err "PUBLISH 在 none/restricted 下需要 python3"; return 5; }
-  have_cmd nsenter || { log_err "PUBLISH 在 none/restricted 下需要 nsenter"; return 5; }
+  have_cmd python3 || { i18n_err net.publish_under_none_restricted_requires_python3; return 5; }
+  have_cmd nsenter || { i18n_err net.publish_under_none_restricted_requires_nsenter; return 5; }
 
   local item pyf
   pyf="$pd/forward.py"
@@ -637,12 +637,12 @@ PYF
     for j in $(seq 1 80); do
       [[ -f "$ready" ]] && break
       kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null || {
-        log_warn "PUBLISH forwarder 尚未就绪（可能仍在等服务 netns）；见 $pd/forward.log"
+        i18n_warn net.publish_forwarder_not_ready_yet_may_still pd="$pd"
         break
       }
       sleep 0.05
     done
-    log_info "PUBLISH 127.0.0.1:${_pub_host_port} → guest ${_pub_guest_addr}:${_pub_guest_port}"
+    i18n_info net.publish_127_0_0_1_guest _pub_host_port="${_pub_host_port}" _pub_guest_addr="${_pub_guest_addr}" _pub_guest_port="${_pub_guest_port}"
   done
   return 0
 }

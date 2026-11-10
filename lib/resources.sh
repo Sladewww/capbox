@@ -257,7 +257,7 @@ _resources_setup_cgroup() {
   local root leaf find_out=""
   if ! find_out="$(_resources_find_cgroup_root)"; then
     if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
-      log_warn "CAPBOX_CGROUP_ROOT=${CAPBOX_CGROUP_ROOT} 不可用：${find_out:-unknown}"
+      i18n_warn res.capbox_cgroup_root_unavailable path="${CAPBOX_CGROUP_ROOT}" find_out="${find_out:-unknown}"
     fi
     CAPBOX_CGROUP_FIND_WHY="${find_out}"
     return 1
@@ -280,10 +280,10 @@ _resources_setup_cgroup() {
         applied=1
         CAPBOX_RESOURCES_APPLIED_MEMORY="cgroup:$bytes"
       else
-        log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 无法写入 cgroup memory.max（未应用；leaf 无控制器或不允许写）"
+        i18n_warn res.memory_max_could_not_written_cgroup_memory value="$CAPBOX_MEMORY_MAX"
       fi
     else
-      log_warn "MEMORY_MAX 无法解析: $CAPBOX_MEMORY_MAX"
+      i18n_warn res.unable_parse_memory_max value="$CAPBOX_MEMORY_MAX"
     fi
   fi
   if [[ -n "${CAPBOX_PIDS_MAX:-}" ]]; then
@@ -292,10 +292,10 @@ _resources_setup_cgroup() {
         applied=1
         CAPBOX_RESOURCES_APPLIED_PIDS="cgroup:$CAPBOX_PIDS_MAX"
       else
-        log_warn "PIDS_MAX=$CAPBOX_PIDS_MAX 无法写入 cgroup pids.max（未应用；不会用 RLIMIT_NPROC 冒充）"
+        i18n_warn res.pids_max_could_not_written_cgroup_pids value="$CAPBOX_PIDS_MAX"
       fi
     else
-      log_warn "PIDS_MAX 必须是正整数（当前: $CAPBOX_PIDS_MAX）"
+      i18n_warn res.pids_max_must_positive_integer_got value="$CAPBOX_PIDS_MAX"
     fi
   fi
   if [[ -n "${CAPBOX_CPU_MAX:-}" ]]; then
@@ -305,10 +305,10 @@ _resources_setup_cgroup() {
         applied=1
         CAPBOX_RESOURCES_APPLIED_CPU="cgroup:$cpuv"
       else
-        log_warn "CPU_MAX=$CAPBOX_CPU_MAX 无法写入 cgroup cpu.max（未应用）"
+        i18n_warn res.cpu_max_could_not_written_cgroup_cpu value="$CAPBOX_CPU_MAX"
       fi
     else
-      log_warn "CPU_MAX 无法解析: $CAPBOX_CPU_MAX（支持 50% 或 'quota period'）"
+      i18n_warn res.unable_parse_cpu_max_supports_50_quota value="$CAPBOX_CPU_MAX"
     fi
   fi
   if [[ -n "${CAPBOX_IO_MAX:-}" && -e "$leaf/io.max" && -w "$leaf/io.max" ]]; then
@@ -566,7 +566,7 @@ _resources_disk_run_ops() {
 _resources_disk_fail_cleanup() {
   local mode="$1" ops="$2" base="$3" detail="$4"
   if ! _resources_disk_run_ops "$mode" "$ops" cleanup "$base"; then
-    log_err "DISK_MAX 清理失败，保留 ${base}（未对仍挂载的目录做无特权 rm）"
+    i18n_err res.disk_max_cleanup_failed_leaving_will_not base="${base}"
   else
     rm -f -- "$ops" 2>/dev/null || true
   fi
@@ -580,7 +580,7 @@ _resources_apply_disk_wrap() {
   CAPBOX_RESOURCES_APPLIED_DISK=""
 
   bytes="$(_resources_parse_bytes "${CAPBOX_DISK_MAX:-}")" || {
-    log_warn "DISK_MAX 无法解析: ${CAPBOX_DISK_MAX:-}"
+    i18n_warn res.unable_parse_disk_max value="${CAPBOX_DISK_MAX:-}"
     return 1
   }
   guest="$(_resources_disk_guest_path)" || {
@@ -682,7 +682,7 @@ _resources_fail_closed_check() {
     missing+=("DISK_MAX(${CAPBOX_DISK_DETAIL:-未按私有 loop 兑现})")
   fi
   if (( ${#missing[@]} > 0 )); then
-    log_err "CAPBOX_RESOURCES_MODE=require：以下限额无法精确兑现: ${missing[*]}"
+    i18n_err res.capbox_resources_mode_require_following_limits_cannot missing="${missing[*]}"
     return 1
   fi
   return 0
@@ -715,14 +715,14 @@ _resources_wrap_argv() {
     _resources_probe_cgroup || true
 
     if [[ -n "${CAPBOX_CPU_MAX:-}" ]]; then
-      log_warn "CPU_MAX=$CAPBOX_CPU_MAX 未应用：${CAPBOX_CGROUP_DETAIL:-无 cgroup 委派}"
+      i18n_warn res.cpu_max_not_applied value="$CAPBOX_CPU_MAX" detail="$(i18n_or "${CAPBOX_CGROUP_DETAIL:-}" val.no_cgroup_delegate)"
     fi
     if [[ -n "${CAPBOX_PIDS_MAX:-}" ]]; then
-      log_warn "PIDS_MAX=$CAPBOX_PIDS_MAX 未应用：需要 cgroup pids（拒绝使用 RLIMIT_NPROC）"
+      i18n_warn res.pids_max_not_applied_cgroup_pids_required value="$CAPBOX_PIDS_MAX"
     fi
 
     if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
-      log_err "CAPBOX_CGROUP_ROOT=${CAPBOX_CGROUP_ROOT} 无法兑现 cgroup 限额：${CAPBOX_CGROUP_DETAIL:-不可用}"
+      i18n_err res.capbox_cgroup_root_cannot_honor_cgroup_limits path="${CAPBOX_CGROUP_ROOT}" detail="$(i18n_or "${CAPBOX_CGROUP_DETAIL:-}" val.unavailable)"
       if [[ "$(_resources_mode)" == "require" ]]; then
         # 仍尝试 DISK，再统一 fail-closed
         :
@@ -730,14 +730,14 @@ _resources_wrap_argv() {
     elif [[ -n "${CAPBOX_MEMORY_MAX:-}" ]]; then
       local bytes
       if [[ "$(_resources_mode)" == "require" ]]; then
-        log_err "MEMORY_MAX=$CAPBOX_MEMORY_MAX：require 模式拒绝 prlimit 降级（不是 cgroup memory.max）"
+        i18n_err res.memory_max_require_mode_refuses_prlimit_fallback value="$CAPBOX_MEMORY_MAX"
       elif bytes="$(_resources_parse_bytes "$CAPBOX_MEMORY_MAX")" && have_cmd prlimit; then
-        log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 降级为 prlimit RLIMIT_AS=${bytes}（虚拟地址空间近似，**不是** cgroup memory.max）"
+        i18n_warn res.memory_max_fell_back_prlimit_rlimit_virtual value="$CAPBOX_MEMORY_MAX" bytes="${bytes}"
         local -a inner2=("${_rw_cmd[@]}")
         _rw_cmd=(prlimit "--as=$bytes" -- "${inner2[@]}")
         CAPBOX_RESOURCES_APPLIED_MEMORY="prlimit-as:$bytes"
       else
-        log_warn "MEMORY_MAX=$CAPBOX_MEMORY_MAX 未应用：无 cgroup 且无 prlimit/无法解析"
+        i18n_warn res.memory_max_not_applied_no_cgroup_no value="$CAPBOX_MEMORY_MAX"
       fi
     fi
   fi
@@ -745,7 +745,7 @@ _resources_wrap_argv() {
   if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
     if ! _resources_apply_disk_wrap _rw_cmd; then
       _resources_probe_disk || true
-      log_warn "DISK_MAX=$CAPBOX_DISK_MAX 未应用：${CAPBOX_DISK_DETAIL:-setup failed}"
+      i18n_warn res.disk_max_not_applied value="$CAPBOX_DISK_MAX" detail="${CAPBOX_DISK_DETAIL:-setup failed}"
     fi
   fi
 

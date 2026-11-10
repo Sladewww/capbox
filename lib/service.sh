@@ -15,7 +15,7 @@
 
 _service_dir() { printf '%s' "${CAPBOX_DIR}/services"; }
 _service_run_dir() {
-  _service_valid_name "${1:-}" || { log_err "服务名非法: ${1:-}"; return 2; }
+  _service_valid_name "${1:-}" || { i18n_err svc.invalid_service_name arg="${1:-}"; return 2; }
   local private
   private="$(_capbox_host_state_dir)" || return 1
   printf '%s/services/%s' "$private" "${1:-}"
@@ -42,9 +42,9 @@ _service_load() {
   local -n _env="$3"
   _out=()
   _env=()
-  _service_valid_name "$name" || { log_err "服务名非法: $name"; return 2; }
+  _service_valid_name "$name" || { i18n_err svc.invalid_service_name_2 name="$name"; return 2; }
   local f="$(_service_dir)/${name}.env"
-  [[ -f "$f" ]] || { log_err "服务定义不存在: $f"; return 1; }
+  [[ -f "$f" ]] || { i18n_err svc.service_definition_does_not_exist f="$f"; return 1; }
   local line key raw
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line#"${line%%[![:space:]]*}"}"
@@ -58,12 +58,12 @@ _service_load() {
     elif [[ "$raw" == \"*\" && ${#raw} -ge 2 ]]; then
       raw="${raw:1:${#raw}-2}"
       if [[ "$raw" =~ [\$\`\\] ]]; then
-        log_err "服务 $name: $key 值含非法展开符"
+        i18n_err svc.service_value_contains_illegal_expansion_characters name="$name" key="$key"
         return 2
       fi
     fi
     if [[ "$raw" == *$'\n'* ]]; then
-      log_err "服务 $name: $key 值含换行"
+      i18n_err svc.service_value_contains_newline name="$name" key="$key"
       return 2
     fi
     if _service_reserved_key "$key"; then
@@ -72,7 +72,7 @@ _service_load() {
       _env["$key"]="$raw"
     fi
   done <"$f"
-  [[ -n "${_out[CMD]:-}" ]] || { log_err "服务 $name: 缺少 CMD"; return 2; }
+  [[ -n "${_out[CMD]:-}" ]] || { i18n_err svc.service_missing_cmd name="$name"; return 2; }
   return 0
 }
 
@@ -98,24 +98,24 @@ _service_diagnose() {
   local rd rootfs
   rd="$(_service_run_dir "$name")" || return 1
   rootfs="${CAPBOX_ROOTFS:-}"
-  log_err "服务 '$name' 诊断: $reason"
+  i18n_err svc.service_diagnostics name="$name" reason="$reason"
   if declare -F _idmap_probe >/dev/null 2>&1; then
     _idmap_probe >/dev/null 2>&1 || true
-    log_err "  idmap: ${CAPBOX_IDMAP_STATUS:-?} — ${CAPBOX_IDMAP_DETAIL:-}"
+    i18n_err svc.idmap status="${CAPBOX_IDMAP_STATUS:-?}" detail="${CAPBOX_IDMAP_DETAIL:-}"
   fi
   if have_cmd ss; then
-    log_err "  监听端口(ss -lntu | head):"
-    ss -lntu 2>/dev/null | head -n 8 | while IFS= read -r L; do log_err "    $L"; done
+    i18n_err svc.listening_ports_ss_lntu_head
+    ss -lntu 2>/dev/null | head -n 8 | while IFS= read -r L; do i18n_err svc.msg L="$L"; done
   fi
   if [[ -n "$rootfs" ]]; then
     for d in /var/lib /var/log /run /etc; do
-      if [[ -d "$rootfs$d" ]]; then log_err "  rootfs$d: 存在"
-      else log_err "  rootfs$d: 缺失"; fi
+      if [[ -d "$rootfs$d" ]]; then i18n_err svc.rootfs_present d="$d"
+      else i18n_err svc.rootfs_missing d="$d"; fi
     done
   fi
   if [[ -f "$rd/service.log" ]]; then
-    log_err "  最近日志:"
-    tail -n 15 -- "$rd/service.log" 2>/dev/null | while IFS= read -r L; do log_err "    $L"; done
+    i18n_err svc.recent_logs
+    tail -n 15 -- "$rd/service.log" 2>/dev/null | while IFS= read -r L; do i18n_err svc.msg L="$L"; done
   fi
 }
 
@@ -148,7 +148,7 @@ cmd_service() {
     stop) _service_stop "$@" ;;
     status) _service_status "$@" ;;
     logs) _service_logs "$@" ;;
-    *) die 2 "service: 未知子命令 $sub（start|stop|status|logs|list）" ;;
+    *) i18n_die 2 svc.service_unknown_subcommand_start_stop_status_logs sub="$sub" ;;
   esac
 }
 
@@ -185,11 +185,11 @@ _service_start_deps() {
     d="${d#"${d%%[![:space:]]*}"}"
     d="${d%"${d##*[![:space:]]}"}"
     [[ -n "$d" ]] || continue
-    _service_valid_name "$d" || die 2 "DEPENDS_ON 非法服务名: $d"
+    _service_valid_name "$d" || i18n_die 2 svc.depends_has_invalid_service_name d="$d"
     if ! _service_is_running "$d"; then
-      log_info "依赖 $d 未运行，先启动"
+      i18n_info svc.dependency_not_running_starting_first d="$d"
       _service_start "$d" || {
-        log_err "依赖服务 $d 启动失败"
+        i18n_err svc.failed_start_dependency_service d="$d"
         return 1
       }
     fi
@@ -200,7 +200,7 @@ _service_start_deps() {
 _service_check_id() {
   local v="${1:-}" label="${2:-id}" who="${3:-}" n
   [[ "$v" =~ ^[0-9]+$ ]] || {
-    log_err "服务 ${who}: ${label} 不是十进制数字: ${v:-<empty>}"
+    i18n_err svc.service_not_decimal_number who="${who}" label="${label}" v="${v:-<empty>}"
     return 2
   }
   n="$v"
@@ -208,7 +208,7 @@ _service_check_id() {
     n="${n#0}"
   done
   if (( ${#n} > 10 )) || (( 10#$n > 4294967295 )); then
-    log_err "服务 ${who}: ${label} 超出 32 位范围: $v"
+    i18n_err svc.service_outside_32_bit_range who="${who}" label="${label}" v="$v"
     return 2
   fi
   printf '%s' "$n"
@@ -271,12 +271,12 @@ _service_release_net() {
 
 _service_start() {
   local name="${1:-}"
-  [[ -n "$name" ]] || die 2 "用法: capbox service start NAME"
+  [[ -n "$name" ]] || i18n_die 2 svc.usage_capbox_service_start_name
   shift || true
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help) cmd_service --help; return 0 ;;
-      *) die 2 "service start: 未知选项 $1" ;;
+      *) i18n_die 2 svc.service_start_unknown_option arg="$1" ;;
     esac
   done
 
@@ -285,7 +285,7 @@ _service_start() {
   _service_load "$name" svc svc_env || return $?
 
   if _service_is_running "$name"; then
-    log_info "服务 $name 已在运行（pid $(cat "$(_service_run_dir "$name")/supervisor.pid")）"
+    i18n_info svc.service_already_running_pid name="$name" pid="$(cat "$(_service_run_dir "$name")/supervisor.pid")"
     return 0
   fi
 
@@ -302,10 +302,10 @@ _service_start() {
   local health_interval="${svc[HEALTH_INTERVAL]:-0}"
   local health_retries="${svc[HEALTH_RETRIES]:-3}"
 
-  [[ "$stop_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]] || die 2 "STOP_TIMEOUT 非法"
-  [[ "$restart_max" =~ ^[0-9]+$ ]] || die 2 "RESTART_MAX 非法"
-  [[ "$ready_timeout" =~ ^[0-9]+$ ]] || die 2 "READY_TIMEOUT 非法"
-  case "$restart" in no|on-failure|always) ;; *) die 2 "RESTART 只能是 no|on-failure|always" ;; esac
+  [[ "$stop_timeout" =~ ^[0-9]+([.][0-9]+)?$ ]] || i18n_die 2 svc.invalid_stop_timeout
+  [[ "$restart_max" =~ ^[0-9]+$ ]] || i18n_die 2 svc.invalid_restart_max
+  [[ "$ready_timeout" =~ ^[0-9]+$ ]] || i18n_die 2 svc.invalid_ready_timeout
+  case "$restart" in no|on-failure|always) ;; *) i18n_die 2 svc.restart_must_no_failure_always ;; esac
 
   if [[ -n "$user" ]]; then
     local resolved
@@ -316,7 +316,7 @@ _service_start() {
         uid="$resolved"; : "${gid:=$uid}"
       fi
     else
-      log_err "服务 $name: 无法在 guest passwd 解析 USER=$user"
+      i18n_err svc.service_unable_resolve_user_guest_passwd name="$name" user="$user"
       _service_diagnose "$name" "USER 不存在于 ${CAPBOX_ROOTFS}/etc/passwd"
       return 1
     fi
@@ -340,7 +340,7 @@ _service_start() {
   if [[ -n "$net" ]]; then
     case "$net" in
       none|restricted|open|host) CAPBOX_NET="$net" ;;
-      *) die 2 "服务 $name: NET 非法: $net" ;;
+      *) i18n_die 2 svc.service_invalid_net name="$name" net="$net" ;;
     esac
   fi
 
@@ -663,11 +663,11 @@ EOS
     _service_abort 1 "服务未就绪或启动失败（见 service logs）" || return $?
   fi
   if [[ -n "${svc[PUBLISH]:-}" ]]; then
-    _net_publish_start "$name" "${svc[PUBLISH]}" || log_warn "PUBLISH 启动失败（见日志）"
+    _net_publish_start "$name" "${svc[PUBLISH]}" || i18n_warn svc.publish_failed_start_see_logs
   fi
   unset CAPBOX_NET_SESSION
   _svc_restricted=0
-  log_info "服务 $name 已启动（supervisor pid $(cat "$rd/supervisor.pid"), uid=$uid gid=$gid）"
+  i18n_info svc.service_started_supervisor_pid_uid_gid name="$name" pid="$(cat "$rd/supervisor.pid")" uid="$uid" gid="$gid"
   if declare -F audit_event >/dev/null 2>&1; then
     audit_event service start "object=$name" "uid=$uid" "detail=restart=$restart" "exit=0" "ms=0"
   fi
@@ -676,7 +676,7 @@ EOS
 
 _service_stop() {
   local name="${1:-}"
-  [[ -n "$name" ]] || die 2 "用法: capbox service stop NAME"
+  [[ -n "$name" ]] || i18n_die 2 svc.usage_capbox_service_stop_name
   local rd pid stop_timeout=10
   rd="$(_service_run_dir "$name")" || return 1
   if [[ -f "$rd/meta.env" ]]; then
@@ -688,7 +688,7 @@ _service_stop() {
     done <"$rd/meta.env"
   fi
   if ! _service_is_running "$name"; then
-    log_info "服务 $name 未在运行"
+    i18n_info svc.service_not_running name="$name"
     rm -f "$rd/supervisor.pid" 2>/dev/null || true
     _service_release_net "$name"
     if declare -F _net_publish_stop >/dev/null 2>&1; then
@@ -722,7 +722,7 @@ _service_stop() {
   if declare -F _net_publish_stop >/dev/null 2>&1; then
     _net_publish_stop "$name" 2>/dev/null || true
   fi
-  log_info "服务 $name 已停止"
+  i18n_info svc.service_stopped name="$name"
   if declare -F audit_event >/dev/null 2>&1; then
     audit_event service stop "object=$name" "exit=0" "ms=0"
   fi
@@ -731,7 +731,7 @@ _service_stop() {
 
 _service_status() {
   local name="${1:-}"
-  [[ -n "$name" ]] || die 2 "用法: capbox service status NAME"
+  [[ -n "$name" ]] || i18n_die 2 svc.usage_capbox_service_status_name
   local rd
   rd="$(_service_run_dir "$name")" || return 1
   if _service_is_running "$name"; then
@@ -759,15 +759,15 @@ _service_logs() {
       -n) lines="${2:-50}"; shift 2 || shift ;;
       -n=*) lines="${1#*=}"; shift ;;
       -h|--help) i18n_print help.service.logs; return 0 ;;
-      -*) die 2 "service logs: 未知选项 $1" ;;
-      *) if [[ -z "$name" ]]; then name="$1"; shift; else die 2 "多余参数 $1"; fi ;;
+      -*) i18n_die 2 svc.service_logs_unknown_option arg="$1" ;;
+      *) if [[ -z "$name" ]]; then name="$1"; shift; else i18n_die 2 svc.extra_argument arg="$1"; fi ;;
     esac
   done
-  [[ -n "$name" ]] || die 2 "用法: capbox service logs NAME"
+  [[ -n "$name" ]] || i18n_die 2 svc.usage_capbox_service_logs_name
   local rd f
   rd="$(_service_run_dir "$name")" || return 1
   f="$rd/service.log"
-  [[ -f "$f" ]] || die 1 "无日志: $f"
+  [[ -f "$f" ]] || i18n_die 1 svc.no_log f="$f"
   if (( follow == 1 )); then tail -n "$lines" -f -- "$f"
   else tail -n "$lines" -- "$f"; fi
 }

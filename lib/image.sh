@@ -27,7 +27,7 @@ _image_extract_archive() {
   [[ -n "$arch" && -n "$dest" && -d "$dest" && ! -L "$dest" ]] || return 1
   if [[ "$arch" == *.zst ]]; then
     have_cmd zstd || {
-      log_err "解包 zst 需要 zstd"
+      i18n_err image.extracting_zst_requires_zstd
       return 1
     }
     tmp="$(mktemp "${TMPDIR:-/tmp}/capbox-image.XXXXXX.tar")" || return 1
@@ -120,7 +120,7 @@ _image_install_tree() {
   for part in "${parts[@]}"; do
     [[ -n "$part" && "$part" != "." && "$part" != ".." ]] || return 1
     if [[ -L "$cur/$part" ]]; then
-      log_err "拒绝把镜像内容写入符号链接: $cur/$part"
+      i18n_err image.refusing_write_image_contents_symlink cur="$cur" part="$part"
       return 1
     fi
     if [[ -d "$cur/$part" ]]; then
@@ -128,7 +128,7 @@ _image_install_tree() {
       continue
     fi
     if [[ -e "$cur/$part" ]]; then
-      log_err "缓存目标不是目录: $cur/$part"
+      i18n_err image.cache_target_not_directory cur="$cur" part="$part"
       return 1
     fi
     mkdir -- "$cur/$part" || return 1
@@ -136,7 +136,7 @@ _image_install_tree() {
   done
   [[ "$cur" == "$dest" && -d "$dest" && ! -L "$dest" ]] || return 1
   if find "$src" -type l -print -quit | grep -q .; then
-    log_err "缓存树含符号链接，拒绝写入 rootfs"
+    i18n_err image.cache_tree_contains_symlink_refusing_write_rootfs
     return 1
   fi
   cp -a -- "$src/." "$dest/" || return 1
@@ -174,7 +174,7 @@ cmd_image() {
       ;;
     export)
       local name="${1:-}"
-      _image_valid_name "$name" || die 2 "镜像名非法"
+      _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
       require_rootfs
       local d out
       d="$(_image_dir)"
@@ -191,8 +191,8 @@ cmd_image() {
       sum="$(_image_sha256_file "$out")"
       printf '%s\n' "$sum" >"${out}.sha256"
       _image_write_meta "$out" "${CAPBOX_DISTRO}" "$sum"
-      log_info "已导出: $out"
-      log_info "SHA256: $sum"
+      i18n_info image.exported out="$out"
+      i18n_info image.sha256 sum="$sum"
       if declare -F audit_event >/dev/null 2>&1; then
         audit_event image ok "object=$name" "detail=export:$sum" "exit=0" "ms=0"
       fi
@@ -201,11 +201,11 @@ cmd_image() {
       ;;
     verify)
       local name="${1:-}" arch
-      _image_valid_name "$name" || die 2 "镜像名非法"
+      _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
       if [[ -f "$(_image_dir)/${name}.tar.zst" ]]; then arch="$(_image_dir)/${name}.tar.zst"
       elif [[ -f "$(_image_dir)/${name}.tar.gz" ]]; then arch="$(_image_dir)/${name}.tar.gz"
-      else die 1 "镜像不存在: $name"; fi
-      [[ -f "${arch}.sha256" ]] || die 1 "缺少 ${arch}.sha256"
+      else i18n_die 1 image.image_does_not_exist name="$name"; fi
+      [[ -f "${arch}.sha256" ]] || i18n_die 1 image.missing_sha256 arch="${arch}"
       local expect got
       expect="$(head -c 64 "${arch}.sha256" | tr -d '\n')"
       got="$(_image_sha256_file "$arch")"
@@ -213,7 +213,7 @@ cmd_image() {
         printf 'OK %s\n' "$got"
         return 0
       fi
-      log_err "SHA256 不匹配: expect=$expect got=$got"
+      i18n_err image.sha256_mismatch_expect_got expect="$expect" got="$got"
       return 1
       ;;
     import)
@@ -222,11 +222,11 @@ cmd_image() {
         case "$1" in
           --force) force=1; shift ;;
           -h|--help) cmd_image --help; return 0 ;;
-          -*) die 2 "image import: 未知选项 $1" ;;
+          -*) i18n_die 2 image.image_import_unknown_option arg="$1" ;;
           *) name="$1"; shift ;;
         esac
       done
-      _image_valid_name "$name" || die 2 "镜像名非法"
+      _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
       cmd_image verify "$name" >/dev/null || return 1
       local arch parent target
       if [[ -f "$(_image_dir)/${name}.tar.zst" ]]; then arch="$(_image_dir)/${name}.tar.zst"
@@ -234,37 +234,37 @@ cmd_image() {
       parent="$(dirname "$CAPBOX_ROOTFS")"
       target="$parent/${CAPBOX_DISTRO}.imported-${name}"
       if [[ -L "$parent" || -L "$target" || -L "$target.extract" ]]; then
-        die 1 "导入目标路径是符号链接"
+        i18n_die 1 image.import_target_path_symlink
       fi
       rm -rf --one-file-system -- "$target" "$target.extract"
-      mkdir -p -- "$target.extract" || die 1 "无法创建解包目录"
-      [[ -d "$target.extract" && ! -L "$target.extract" ]] || die 1 "解包目录不是真实目录"
-      _image_extract_archive "$arch" "$target.extract" || die 1 "导入归档解包失败"
+      mkdir -p -- "$target.extract" || i18n_die 1 image.unable_create_extract_directory
+      [[ -d "$target.extract" && ! -L "$target.extract" ]] || i18n_die 1 image.extract_directory_not_real_directory
+      _image_extract_archive "$arch" "$target.extract" || i18n_die 1 image.failed_extract_import_archive
       local extracted="$target.extract/$(basename "$CAPBOX_ROOTFS")"
       if [[ ! -d "$extracted" || -L "$extracted" ]]; then
         extracted="$(find "$target.extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
       fi
-      [[ -n "$extracted" ]] || die 1 "导入归档无根目录"
-      _image_realpath_inside "$extracted" "$target.extract" >/dev/null || die 1 "导入根目录越出解包目录"
-      [[ ! -e "$target" && ! -L "$target" ]] || die 1 "导入目标已存在"
-      mv -- "$extracted" "$target" || die 1 "无法放置导入目录"
-      [[ -d "$target" && ! -L "$target" ]] || die 1 "导入结果不是真实目录"
+      [[ -n "$extracted" ]] || i18n_die 1 image.import_archive_has_no_root_directory
+      _image_realpath_inside "$extracted" "$target.extract" >/dev/null || i18n_die 1 image.import_root_directory_escaped_extract_directory
+      [[ ! -e "$target" && ! -L "$target" ]] || i18n_die 1 image.import_target_already_exists
+      mv -- "$extracted" "$target" || i18n_die 1 image.unable_place_import_directory
+      [[ -d "$target" && ! -L "$target" ]] || i18n_die 1 image.import_result_not_real_directory
       rm -rf --one-file-system -- "$target.extract"
-      log_info "已导入到旁路: $target（未替换当前 rootfs）"
+      i18n_info image.imported_sidecar_path_current_rootfs_not_replaced target="$target"
       if (( force == 1 )); then
         local bak="$parent/${CAPBOX_DISTRO}.pre-import-$$"
-        [[ -d "$CAPBOX_ROOTFS" && ! -L "$CAPBOX_ROOTFS" ]] || die 1 "当前 rootfs 不是真实目录，拒绝 --force"
-        [[ ! -e "$bak" && ! -L "$bak" ]] || die 1 "备份路径已存在: $bak"
-        mv -- "$CAPBOX_ROOTFS" "$bak" || die 1 "无法挪开当前 rootfs"
+        [[ -d "$CAPBOX_ROOTFS" && ! -L "$CAPBOX_ROOTFS" ]] || i18n_die 1 image.current_rootfs_not_real_directory_refusing_force
+        [[ ! -e "$bak" && ! -L "$bak" ]] || i18n_die 1 image.backup_path_already_exists bak="$bak"
+        mv -- "$CAPBOX_ROOTFS" "$bak" || i18n_die 1 image.unable_move_current_rootfs_aside
         if mv -- "$target" "$CAPBOX_ROOTFS" && [[ -d "$CAPBOX_ROOTFS" && ! -L "$CAPBOX_ROOTFS" ]]; then
-          log_info "已 --force 替换当前 rootfs；旧树在 $bak"
+          i18n_info image.replaced_current_rootfs_force_old_tree bak="$bak"
         else
           rm -rf --one-file-system -- "$CAPBOX_ROOTFS"
           mv -- "$bak" "$CAPBOX_ROOTFS" || true
-          die 1 "替换失败"
+          i18n_die 1 image.replace_failed
         fi
       else
-        log_info "如需替换当前 rootfs: capbox image import $name --force"
+        i18n_info image.replace_current_rootfs_capbox_image_import_force name="$name"
       fi
       if declare -F audit_event >/dev/null 2>&1; then
         audit_event image ok "object=$name" "detail=import:force=$force" "exit=0" "ms=0"
@@ -279,7 +279,7 @@ cmd_image() {
           ;;
         verify|restore)
           local action="$lsub" lockfile="${2:-$(_image_lock_path)}"
-          [[ $# -le 2 ]] || die 2 'image lock: 参数过多'
+          [[ $# -le 2 ]] || i18n_die 2 image.image_lock_too_many_arguments
           if [[ "$action" == verify ]]; then
             _package_lock_verify "$lockfile"
           else
@@ -291,7 +291,7 @@ cmd_image() {
           [[ -f "$(_image_lock_path)" ]] || { printf '(无 package.lock；先 image lock save)\n'; return 0; }
           cat -- "$(_image_lock_path)"
           ;;
-        *) die 2 "image lock: save|show|verify|restore" ;;
+        *) i18n_die 2 image.image_lock_save_show_verify_restore ;;
       esac
       return 0
       ;;
@@ -319,18 +319,18 @@ cmd_image() {
           local sum
           sum="$(_image_sha256_file "$out")"
           printf '%s\n' "$sum" >"${out}.sha256"
-          log_info "离线缓存: $out ($sum)"
+          i18n_info image.offline_cache out="$out" sum="$sum"
           printf '%s\n' "$out"
           ;;
         restore)
           local arch="${1:-}"
-          [[ -n "$arch" && -f "$arch" ]] || die 2 "用法: image cache restore ARCHIVE"
+          [[ -n "$arch" && -f "$arch" ]] || i18n_die 2 image.usage_image_cache_restore_archive
           require_rootfs
           if [[ -f "${arch}.sha256" ]]; then
             local expect got
             expect="$(head -c 64 "${arch}.sha256" | tr -d '\n')"
             got="$(_image_sha256_file "$arch")"
-            [[ "$expect" == "$got" ]] || die 1 "缓存校验失败"
+            [[ "$expect" == "$got" ]] || i18n_die 1 image.cache_verification_failed
           fi
           local rel stage
           if [[ "${CAPBOX_DISTRO}" == "alpine" ]]; then
@@ -338,27 +338,27 @@ cmd_image() {
           else
             rel="var/cache/apt"
           fi
-          stage="$(mktemp -d "${CAPBOX_STATE_DIR:-${TMPDIR:-/tmp}}/cache-restore.XXXXXX")" || die 1 "无法创建缓存暂存目录"
+          stage="$(mktemp -d "${CAPBOX_STATE_DIR:-${TMPDIR:-/tmp}}/cache-restore.XXXXXX")" || i18n_die 1 image.unable_create_cache_staging_directory
           if ! _image_extract_archive "$arch" "$stage"; then
             rm -rf --one-file-system -- "$stage"
-            die 1 "缓存归档解包失败"
+            i18n_die 1 image.failed_extract_cache_archive
           fi
           if [[ ! -d "$stage/$rel" || -L "$stage/$rel" ]]; then
             rm -rf --one-file-system -- "$stage"
-            die 1 "缓存归档没有 $rel"
+            i18n_die 1 image.cache_archive_does_not_contain rel="$rel"
           fi
           if ! _image_install_tree "$stage/$rel" "$rel"; then
             rm -rf --one-file-system -- "$stage"
-            die 1 "拒绝把缓存写入 rootfs"
+            i18n_die 1 image.refusing_write_cache_rootfs
           fi
           rm -rf --one-file-system -- "$stage"
-          log_info "已恢复离线包缓存到 rootfs"
+          i18n_info image.restored_offline_package_cache_rootfs
           ;;
-        *) die 2 "image cache: save|restore|path" ;;
+        *) i18n_die 2 image.image_cache_save_restore_path ;;
       esac
       return 0
       ;;
-    *) die 2 "image: 未知子命令 $sub" ;;
+    *) i18n_die 2 image.image_unknown_subcommand sub="$sub" ;;
   esac
 }
 

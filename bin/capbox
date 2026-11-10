@@ -11,14 +11,6 @@
 
 set -u
 
-# 继承来的环境变量不能打开旧版 bwrap 放行。单次标记只来自本次 argv。
-if [ -n "${CAPBOX_ALLOW_OLD_BWRAP+x}" ]; then
-  printf '[capbox] 警告: 忽略环境变量 CAPBOX_ALLOW_OLD_BWRAP=%s；持久放行写入 config.env，单次放行用 --allow-old-bwrap\n' \
-    "$CAPBOX_ALLOW_OLD_BWRAP" >&2
-  unset CAPBOX_ALLOW_OLD_BWRAP
-fi
-unset CAPBOX_ALLOW_OLD_BWRAP_ONCE
-
 # ---------- 0. 定位 CapBox 根目录 --------------------------------------------
 # 规则：
 #   1) CAPBOX_ROOT / --root → 工作区根下的 .capbox/（可尚不存在）
@@ -26,10 +18,120 @@ unset CAPBOX_ALLOW_OLD_BWRAP_ONCE
 #   3) 否则：状态目标 = $PWD/.capbox，库从 CLI 模板树加载（可随后 bootstrap/init）
 #      若 $PWD 已在模板树内，则 CAPBOX_DIR=模板本身（开发/仓库即安装）
 # 全局 --root/--debug 必须在锁定 CAPBOX_DIR 之前解析。
+# 尽早加载共享目录，使下面尚未 source common.sh 的错误也能按 CAPBOX_LANG / locale 输出。
 _capbox_self="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
 _capbox_bin_dir="$(cd -- "$(dirname -- "$_capbox_self")" && pwd)"
 _CAPBOX_CLI_BIN_DIR="$_capbox_bin_dir"
 export _CAPBOX_CLI_BIN_DIR
+
+# 合法 CAPBOX_LANG 或 locale 预解析；非法值仍等到 load_config 之后再以固定中英各一句退出。
+if [ -f "$_CAPBOX_CLI_BIN_DIR/../lib/i18n.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$_CAPBOX_CLI_BIN_DIR/../lib/i18n.sh"
+fi
+
+# 目录尚不可用时的语言选择，规则与 _capbox_resolve_lang_preview 一致（非法 CAPBOX_LANG 视为未采用，默认英文）。
+_capbox_early_lang() {
+  local raw s
+  if [ -n "${CAPBOX_LANG:-}" ]; then
+    raw="$CAPBOX_LANG"
+    s="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    s="${s%%@*}"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    case "$s" in
+      zh|zh.*|zh_cn|zh_cn.*) printf 'zh'; return 0 ;;
+      en|en.*|en_*) printf 'en'; return 0 ;;
+    esac
+    printf 'en'
+    return 0
+  fi
+  if [ -n "${LC_ALL:-}" ]; then
+    raw="$LC_ALL"
+  elif [ -n "${LC_MESSAGES:-}" ]; then
+    raw="$LC_MESSAGES"
+  else
+    raw="${LANG:-}"
+  fi
+  s="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  s="${s%%@*}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  case "$s" in
+    zh|zh.*|zh_cn|zh_cn.*) printf 'zh' ;;
+    *) printf 'en' ;;
+  esac
+}
+
+# 无目录可加载时（例如 CLI 旁没有 lib/）按同一套语言规则吐出固定中/英文，避免只剩中文。
+_capbox_early_fmt() {
+  local key="${1-}" lang v
+  shift || true
+  if declare -F i18n_fmt >/dev/null 2>&1; then
+    i18n_fmt "$key" "$@"
+    return 0
+  fi
+  lang="$(_capbox_early_lang)"
+  case "$key:$lang" in
+    cli.ignore_allow_old_bwrap:zh) v='忽略环境变量 CAPBOX_ALLOW_OLD_BWRAP={value}；持久放行写入 config.env，单次放行用 --allow-old-bwrap' ;;
+    cli.ignore_allow_old_bwrap:*) v='Ignoring environment variable CAPBOX_ALLOW_OLD_BWRAP={value}; write a persistent allow to config.env, or pass --allow-old-bwrap for a one-shot allow' ;;
+    cli.root_missing_arg:zh) v='--root 需要参数（工作区路径）' ;;
+    cli.root_missing_arg:*) v='--root requires an argument (workspace path)' ;;
+    cli.template_not_found:zh) v='找不到 CapBox 模板（CLI 旁无 lib/）；请安装 CapBox 或用项目内 .capbox/bin/capbox' ;;
+    cli.template_not_found:*) v='CapBox template not found (no lib/ next to the CLI); install CapBox or use a project-local .capbox/bin/capbox' ;;
+    cli.root_not_found:zh) v='找不到 CapBox 根目录（.capbox）；请在项目下运行 capbox init，或设置 CAPBOX_ROOT=/path/to/project' ;;
+    cli.root_not_found:*) v='CapBox root directory (.capbox) not found; run capbox init from a project, or set CAPBOX_ROOT=/path/to/project' ;;
+    cli.upgrade_incomplete:zh) v='运行文件升级未完成；请用完整模板运行 upgrade rollback' ;;
+    cli.upgrade_incomplete:*) v='A runtime file upgrade did not finish; run upgrade rollback with a complete template' ;;
+    cli.cannot_load_common:zh) v='无法加载 {dir}/common.sh' ;;
+    cli.cannot_load_common:*) v='Unable to load {dir}/common.sh' ;;
+    cli.incomplete_install:zh) v='安装不完整，缺少 {dir}/{module}.sh' ;;
+    cli.incomplete_install:*) v='Incomplete install, missing {dir}/{module}.sh' ;;
+    *) v="$key" ;;
+  esac
+  local pair k val
+  for pair in "$@"; do
+    k="${pair%%=*}"
+    val="${pair#*=}"
+    v="${v//\{$k\}/$val}"
+  done
+  printf '%s' "$v"
+}
+
+_capbox_early_err() {
+  local prefix text
+  text="$(_capbox_early_fmt "$@")"
+  if [ -n "${_CAPBOX_LOG_PREFIX_ERR:-}" ]; then
+    prefix="$_CAPBOX_LOG_PREFIX_ERR"
+  elif [ "$(_capbox_early_lang)" = zh ]; then
+    prefix='[capbox] 错误:'
+  else
+    prefix='[capbox] error:'
+  fi
+  printf '%s %s
+' "$prefix" "$text" >&2
+}
+
+_capbox_early_warn() {
+  local prefix text
+  text="$(_capbox_early_fmt "$@")"
+  if [ -n "${_CAPBOX_LOG_PREFIX_WARN:-}" ]; then
+    prefix="$_CAPBOX_LOG_PREFIX_WARN"
+  elif [ "$(_capbox_early_lang)" = zh ]; then
+    prefix='[capbox] 警告:'
+  else
+    prefix='[capbox] warning:'
+  fi
+  printf '%s %s
+' "$prefix" "$text" >&2
+}
+
+# 继承来的环境变量不能打开旧版 bwrap 放行。单次标记只来自本次 argv。
+if [ -n "${CAPBOX_ALLOW_OLD_BWRAP+x}" ]; then
+  _capbox_early_warn cli.ignore_allow_old_bwrap value="$CAPBOX_ALLOW_OLD_BWRAP"
+  unset CAPBOX_ALLOW_OLD_BWRAP
+fi
+unset CAPBOX_ALLOW_OLD_BWRAP_ONCE
 
 # 剥掉影响根目录选择的全局选项；其余参数原样留给 capbox_main
 _capbox_argv=()
@@ -41,7 +143,7 @@ while [ $# -gt 0 ]; do
       ;;
     --root)
       if [ $# -lt 2 ]; then
-        printf '[capbox] 错误: --root 需要参数（工作区路径）\n' >&2
+        _capbox_early_err cli.root_missing_arg
         exit 2
       fi
       export CAPBOX_ROOT="$2"
@@ -114,7 +216,7 @@ _capbox_resolve_install_dir() {
     done
     if [ -z "${CAPBOX_DIR:-}" ]; then
       if [ -z "$template" ]; then
-        printf '[capbox] 错误: 找不到 CapBox 模板（CLI 旁无 lib/）；请安装 CapBox 或用项目内 .capbox/bin/capbox\n' >&2
+        _capbox_early_err cli.template_not_found
         exit 1
       fi
       # 仅当 cwd 正好是模板根（开发/「仓库即安装」）时用模板当状态目录；
@@ -131,7 +233,7 @@ _capbox_resolve_install_dir() {
     fi
   fi
   if [ -z "${CAPBOX_DIR:-}" ]; then
-    printf '[capbox] 错误: 找不到 CapBox 根目录（.capbox）；请在项目下运行 capbox init，或设置 CAPBOX_ROOT=/path/to/project\n' >&2
+    _capbox_early_err cli.root_not_found
     exit 1
   fi
   export CAPBOX_DIR
@@ -161,7 +263,7 @@ unset _capbox_self _capbox_bin_dir
 
 # 中断的升级必须用完整的外部模板恢复。
 if [[ -e "$CAPBOX_DIR/.upgrade-in-progress" && "${1:-}" != upgrade ]]; then
-  printf '[capbox] 错误: 运行文件升级未完成；请用完整模板运行 upgrade rollback\n' >&2
+  _capbox_early_err cli.upgrade_incomplete
   exit 1
 fi
 
@@ -180,12 +282,12 @@ fi
 
 # shellcheck source=/dev/null
 source "$_capbox_lib_dir/common.sh" || {
-  printf '[capbox] 错误: 无法加载 %s/common.sh\n' "$_capbox_lib_dir" >&2
+  _capbox_early_err cli.cannot_load_common dir="$_capbox_lib_dir"
   exit 1
 }
 for _capbox_module in rootfs sandbox daemon net resources recipe idmap service audit security landlock fsguard image package-lock upgrade envkit credentials; do
   if [[ ! -f "$_capbox_lib_dir/$_capbox_module.sh" ]]; then
-    printf '[capbox] 错误: 安装不完整，缺少 %s/%s.sh\n' "$_capbox_lib_dir" "$_capbox_module" >&2
+    _capbox_early_err cli.incomplete_install dir="$_capbox_lib_dir" module="$_capbox_module"
     exit 5
   fi
   # shellcheck source=/dev/null
@@ -210,7 +312,11 @@ _has_cmd_fn() { declare -F "$1" >/dev/null 2>&1; }
 _require_decl() {
   local fn="${1:-}" label="${2:-$1}" hint="${3:-}"
   if ! _has_cmd_fn "$fn"; then
-    log_err "命令 '$label' 不可用：缺少实现函数 $fn${hint:+（$hint）}"
+    if [[ -n "$hint" ]]; then
+      i18n_err cli.cmd_unavailable_hint label="$label" fn="$fn" hint="$hint"
+    else
+      i18n_err cli.cmd_unavailable label="$label" fn="$fn"
+    fi
     return 1
   fi
   return 0
@@ -261,7 +367,7 @@ capbox_main() {
         shift
         ;;
       --) shift; break ;;
-      -*) log_err "未知全局选项: $1"; capbox_usage >&2; return 2 ;;
+      -*) i18n_err cli.unknown_global_option arg="$1"; capbox_usage >&2; return 2 ;;
       *) cmd="$1"; shift; break ;;
     esac
   done
@@ -408,7 +514,7 @@ capbox_main() {
       cmd_version
       ;;
     *)
-      log_err "未知命令: $cmd"
+      i18n_err cli.unknown_command cmd="$cmd"
       printf '\n' >&2
       capbox_usage >&2
       return 2

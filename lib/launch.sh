@@ -80,7 +80,7 @@ build_bwrap_args() {
       none | restricted) a+=(--unshare-net) ;;
       open | host | "") ;;
       *)
-        log_err "CAPBOX_NET 非法（${CAPBOX_NET}），且 net.sh 未加载；拒绝当作 open"
+        i18n_err launch.capbox_net_invalid_net_sh_not_loaded net="${CAPBOX_NET}"
         return 2
         ;;
     esac
@@ -95,7 +95,7 @@ build_bwrap_args() {
   _eu="${CAPBOX_EXEC_UID_OVERRIDE:-${CAPBOX_EXEC_UID:-0}}"
   _eg="${CAPBOX_EXEC_GID_OVERRIDE:-${CAPBOX_EXEC_GID:-0}}"
   if [[ ! "$_eu" =~ ^[0-9]+$ || ! "$_eg" =~ ^[0-9]+$ ]] || (( _eu > 4294967295 || _eg > 4294967295 )); then
-    log_err "EXEC_UID/EXEC_GID 必须是 0..4294967295 的数字（当前 uid=${_eu} gid=${_eg}）"
+    i18n_err launch.exec_uid_exec_gid_must_numbers_0 _eu="${_eu}" _eg="${_eg}"
     return 2
   fi
   a+=(--uid "$_eu" --gid "$_eg" --cap-add ALL)

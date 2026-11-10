@@ -43,7 +43,7 @@ _package_lock_save() {
     fi
   fi
   rm -f -- "$input" "$staged"
-  (( rc == 0 )) || { log_err '包锁未保存'; return "$rc"; }
+  (( rc == 0 )) || { i18n_err pkglock.package_lock_not_saved; return "$rc"; }
   printf '%s\n' "$file"
 }
 

@@ -9,7 +9,7 @@
 #       CAPBOX_DIR CAPBOX_WORKSPACE CAPBOX_ROOTFS CAPBOX_DISTRO CAPBOX_DAEMON_DIR
 #   * 所有脚本 `set -u` 友好：可选变量一律用 ${VAR:-} 取值。
 #   * 用户可见信息按 CAPBOX_LANG / locale 选择中文或英文；未设置且未命中中文 locale 时默认英文。
-#     log_debug 始终英文。本文件此版只翻译日志前缀与 --help；其余文案后续再迁。
+#     log_debug 始终英文。log_*/die 与用法/错误已走共享目录；doctor 报告正文此版仍维持原样。
 # =============================================================================
 
 # ---------- 0. 自身定位 -------------------------------------------------------
@@ -98,7 +98,12 @@ have_cmd() {
 
 need_cmd() {
   local cmd="${1:-}"
-  have_cmd "$cmd" || die 5 "缺少依赖命令: $cmd${2:+（$2）}"
+  have_cmd "$cmd" && return 0
+  if [[ -n "${2:-}" ]]; then
+    i18n_die 5 common.need_cmd_hint cmd="$cmd" hint="$2"
+  else
+    i18n_die 5 common.need_cmd cmd="$cmd"
+  fi
 }
 
 # ---------- 3. 配置 -----------------------------------------------------------
@@ -135,11 +140,11 @@ _capbox_declare_net() {
     none | restricted | open) CAPBOX_NET="$mode" ;;
     host) CAPBOX_NET=open ;;
     *)
-      die 2 "${who}: --net 必须是 none|restricted|open（host 别名）；当前: ${mode}"
+      i18n_die 2 common.net_must_none_restricted_open_host_alias who="${who}" mode="${mode}"
       ;;
   esac
   if [[ "${CAPBOX_NET}" == "restricted" && -z "${CAPBOX_NET_ALLOW:-}" ]]; then
-    die 2 "${who}: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）"
+    i18n_die 2 common.net_restricted_requires_non_empty_capbox_net who="${who}"
   fi
 }
 
@@ -172,7 +177,7 @@ _capbox_resolve_bwrap() {
       CAPBOX_BWRAP="$cfg_val"
       return 0
     fi
-    log_warn "配置的 CAPBOX_BWRAP=$cfg_val 不可执行，尝试自动发现"
+    i18n_warn common.configured_capbox_bwrap_not_executable_trying_auto cfg_val="$cfg_val"
   fi
 
   local found
@@ -326,21 +331,19 @@ _capbox_old_bwrap_scope() {
 # $1 可选，写入的文件描述符。默认 2（stderr）。doctor 报告走 stdout。
 _capbox_print_old_bwrap_details() {
   local dest="${1:-2}"
-  cat >&"$dest" <<'EOF'
-      受影响: CVE-2026-87766 (/oldroot 符号链接逃逸), CVE-2026-41163 (setuid ptrace)
-      这些漏洞在沙箱进程启动前触发，--clearenv / fsguard / seccomp 均无法防御
-      本检查对 compat、untrusted、strict 同样生效
-      升级: sudo apt install --only-upgrade bubblewrap
-            若发行版未包含 0.12.0，需从源码或更新的仓库安装
-      如确认接受风险，单次允许: capbox --allow-old-bwrap <command>
-      持久允许: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1
-            （会写入审计日志；doctor 仍为 FAIL）
-EOF
+  local text
+  text="$(i18n_get common.bwrap_old_details)"
+  if [[ "$text" == *$'\n' ]]; then
+    printf '%s' "$text" >&"$dest"
+  else
+    printf '%s\n' "$text" >&"$dest"
+  fi
 }
 
 _capbox_print_old_bwrap_deny() {
-  local ver="${CAPBOX_BWRAP_VERSION:-未知}"
-  printf 'FAIL  bwrap %s 低于安全基线 0.12.0\n' "$ver" >&2
+  local ver
+  ver="${CAPBOX_BWRAP_VERSION:-$(i18n_get val.unknown)}"
+  printf '%s\n' "$(i18n_fmt common.bwrap_below_baseline ver="$ver")" >&2
   _capbox_print_old_bwrap_details
 }
 
@@ -353,16 +356,16 @@ _capbox_enforce_bwrap_baseline() {
   fi
   # 二进制根本不存在：留给「bwrap 不可用」的退出码 5，这里不伪装成基线 6。
   if [[ -z "${CAPBOX_BWRAP:-}" || ! -x "${CAPBOX_BWRAP:-}" ]]; then
-    log_err "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
+    i18n_err common.bwrap_unavailable bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
     return 5
   fi
   ver="${CAPBOX_BWRAP_VERSION:-未知}"
   if scope="$(_capbox_old_bwrap_scope)"; then
     if [[ "$scope" == "persist" ]]; then
-      log_warn "bwrap ${ver} 低于安全基线 0.12.0，已被 CAPBOX_ALLOW_OLD_BWRAP 放行（doctor 仍为 FAIL）"
+      i18n_warn common.bwrap_below_0_12_0_security_baseline ver="${ver}"
     fi
     if ! _capbox_audit_old_bwrap "$scope" "$ver" "${CAPBOX_BWRAP_BASELINE_CMD:-}"; then
-      log_err "无法写入旧版 bwrap 放行审计，拒绝启动"
+      i18n_err common.unable_write_old_bwrap_allow_audit_record
       return 6
     fi
     return 0
@@ -381,16 +384,16 @@ _capbox_audit_old_bwrap() {
   dir="${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}"
   f="$dir/audit.jsonl"
   if [[ -L "$dir" || -L "$f" ]]; then
-    log_err "审计日志路径是符号链接，拒绝记录旧版 bwrap 放行: $f"
+    i18n_err common.audit_log_path_symlink_refusing_record_old f="$f"
     return 1
   fi
   if [[ -e "$dir" && ! -d "$dir" ]]; then
-    log_err "审计日志目录不是普通目录，拒绝记录旧版 bwrap 放行: $dir"
+    i18n_err common.audit_log_directory_not_regular_directory_refusing dir="$dir"
     return 1
   fi
   mkdir -p "$dir" 2>/dev/null || return 1
   if [[ -L "$dir" || -L "$f" || ! -d "$dir" ]]; then
-    log_err "审计日志路径不可用，拒绝记录旧版 bwrap 放行: $f"
+    i18n_err common.audit_log_path_unusable_refusing_record_old f="$f"
     return 1
   fi
   if declare -F _audit_redact >/dev/null 2>&1; then
@@ -458,14 +461,14 @@ _capbox_host_state_dir() {
       if [[ -L "$candidate" || ! -d "$candidate" ||
             "$(stat -c %u -- "$candidate")" != "$uid" ||
             "$(stat -c %a -- "$candidate")" != 700 ]]; then
-        log_err "宿主私有目录必须由当前用户拥有、权限 0700 且不是符号链接: $candidate"
+        i18n_err common.host_private_directory_must_owned_current_user candidate="$candidate"
         return 1
       fi
     done
     printf '%s' "$dir"
     return 0
   done
-  log_err "找不到工作区之外的安全宿主运行目录（需要私有 runtime 或 sticky /tmp）"
+  i18n_err common.no_safe_host_runtime_directory_found_outside
   return 1
 }
 
@@ -504,7 +507,7 @@ resolve_path() {
     out="$(realpath -m -- "$p" 2>/dev/null)" || out=""
   fi
   if [[ -z "$out" ]]; then
-    log_err "无法规范化路径（需要可用的 realpath -m）: $p"
+    i18n_err common.unable_normalize_path_realpath_m_required p="$p"
     return 1
   fi
   printf '%s\n' "$out"
@@ -526,7 +529,7 @@ _capbox_workspace_is_dangerous() {
 
 _capbox_require_safe_workspace() {
   if _capbox_workspace_is_dangerous; then
-    die 1 "拒绝：工作区解析为危险路径 (${CAPBOX_WORKSPACE:-})。请在项目下使用 .capbox/，或设置 CAPBOX_ROOT=/path/to/project（不要把 CapBox 装在 \$HOME 下作为全局 CLI，以免绑定整个家目录）。"
+    i18n_die 1 common.refused_workspace_resolved_dangerous_path_project_local workspace="${CAPBOX_WORKSPACE:-}"
   fi
 }
 
@@ -539,7 +542,7 @@ _capbox_guest_path_in_rootfs() {
   root="$(resolve_path "$CAPBOX_ROOTFS")" || return 1
   case "$guest_path" in
     *..*)
-      log_err "guest 路径禁止 ..: $guest_path"
+      i18n_err common.guest_path_must_not_contain guest_path="$guest_path"
       return 1
       ;;
   esac
@@ -623,17 +626,17 @@ _capbox_ro_protect_host_file() {
   fi
 
   if [[ -L "$host_file" ]]; then
-    log_err "受保护配置路径是符号链接，拒绝启动: $host_file"
+    i18n_err common.protected_config_path_symlink_refusing_start host_file="$host_file"
     return 1
   fi
   if [[ -d "$host_file" ]]; then
-    log_warn "受保护配置路径是目录，跳过文件预占: $host_file"
+    i18n_warn common.protected_config_path_directory_skipping_file_pre host_file="$host_file"
     return 0
   fi
 
   if [[ ! -e "$host_file" ]]; then
     if ! ( umask 077; : >"$host_file" ) 2>/dev/null; then
-      log_warn "无法为缺失配置创建挂载点: $host_file"
+      i18n_warn common.unable_create_mount_point_missing_config_file host_file="$host_file"
       return 0
     fi
     created=1
@@ -658,11 +661,11 @@ _capbox_ro_protect_host_dir() {
   [[ -n "$guest_path" && "$guest_path" == /workspace/* ]] || return 0
 
   if [[ -L "$host_dir" ]]; then
-    log_err "受保护目录是符号链接，拒绝启动: $host_dir"
+    i18n_err common.protected_directory_symlink_refusing_start host_dir="$host_dir"
     return 1
   fi
   if [[ -f "$host_dir" ]]; then
-    log_warn "受保护目录路径上存在普通文件，跳过: $host_dir"
+    i18n_warn common.regular_file_exists_protected_directory_path_skipping host_dir="$host_dir"
     return 0
   fi
 
@@ -692,24 +695,24 @@ _capbox_ro_protect_logs() {
   local before=${#_pl_arr[@]}
 
   if [[ -L "$host_dir" ]]; then
-    log_err "logs 是符号链接，拒绝启动: $host_dir"
+    i18n_err common.logs_symlink_refusing_start host_dir="$host_dir"
     return 1
   fi
   if [[ -e "$host_dir" && ! -d "$host_dir" ]]; then
-    log_err "logs 必须是普通目录，拒绝启动: $host_dir"
+    i18n_err common.logs_must_regular_directory_refusing_start host_dir="$host_dir"
     return 1
   fi
   _capbox_ro_protect_host_dir "$host_dir" "$arr_name" || return $?
   if [[ -L "$host_dir/audit.jsonl" ]]; then
-    log_err "logs/audit.jsonl 是符号链接，拒绝启动: $host_dir/audit.jsonl"
+    i18n_err common.logs_audit_jsonl_symlink_refusing_start_audit host_dir="$host_dir"
     return 1
   fi
   if [[ -d "$host_dir/audit.jsonl" ]]; then
-    log_err "logs/audit.jsonl 必须是普通文件，拒绝启动: $host_dir/audit.jsonl"
+    i18n_err common.logs_audit_jsonl_must_regular_file_refusing host_dir="$host_dir"
     return 1
   fi
   if (( ${#_pl_arr[@]} == before )); then
-    log_err "无法把 logs 只读挂进 guest: $host_dir"
+    i18n_err common.unable_bind_mount_logs_read_only_guest host_dir="$host_dir"
     return 1
   fi
   return 0
@@ -734,7 +737,7 @@ _capbox_append_ro_cli_binds() {
   # 这样即使宿主在 daemon 生命周期内 rm+重建 config.env，guest 也无法在只读树上创建。
   # CI/开发「仓库即 CAPBOX_DIR」布局不能整树只读（那会锁死整个 /workspace）。
   if [[ -L "${CAPBOX_DIR:-}" ]]; then
-    log_err "CAPBOX_DIR 是符号链接，拒绝启动: $CAPBOX_DIR"
+    i18n_err common.capbox_dir_symlink_refusing_start dir="$CAPBOX_DIR"
     return 1
   fi
   if [[ -n "${CAPBOX_DIR:-}" && -d "$CAPBOX_DIR" && "$(basename -- "$CAPBOX_DIR")" == ".capbox" ]]; then
@@ -763,7 +766,7 @@ _capbox_append_ro_cli_binds() {
   for host_path in "${CAPBOX_BIN_DIR:-}" "${CAPBOX_LIB_DIR:-}"; do
     [[ -n "$host_path" ]] || continue
     if [[ -L "$host_path" ]]; then
-      log_err "受保护目录是符号链接，拒绝启动: $host_path"
+      i18n_err common.protected_directory_symlink_refusing_start_2 host_path="$host_path"
       return 1
     fi
     [[ -d "$host_path" ]] || continue
@@ -816,7 +819,7 @@ _safe_rm_dir_contents() {
   case "$d" in
     "$CAPBOX_DIR"/*) ;;
     *)
-      log_warn "拒绝清理工作区之外的路径: $d"
+      i18n_warn common.refusing_clean_path_outside_workspace d="$d"
       return 1
       ;;
   esac
@@ -830,11 +833,11 @@ _safe_rm_rootfs() {
   case "$d" in
     "$CAPBOX_DIR"/os/*) ;;
     *)
-      log_err "拒绝删除: $d 不在 $CAPBOX_DIR/os/ 之下"
+      i18n_err common.refusing_delete_not_under_os d="$d" dir="$CAPBOX_DIR"
       return 1
       ;;
   esac
-  log_info "删除 rootfs: $d"
+  i18n_info common.removing_rootfs d="$d"
   rm -rf -- "$d"
 }
 
@@ -845,14 +848,14 @@ with_lock() {
   local name="${1:-}"
   [[ $# -gt 0 ]] && shift
   [[ "${1:-}" == "--" ]] && shift
-  [[ $# -gt 0 ]] || die 2 "with_lock: 缺少要执行的命令"
+  [[ $# -gt 0 ]] || i18n_die 2 common.lock_missing_command_run
   local private lockfile
   private="$(_capbox_host_state_dir)" || return 1
   lockfile="$private/${name:-default}.lock"
   if have_cmd flock; then
     (
       flock -w 180 9 || {
-        log_err "等待锁超时: $lockfile"
+        i18n_err common.timed_out_waiting_lock lockfile="$lockfile"
         exit 1
       }
       "$@"
@@ -903,7 +906,7 @@ refresh_resolv() {
   chmod 0644 "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$dst" 2>/dev/null || {
     rm -f "$tmp" 2>/dev/null || true
-    log_warn "无法生成 $dst"
+    i18n_warn common.unable_generate dst="$dst"
     return 1
   }
   log_debug "已刷新 $dst"
@@ -1013,7 +1016,7 @@ run_bwrap_oneshot() {
   local cwd="${1:-/workspace}"
   local to="${2:-0}"
   shift 2 || true
-  [[ $# -gt 0 ]] || die 2 "run_bwrap_oneshot: 缺少容器内命令"
+  [[ $# -gt 0 ]] || i18n_die 2 common.run_bwrap_oneshot_missing_guest_command
 
   local -a args=()
   local -a full=()
@@ -1029,13 +1032,13 @@ run_bwrap_oneshot() {
     die 6
   fi
   if (( _bbrc != 0 )); then
-    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
+    i18n_die "$_bbrc" common.unable_build_bwrap_arguments_rc_common_causes _bbrc="$_bbrc"
   fi
   if [[ ${#args[@]} -eq 0 ]]; then
-    die 4 "rootfs 不存在: $CAPBOX_ROOTFS（请先运行 capbox init）"
+    i18n_die 4 common.rootfs_does_not_exist_run_capbox_init rootfs="$CAPBOX_ROOTFS"
   fi
 
-  [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}（apt install bubblewrap）"
+  [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable_apt_install_bubblewrap bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
 
   # restricted：走 net.sh 的 unshare-net + allowlist 代理桥
   if declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
@@ -1043,7 +1046,7 @@ run_bwrap_oneshot() {
       _net_run_bwrap_oneshot "$cwd" "$to" "$@"
       return $?
     fi
-    die 5 "CAPBOX_NET=restricted 但 net.sh 未加载"
+    i18n_die 5 common.capbox_net_restricted_net_sh_not_loaded
   fi
 
   full=("$CAPBOX_BWRAP" "${args[@]}" -- "$@")
@@ -1066,7 +1069,7 @@ run_bwrap_oneshot() {
     _idmap_enabled || idmap_rc=$?
   fi
   if (( idmap_rc == 2 )); then
-    die 1 "CAPBOX_IDMAP=on 但多 UID 映射不可用：${CAPBOX_IDMAP_DETAIL:-见 doctor}"
+    i18n_die 1 common.capbox_idmap_multi_uid_mapping_unavailable detail="$(i18n_or "${CAPBOX_IDMAP_DETAIL:-}" val.see_doctor)"
   fi
   if (( idmap_rc == 0 )); then
     use_idmap=1
@@ -1116,7 +1119,7 @@ exec_in_guest() {
   local cmd="${1:-}"
   local cwd="${2:-/workspace}"
   local to="${3:-${CAPBOX_EXEC_TIMEOUT:-600}}"
-  [[ -n "$cmd" ]] || die 2 "exec_in_guest: 命令为空"
+  [[ -n "$cmd" ]] || i18n_die 2 common.exec_guest_command_empty
   run_bwrap_oneshot "$cwd" "$to" /bin/sh -c "$cmd"
 }
 
@@ -1200,7 +1203,7 @@ require_rootfs() {
   # 缺脚手架时先从模板填充（不下载）；缺 rootfs 时仅 CAPBOX_AUTO_INIT=1 才自动 init
   if capbox_needs_scaffold; then
     if declare -F capbox_scaffold_project >/dev/null 2>&1; then
-      capbox_scaffold_project || die 1 "无法在当前工作区创建 .capbox"
+      capbox_scaffold_project || i18n_die 1 common.unable_create_capbox_current_workspace
     fi
   fi
   if rootfs_ready; then
@@ -1209,7 +1212,7 @@ require_rootfs() {
   if _capbox_maybe_auto_init; then
     return 0
   fi
-  die 4 "rootfs 不存在或不可用: ${CAPBOX_ROOTFS:-未设置}；请先运行: capbox init --distro ${CAPBOX_DISTRO:-alpine}（会自动脚手架当前目录的 .capbox）"
+  i18n_die 4 common.rootfs_missing_unusable_run_capbox_init_distro rootfs="$(i18n_or "${CAPBOX_ROOTFS:-}" val.unset)" distro="${CAPBOX_DISTRO:-alpine}"
 }
 
 # ---------- 11. daemon 状态探测（无 daemon.sh 时的降级实现） ------------------
@@ -1278,7 +1281,7 @@ status_oneshot() {
         i18n_print help.status
         return 0
         ;;
-      *) die 2 "status: 未知选项 $1" ;;
+      *) i18n_die 2 common.status_unknown_option arg="$1" ;;
     esac
   done
 
@@ -1372,10 +1375,10 @@ cmd_config() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     get)
-      [[ $# -eq 1 ]] || die 2 "用法: capbox config get KEY"
+      [[ $# -eq 1 ]] || i18n_die 2 common.usage_capbox_config_get_key
       local k
       k="$(_cfg_norm_key "$1")"
-      _cfg_known "$k" || die 2 "未知配置项: $1；可用: ${CAPBOX_CFG_KEYS[*]}"
+      _cfg_known "$k" || i18n_die 2 common.unknown_config_key_available arg="$1" keys="${CAPBOX_CFG_KEYS[*]}"
       _cfg_value "$k"
       printf '\n'
       ;;
@@ -1395,13 +1398,13 @@ cmd_config() {
               val="$1"
               have_val=1
             else
-              die 2 "用法: capbox config set [--yes] KEY VALUE"
+              i18n_die 2 common.usage_capbox_config_set_yes_key_value
             fi
             shift
             ;;
         esac
       done
-      (( have_key == 1 && have_val == 1 )) || die 2 "用法: capbox config set [--yes] KEY VALUE"
+      (( have_key == 1 && have_val == 1 )) || i18n_die 2 common.usage_capbox_config_set_yes_key_value
       if (( yes == 1 )); then
         CAPBOX_ALLOW_OLD_BWRAP_CONFIRM=1
       else
@@ -1412,13 +1415,13 @@ cmd_config() {
       if (( set_rc != 0 )); then
         exit "$set_rc"
       fi
-      log_info "已设置 ${key} = ${val}"
+      i18n_info common.set key="${key}" val="${val}"
       ;;
     list | "")
       _config_list
       ;;
     *)
-      die 2 "用法: capbox config <get|set|list> [KEY] [VALUE]"
+      i18n_die 2 common.usage_capbox_config_get_set_list_key
       ;;
   esac
   return 0
@@ -1842,7 +1845,7 @@ cmd_clean() {
         i18n_print help.clean
         return 0
         ;;
-      *) die 2 "clean: 未知选项 $1" ;;
+      *) i18n_die 2 common.clean_unknown_option arg="$1" ;;
     esac
   done
 
@@ -1850,7 +1853,7 @@ cmd_clean() {
   # 这是 clean 的副作用里最容易被忽略的一条：clean 会顺带把常驻容器停掉。
   # 因此只在确实运行时才提示，避免无谓的噪音；并且提示语要明确说「将停止」。
   if declare -F cmd_down >/dev/null 2>&1 && _probe_daemon; then
-    log_info "检测到守护容器正在运行，clean 会先停止它（优雅退出，等待在跑任务完成）"
+    i18n_info common.daemon_container_running_clean_will_stop_first
     local drc=0
     cmd_down >/dev/null 2>&1
     drc=$?
@@ -1860,13 +1863,13 @@ cmd_clean() {
     if (( drc == 3 )); then
       log_debug "守护容器在停止前已自行退出（rc=3），继续清理"
     elif (( drc != 0 )); then
-      log_warn "停止守护容器失败（rc=$drc，继续清理临时文件）"
+      i18n_warn common.failed_stop_daemon_container_rc_continuing_temp drc="$drc"
     fi
   fi
 
-  log_info "清理日志 ($CAPBOX_LOG_DIR)"
+  i18n_info common.cleaning_logs log_dir="$CAPBOX_LOG_DIR"
   _safe_rm_dir_contents "$CAPBOX_LOG_DIR"
-  log_info "清理临时状态 ($CAPBOX_STATE_DIR/ec-*, $CAPBOX_TMP_DIR)"
+  i18n_info common.cleaning_temporary_state_ec state_dir="$CAPBOX_STATE_DIR" tmp_dir="$CAPBOX_TMP_DIR"
   find "$CAPBOX_STATE_DIR" -maxdepth 1 -name 'ec-*.rc' -delete 2>/dev/null || true
   _safe_rm_dir_contents "$CAPBOX_TMP_DIR"
   find "$CAPBOX_RUN_DIR" -maxdepth 1 -name '*.lock' -delete 2>/dev/null || true
@@ -1875,21 +1878,21 @@ cmd_clean() {
   # （ubuntu 30MB），而 clean 的语义主要是「清临时垃圾」，不该顺手把缓存也清了。
   # 要清缓存请显式用 --cache / --all。
   if (( all == 1 )) || (( cache == 1 )); then
-    log_info "清理缓存 ($CAPBOX_CACHE_DIR)"
+    i18n_info common.cleaning_cache cache_dir="$CAPBOX_CACHE_DIR"
     _safe_rm_dir_contents "$CAPBOX_CACHE_DIR"
   else
     local n_cache=0
     [[ -d "$CAPBOX_CACHE_DIR" ]] && n_cache=$(find "$CAPBOX_CACHE_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
     if (( n_cache > 0 )); then
-      log_info "缓存保留（$n_cache 个文件，约 $(human_bytes "$(dir_bytes "$CAPBOX_CACHE_DIR")")）；加 --cache 或 --all 才会清理"
+      i18n_info common.cache_kept_files_about_pass_cache_all n_cache="$n_cache" size="$(human_bytes "$(dir_bytes "$CAPBOX_CACHE_DIR")")"
     fi
   fi
 
   if (( all == 1 )); then
     _safe_rm_rootfs "$CAPBOX_ROOTFS" || true
-    log_info "已删除 rootfs 与缓存；下次使用前需重新 capbox init"
+    i18n_info common.removed_rootfs_cache_run_capbox_init_again
   else
-    log_info "已清理日志/临时文件（rootfs 与缓存保留）"
+    i18n_info common.cleaned_logs_temp_files_rootfs_cache_kept
   fi
   return 0
 }
@@ -1944,7 +1947,7 @@ capbox_scaffold_project() {
   local template srcd
   _capbox_require_safe_workspace || return 1
   template="$(capbox_template_dir)" || {
-    die 1 "找不到 CapBox 模板树（需要带 lib/common.sh 的安装）。请先安装 CapBox Skill/CLI。"
+    i18n_die 1 common.capbox_template_tree_not_found_install_lib
   }
   template="$(resolve_path "$template")"
   local dest
@@ -1960,13 +1963,13 @@ capbox_scaffold_project() {
     return 0
   fi
 
-  log_info "正在当前工作区创建 .capbox …（模板: $template → $CAPBOX_DIR）"
-  mkdir -p "$CAPBOX_DIR" || die 1 "无法创建 $CAPBOX_DIR"
+  i18n_info common.creating_capbox_current_workspace_template template="$template" dir="$CAPBOX_DIR"
+  mkdir -p "$CAPBOX_DIR" || i18n_die 1 common.unable_create dir="$CAPBOX_DIR"
 
   for srcd in bin lib skill; do
     if [[ -d "$template/$srcd" ]]; then
       _capbox_fill_tree "$template/$srcd" "$CAPBOX_DIR/$srcd" \
-        || die 1 "脚手架复制失败: $srcd"
+        || i18n_die 1 common.scaffold_copy_failed srcd="$srcd"
     fi
   done
   if [[ -f "$template/LICENSE" && ! -e "$CAPBOX_DIR/LICENSE" ]]; then
@@ -1976,11 +1979,11 @@ capbox_scaffold_project() {
   if [[ -e "$CAPBOX_DIR/bin/capbox" ]]; then
     chmod +x "$CAPBOX_DIR/bin/capbox" 2>/dev/null || true
   fi
-  [[ -f "$CAPBOX_DIR/lib/common.sh" ]] || die 1 "脚手架后仍缺少 lib/common.sh"
-  [[ -e "$CAPBOX_DIR/bin/capbox" ]] || die 1 "脚手架后仍缺少 bin/capbox"
+  [[ -f "$CAPBOX_DIR/lib/common.sh" ]] || i18n_die 1 common.lib_common_sh_still_missing_after_scaffolding
+  [[ -e "$CAPBOX_DIR/bin/capbox" ]] || i18n_die 1 common.bin_capbox_still_missing_after_scaffolding
 
   ensure_dirs
-  log_info "已在工作区就绪: $CAPBOX_DIR"
+  i18n_info common.workspace_ready dir="$CAPBOX_DIR"
   return 0
 }
 
@@ -1993,7 +1996,7 @@ _capbox_maybe_auto_init() {
     1 | true | TRUE | yes | YES | on | ON) ;;
     *) return 1 ;;
   esac
-  log_info "CAPBOX_AUTO_INIT=1：自动执行 capbox init"
+  i18n_info common.capbox_auto_init_1_running_capbox_init
   if declare -F cmd_init >/dev/null 2>&1; then
     cmd_init || return $?
   else
