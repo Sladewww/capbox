@@ -17,7 +17,7 @@ python3 test/security/test_host_boundary.py
 ShellCheck 的 error 级别必须通过；CI 也验证关键入口的 Git 可执行模式。
 
 <!-- generated:tests -->
-验收用例：**41**（T01–T41）。以 `./test/run.sh --list` 的实际清单为准，不硬编码旧数量。
+验收用例：**42**（T01–T42）。以 `./test/run.sh --list` 的实际清单为准，不硬编码旧数量。
 <!-- /generated:tests -->
 
 ```sh

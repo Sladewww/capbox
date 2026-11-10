@@ -615,9 +615,14 @@ _idmap_run_bwrap_argv() {
   _idmap_inject_block_fds launch 4 "$block_fd"
 
   local bp helper_rc=0 rc=0
-  # 启动 bwrap，info 写到 fd4
-  "${launch[@]}" 4>"$info_out" &
+  # 启动 bwrap，info 写到 fd4。
+  # bash 在无 job control 时会把后台任务的 stdin 接到 /dev/null；
+  # 先复制 fd0，再显式重定向，否则 `capbox shell`/`sh -s` 管道输入会被吞掉（rc=0、无输出）。
+  local stdin_fd
+  exec {stdin_fd}<&0
+  "${launch[@]}" 4>"$info_out" <&"$stdin_fd" &
   bp=$!
+  exec {stdin_fd}<&-
 
   # 等待 info / 应用映射 / 放行
   local child="" i

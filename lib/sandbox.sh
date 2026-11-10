@@ -372,10 +372,13 @@ cmd_shell() {
   local -a shargs=()
   if [[ -t 0 && -t 1 ]]; then
     shargs=(-i)
+  else
+    # 无 tty：显式 -s 从 stdin 读脚本（与 --help「退化为读取 stdin 的 sh」一致）
+    shargs=(-s)
   fi
 
   # 与 exec 同一条启动路径：restricted 挂 allowlist 桥，hardened 挂 seccomp。
-  # timeout 0 = 不包 timeout，stdio 直接继承。
+  # timeout 0 = 不包 timeout，stdio 直接继承（idmap 路径须保留 stdin，见 _idmap_run_bwrap_argv）。
   run_bwrap_oneshot /workspace 0 "$shbin" "${shargs[@]}"
   return $?
 }
