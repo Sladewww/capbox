@@ -475,22 +475,22 @@ _net_run_bwrap_oneshot() {
 _net_doctor_report() {
   local mode
   mode="$(_net_mode)" || {
-    _doctor_fail "CAPBOX_NET 非法（${CAPBOX_NET:-}）；拒绝当作 open"
+    _doctor_fail_i18n doctor.net_invalid value="${CAPBOX_NET:-}"
     return
   }
   case "$mode" in
     none)
-      _doctor_pass "网络模式 none（--unshare-net，容器内无网络）"
+      _doctor_pass_i18n doctor.net_mode_none
       ;;
     open)
-      _doctor_pass "网络模式 open（共享宿主网络；兼容别名 host）"
+      _doctor_pass_i18n doctor.net_mode_open
       ;;
     restricted)
       local pre
       if pre="$(_net_restricted_prereqs 2>/dev/null)"; then
-        _doctor_pass "网络模式 restricted（unshare-net + allowlist 代理；$pre；ALLOW=${CAPBOX_NET_ALLOW})"
+        _doctor_pass_i18n doctor.net_mode_restricted_ok pre="$pre" allow="${CAPBOX_NET_ALLOW}"
       else
-        _doctor_warn "网络模式 restricted 但前置未满足（需要 python3、nsenter、非空 CAPBOX_NET_ALLOW）；exec 将失败"
+        _doctor_warn_i18n doctor.net_mode_restricted_prereq
       fi
       ;;
   esac

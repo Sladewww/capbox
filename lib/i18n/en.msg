@@ -896,3 +896,108 @@ common.bwrap_old_details<<
       Allow persistently: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1
             (an audit record is written; doctor still reports FAIL)
 >>
+
+# doctor report text (_doctor_pass / _doctor_fail / _doctor_warn and *_doctor_report)
+doctor.bwrap_installed=bwrap is installed ({bwrap})
+doctor.bwrap_version_ok=bwrap version {ver} (>= 0.12.0)
+doctor.bwrap_below_baseline=bwrap {ver} is below the 0.12.0 security baseline
+doctor.bwrap_below_allowed_once=bwrap {ver} is below the baseline; allowed for this run by --allow-old-bwrap (doctor still reports FAIL)
+doctor.bwrap_below_allowed_persist=bwrap {ver} is below the baseline; allowed by CAPBOX_ALLOW_OLD_BWRAP (doctor still reports FAIL)
+doctor.bwrap_unavailable=bwrap is unavailable ({bwrap}); install bubblewrap >= 0.12.0 or set CAPBOX_BWRAP
+doctor.workspace_dangerous=Workspace is {home} or / ({workspace}); the entire tree would be RW-bound into the container. Use a project-local .capbox/ or CAPBOX_ROOT=/path/to/project
+doctor.workspace_safe=Workspace is safe ({workspace})
+doctor.audit_workspace_unsafe=workspace is unsafe
+doctor.userns_ok=full userns privileges (uid=0, CapEff={caphex})
+doctor.userns_probe_failed=full userns privilege probe failed: the container could not get uid 0 and full capabilities (check kernel unprivileged_userns_clone and the bwrap version)
+doctor.userns_not_probed=full userns privileges were not probed (bwrap is unavailable)
+doctor.idmap_module_missing=UID mapping module is not loaded (lib/idmap.sh)
+doctor.deps_complete=required commands are present (tar/curl/flock/timeout)
+doctor.deps_missing_timeout=timeout is missing (exec --timeout will not work); other dependencies are present
+doctor.deps_missing=missing required commands: {cmds}
+doctor.rootfs_ready=rootfs is ready ({rootfs}, {size})
+doctor.rootfs_missing=rootfs is missing or unavailable ({rootfs}); run: capbox init --distro {distro}
+doctor.resolv_ready=resolv.conf is ready ({path})
+doctor.resolv_missing=resolv.conf has not been generated yet (it is created on the first exec)
+doctor.mirror_skipped_none=CAPBOX_MIRROR=none, skipping mirror connectivity check
+doctor.mirror_url_empty=mirror URL is empty (check CAPBOX_MIRROR_{distro})
+doctor.mirror_reachable=mirror is reachable ({url})
+doctor.mirror_unreachable=mirror is unreachable ({url}); check the network or CAPBOX_MIRROR
+doctor.host_net_ok=host network is available
+doctor.host_net_probe_failed=probe from the host to a public mirror failed (the environment may be offline)
+doctor.net_none=CAPBOX_NET=none, no network in the container (--unshare-net)
+doctor.net_restricted_mirror=CAPBOX_NET=restricted: mirror connectivity depends on the allowlist proxy (see the network mode item below)
+doctor.missing_curl_skip_net=curl is missing, skipping network connectivity checks
+doctor.socks5_apt_unsupported=apt does not natively support a socks5 proxy; use an http proxy, or configure proxychains in the container
+doctor.proxy_configured=proxy is configured ({proxy})
+doctor.proxy_unset=proxy is not configured (direct connection)
+doctor.apk_repos_injected=apk mirror repositories have been injected
+doctor.apk_repos_missing={path} is missing (re-run capbox init)
+doctor.apt_repos_injected=apt mirror sources have been injected ({which})
+doctor.apt_repos_missing=apt source files are missing ({sl} or {d822}); re-run capbox init
+doctor.env_cleared=environment is cleared (host secrets are not inherited; the HOME/PATH whitelist is available)
+doctor.env_not_cleared=environment was not cleared or the whitelist is missing (probe rc={rc} out={out}); bwrap --clearenv must always run before --setenv
+doctor.skip_env_old_bwrap=skipping environment-clear probe (bwrap is below the security baseline)
+doctor.skip_env_no_bwrap=skipping environment-clear probe (bwrap is unavailable)
+doctor.skip_env_no_rootfs=skipping environment-clear probe (rootfs or bwrap is unavailable)
+doctor.config_preoccupy_no_log=could not locate the guest-side logs/audit.jsonl, so read-only protection cannot be confirmed
+doctor.guest_wrote_config=guest wrote the host config.env (missing or existing paths were not protected read-only)
+doctor.guest_wrote_services=guest created host services/_doctor_probe.env (the services directory was not protected read-only)
+doctor.guest_wrote_protected=guest could write a protected config path (probe out={out})
+doctor.guest_wrote_audit_log=guest wrote the host logs/audit.jsonl (logs were not protected read-only)
+doctor.config_preoccupy_ok=config path pre-occupation is in effect (missing or existing config.env, services/, and logs/audit.jsonl cannot be written by the guest)
+doctor.skip_preoccupy_capbox_dir=skipping config pre-occupation probe (CAPBOX_DIR is not in the workspace view)
+doctor.skip_preoccupy_old_bwrap=skipping config pre-occupation probe (bwrap is below the security baseline)
+doctor.skip_preoccupy_no_bwrap=skipping config pre-occupation probe (bwrap is unavailable)
+doctor.skip_preoccupy_no_rootfs=skipping config pre-occupation probe (rootfs or bwrap is unavailable)
+doctor.daemon_running=daemon container is running (pid {pid})
+doctor.daemon_not_running=daemon container is not running (run capbox up as a background task when needed)
+doctor.summary_baseline_fail=Doctor result: security baseline not met (exit 6); {fails} FAIL, {warns} WARN
+doctor.summary_fail=Doctor result: {fails} FAIL, {warns} WARN
+doctor.summary_pass_with_warns=Doctor result: all passed ({warns} WARN)
+doctor.summary_pass=Doctor result: all passed
+doctor.audit_baseline_fail=security baseline not met, {fails} FAIL
+doctor.audit_fail={fails} FAIL, {warns} WARN
+doctor.idmap_multi=UID mapping multi ({detail})
+doctor.idmap_drop_helper_ok=drop-priv helper ({detail})
+doctor.idmap_drop_helper_unavailable=drop-priv helper is unavailable ({detail}); --uid will fall back to guest setpriv/python/chpst/su
+doctor.idmap_single=UID mapping single ({detail}). chown/setgroups/multi-user services will fail
+doctor.idmap_blocked_on=UID mapping is blocked and CAPBOX_IDMAP=on ({detail})
+doctor.idmap_fallback_single=UID mapping is unavailable, fell back to single ({detail})
+doctor.idmap_status_unknown=UID mapping status is unknown
+doctor.cgroup_v2_writable=cgroup v2 is writable ({detail})
+doctor.cgroup_v2_no_delegate=cgroup v2 is present but cannot be delegated: {detail}
+doctor.cgroup_unavailable=cgroup is unavailable: {detail}
+doctor.disk_max_honored=DISK_MAX can be honored: {detail}
+doctor.disk_max_not_honored=DISK_MAX cannot be honored: {detail}
+doctor.resources_unset=resource limits are unset (MEMORY/CPU/PIDS/DISK are empty)
+doctor.resources_mode=RESOURCES_MODE={mode}
+doctor.memory_max_set=MEMORY_MAX={value} is set
+doctor.cpu_max_set=CPU_MAX={value} is set
+doctor.pids_max_set=PIDS_MAX={value} is set
+doctor.disk_max_set=DISK_MAX={value} is set (guest {guest})
+doctor.disk_guest_path_invalid=DISK_MAX guest path is invalid
+doctor.image_dir_present=image directory {path} (about {n} archives)
+doctor.image_dir_missing=image directory has not been created yet (it is created on image export)
+doctor.package_lock_present=package.lock is present
+doctor.net_invalid=CAPBOX_NET is invalid ({value}); refusing to treat it as open
+doctor.net_mode_none=network mode none (--unshare-net, no network in the container)
+doctor.net_mode_open=network mode open (shared host network; host is a compatibility alias)
+doctor.net_mode_restricted_ok=network mode restricted (unshare-net + allowlist proxy; {pre}; ALLOW={allow})
+doctor.net_mode_restricted_prereq=network mode restricted but prerequisites are not met (needs python3, nsenter, and a non-empty CAPBOX_NET_ALLOW); exec will fail
+doctor.fs_rootfs_ro_overlay_ok=ROOTFS_RO=1 and overlay is available (writes go to upper)
+doctor.fs_rootfs_ro_overlay_unavailable=ROOTFS_RO=1 but overlay is unavailable: the root will be mounted read-only
+doctor.fs_rootfs_ro_off=ROOTFS_RO is not enabled (rootfs is RW-bound, the compatibility default)
+doctor.fs_hide_binds_ok=FS_HIDE/FS_BINDS config validated (binds outside the workspace are refused)
+doctor.fs_hide_binds_invalid=FS_HIDE/FS_BINDS config is invalid
+doctor.landlock_invalid=CAPBOX_LANDLOCK must be on or off (current: {value})
+doctor.landlock_off=Landlock is off (when unset, strict enables it by default; compat/untrusted leave it off)
+doctor.landlock_helper_failed=Landlock is enabled, but the helper could not be built (needs host gcc -static and lib/guest/capbox-landlock.c)
+doctor.landlock_kernel_unsupported=Landlock is enabled, but the kernel does not support it (needs 5.13+ with the LSM enabled)
+doctor.landlock_abi=Landlock ABI {abi} (restricts VFS after mounts complete; does not restrict TCP ports; allowing a directory does not let you punch holes under it)
+doctor.security_compat=security profile compat (compatibility default: full capabilities, no seccomp; does not weaken existing behavior)
+doctor.security_userns_boundary_compat=userns boundary: guest root is not host root; without seccomp the attack surface is larger — for untrusted workloads set CAPBOX_SECURITY_PROFILE=untrusted|strict
+doctor.security_profile_ok=security profile {profile} (seccomp BPF={bpf}, capability drop, disable-userns={dus})
+doctor.security_idmap_skip_disable_userns=Do not combine an untrusted workload with multi-UID idmap: --disable-userns was skipped, so the guest can still nest a user namespace. Package installs may use idmap; for untrusted commands set CAPBOX_IDMAP=off (or a single UID) before using untrusted/strict
+doctor.security_bpf_failed=security profile {profile}, but a seccomp BPF could not be generated (refusing a fake implementation)
+doctor.security_need_seccomp_tools=security profile {profile} requires python3 + lib/seccomp-gen.py + libseccomp
+doctor.security_userns_boundary_recorded=userns boundary recorded: harden reduces the guest attack surface and does not claim host-level isolation

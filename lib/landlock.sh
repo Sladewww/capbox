@@ -220,21 +220,21 @@ _landlock_doctor_report() {
   local en=0 abi helper
   _landlock_enabled || en=$?
   if (( en == 2 )); then
-    _doctor_fail "CAPBOX_LANDLOCK 只能是 on 或 off（当前: ${CAPBOX_LANDLOCK}）"
+    _doctor_fail_i18n doctor.landlock_invalid value="${CAPBOX_LANDLOCK}"
     return 0
   fi
   if (( en == 1 )); then
-    _doctor_pass "Landlock 关闭（未设置时 strict 默认开启，compat/untrusted 默认关闭）"
+    _doctor_pass_i18n doctor.landlock_off
     return 0
   fi
   if ! helper="$(_landlock_ensure_helper)"; then
-    _doctor_fail "Landlock 已启用，但无法构建 helper（需要宿主 gcc -static 与 lib/guest/capbox-landlock.c）"
+    _doctor_fail_i18n doctor.landlock_helper_failed
     return 0
   fi
   abi="$("$helper" --probe 2>/dev/null || true)"
   if [[ ! "$abi" =~ ^[0-9]+$ || "$abi" -lt 1 ]]; then
-    _doctor_fail "Landlock 已启用，但内核不支持（需要 5.13+ 且 LSM 已启用）"
+    _doctor_fail_i18n doctor.landlock_kernel_unsupported
     return 0
   fi
-  _doctor_pass "Landlock ABI ${abi}（挂载完成之后限制 VFS；不限制 TCP 端口；允许目录之下不能再挖洞）"
+  _doctor_pass_i18n doctor.landlock_abi abi="${abi}"
 }

@@ -1460,6 +1460,9 @@ _doctor_warn() {
   printf 'WARN  %s\n' "$*"
   DOCTOR_WARNS=$(( DOCTOR_WARNS + 1 ))
 }
+_doctor_pass_i18n() { _doctor_pass "$(i18n_fmt "$@")"; }
+_doctor_fail_i18n() { _doctor_fail "$(i18n_fmt "$@")"; }
+_doctor_warn_i18n() { _doctor_warn "$(i18n_fmt "$@")"; }
 
 # 去掉审计探针留下的标记行，保留文件其余内容和 inode。
 _doctor_strip_marker() {
@@ -1503,27 +1506,27 @@ _capbox_doctor_check_bwrap() {
   CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=0
   CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL=0
   if [[ -n "$bwrap" && -x "$bwrap" ]]; then
-    _doctor_pass "bwrap 已安装 ($bwrap)"
+    _doctor_pass_i18n doctor.bwrap_installed bwrap="$bwrap"
     if _capbox_bwrap_version_ok "$bwrap"; then
       CAPBOX_DOCTOR_BWRAP_VER_OK=1
       CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=1
-      _doctor_pass "bwrap 版本 ${CAPBOX_BWRAP_VERSION_DETAIL}（>= 0.12.0）"
+      _doctor_pass_i18n doctor.bwrap_version_ok ver="${CAPBOX_BWRAP_VERSION_DETAIL}"
     else
       CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL=1
-      _bv="${CAPBOX_BWRAP_VERSION:-未知}"
-      _doctor_fail "bwrap ${_bv} 低于安全基线 0.12.0"
+      _bv="$(i18n_or "${CAPBOX_BWRAP_VERSION:-}" val.unknown)"
+      _doctor_fail_i18n doctor.bwrap_below_baseline ver="$_bv"
       _capbox_print_old_bwrap_details 1
       if _scope="$(_capbox_old_bwrap_scope)"; then
         if [[ "$_scope" == "once" ]]; then
-          _doctor_warn "bwrap ${_bv} 低于基线，本次 --allow-old-bwrap 放行（doctor 仍为 FAIL）"
+          _doctor_warn_i18n doctor.bwrap_below_allowed_once ver="$_bv"
         else
-          _doctor_warn "bwrap ${_bv} 低于基线，已被 CAPBOX_ALLOW_OLD_BWRAP 放行（doctor 仍为 FAIL）"
+          _doctor_warn_i18n doctor.bwrap_below_allowed_persist ver="$_bv"
         fi
         CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=1
       fi
     fi
   else
-    _doctor_fail "bwrap 不可用 (${bwrap:-未设置})；请安装 bubblewrap >= 0.12.0 或设置 CAPBOX_BWRAP"
+    _doctor_fail_i18n doctor.bwrap_unavailable bwrap="$(i18n_or "${bwrap:-}" val.unset)"
   fi
 }
 
@@ -1539,13 +1542,13 @@ cmd_doctor() {
 
   # 0) 工作区安全（禁止 $HOME 或 / 作为 RW workspace）
   if _capbox_workspace_is_dangerous; then
-    _doctor_fail "工作区为 $HOME 或 / ($CAPBOX_WORKSPACE)；会把整棵目录 RW bind 进容器。请用项目内 .capbox/ 或 CAPBOX_ROOT=/path/to/project"
+    _doctor_fail_i18n doctor.workspace_dangerous home="$HOME" workspace="$CAPBOX_WORKSPACE"
     if declare -F audit_command >/dev/null 2>&1; then
-      audit_command doctor 1 "$_audit_t0" "cmd=doctor" "detail=工作区不安全"
+      audit_command doctor 1 "$_audit_t0" "cmd=doctor" "detail=$(i18n_get doctor.audit_workspace_unsafe)"
     fi
     return 1
   else
-    _doctor_pass "工作区安全 ($CAPBOX_WORKSPACE)"
+    _doctor_pass_i18n doctor.workspace_safe workspace="$CAPBOX_WORKSPACE"
   fi
 
   # 1) bwrap。版本不够时退出码在函数末尾给 6；二进制缺失仍走一般 FAIL。
@@ -1558,18 +1561,18 @@ cmd_doctor() {
   if [[ -n "$bwrap" && -x "$bwrap" ]]; then
     local caphex
     if caphex="$(_doctor_probe_userns)"; then
-      _doctor_pass "userns 全权限 (uid=0, CapEff=$caphex)"
+      _doctor_pass_i18n doctor.userns_ok caphex="$caphex"
     else
-      _doctor_fail "userns 全权限探测失败：容器内无法获得 uid0 + 全量 capability（检查内核 unprivileged_userns_clone 与 bwrap 版本）"
+      _doctor_fail_i18n doctor.userns_probe_failed
     fi
   else
-    _doctor_fail "userns 全权限未探测（bwrap 不可用）"
+    _doctor_fail_i18n doctor.userns_not_probed
   fi
 
   if declare -F _idmap_doctor_report >/dev/null 2>&1; then
     _idmap_doctor_report
   else
-    _doctor_warn "UID 映射模块未加载（lib/idmap.sh）"
+    _doctor_warn_i18n doctor.idmap_module_missing
   fi
 
   # 3) 依赖命令
@@ -1578,34 +1581,34 @@ cmd_doctor() {
     have_cmd "$c" || miss+=("$c")
   done
   if [[ ${#miss[@]} -eq 0 ]]; then
-    _doctor_pass "依赖命令齐全 (tar/curl/flock/timeout)"
+    _doctor_pass_i18n doctor.deps_complete
   elif [[ ${#miss[@]} -eq 1 && "${miss[0]}" == "timeout" ]]; then
-    _doctor_warn "缺少 timeout（exec --timeout 将失效），其余依赖齐全"
+    _doctor_warn_i18n doctor.deps_missing_timeout
   else
-    _doctor_fail "缺少依赖命令: ${miss[*]}"
+    _doctor_fail_i18n doctor.deps_missing cmds="${miss[*]}"
   fi
 
   # 4) rootfs
   if rootfs_ready; then
-    _doctor_pass "rootfs 就绪 ($CAPBOX_ROOTFS, $(human_bytes "$(dir_bytes "$CAPBOX_ROOTFS")"))"
+    _doctor_pass_i18n doctor.rootfs_ready rootfs="$CAPBOX_ROOTFS" size="$(human_bytes "$(dir_bytes "$CAPBOX_ROOTFS")")"
   else
-    _doctor_fail "rootfs 缺失或不可用 ($CAPBOX_ROOTFS)；请运行: capbox init --distro $CAPBOX_DISTRO"
+    _doctor_fail_i18n doctor.rootfs_missing rootfs="$CAPBOX_ROOTFS" distro="$CAPBOX_DISTRO"
   fi
 
   # 5) resolv.conf
   if [[ -f "$CAPBOX_STATE_DIR/resolv.conf" ]]; then
-    _doctor_pass "resolv.conf 已就绪 ($CAPBOX_STATE_DIR/resolv.conf)"
+    _doctor_pass_i18n doctor.resolv_ready path="$CAPBOX_STATE_DIR/resolv.conf"
   else
-    _doctor_warn "resolv.conf 尚未生成（首次 exec 时会自动生成）"
+    _doctor_warn_i18n doctor.resolv_missing
   fi
 
   # 6) 网络 + 镜像源连通
   local url mirror_root
   mirror_root="$(mirror_url_for "$CAPBOX_DISTRO")"
   if [[ "${CAPBOX_MIRROR:-cn}" == "none" ]]; then
-    _doctor_warn "CAPBOX_MIRROR=none，跳过镜像源连通性检查"
+    _doctor_warn_i18n doctor.mirror_skipped_none
   elif [[ -z "$mirror_root" ]]; then
-    _doctor_fail "镜像源 URL 为空（检查 CAPBOX_MIRROR_${CAPBOX_DISTRO^^}）"
+    _doctor_fail_i18n doctor.mirror_url_empty distro="${CAPBOX_DISTRO^^}"
   else
     case "$CAPBOX_DISTRO" in
       alpine)
@@ -1620,27 +1623,27 @@ cmd_doctor() {
     esac
     if have_cmd curl; then
       if curl -fsSI -m 8 -o /dev/null "$url" 2>/dev/null; then
-        _doctor_pass "镜像源连通 ($url)"
+        _doctor_pass_i18n doctor.mirror_reachable url="$url"
       else
-        _doctor_fail "镜像源不可达 ($url)；检查网络或 CAPBOX_MIRROR 配置"
+        _doctor_fail_i18n doctor.mirror_unreachable url="$url"
       fi
       case "${CAPBOX_NET:-open}" in
         open | host)
           if curl -fsSI -m 8 -o /dev/null "${CAPBOX_MIRROR_ALPINE%/}/" 2>/dev/null; then
-            _doctor_pass "宿主网络可用"
+            _doctor_pass_i18n doctor.host_net_ok
           else
-            _doctor_warn "宿主到公网镜像的探测失败（可能是离线环境）"
+            _doctor_warn_i18n doctor.host_net_probe_failed
           fi
           ;;
         none)
-          _doctor_warn "CAPBOX_NET=none，容器内无网络（--unshare-net）"
+          _doctor_warn_i18n doctor.net_none
           ;;
         restricted)
-          _doctor_warn "CAPBOX_NET=restricted：镜像连通性取决于 allowlist 代理（见下方网络模式项）"
+          _doctor_warn_i18n doctor.net_restricted_mirror
           ;;
       esac
     else
-      _doctor_warn "缺少 curl，跳过网络连通性检查"
+      _doctor_warn_i18n doctor.missing_curl_skip_net
     fi
   fi
 
@@ -1649,14 +1652,14 @@ cmd_doctor() {
     case "$CAPBOX_PROXY" in
       socks5*)
         if [[ "$CAPBOX_DISTRO" == "ubuntu" ]]; then
-          _doctor_warn "socks5 代理下 apt 不原生支持：建议改用 http 代理，或在容器内配置 proxychains"
+          _doctor_warn_i18n doctor.socks5_apt_unsupported
         fi
-        _doctor_pass "代理已配置 ($CAPBOX_PROXY)"
+        _doctor_pass_i18n doctor.proxy_configured proxy="$CAPBOX_PROXY"
         ;;
-      *) _doctor_pass "代理已配置 ($CAPBOX_PROXY)" ;;
+      *) _doctor_pass_i18n doctor.proxy_configured proxy="$CAPBOX_PROXY" ;;
     esac
   else
-    _doctor_pass "代理未配置（直连）"
+    _doctor_pass_i18n doctor.proxy_unset
   fi
 
   # 8) 镜像源文件是否已注入
@@ -1664,9 +1667,9 @@ cmd_doctor() {
     case "$CAPBOX_DISTRO" in
       alpine)
         if [[ -f "$CAPBOX_ROOTFS/etc/apk/repositories" ]]; then
-          _doctor_pass "apk 镜像源已注入"
+          _doctor_pass_i18n doctor.apk_repos_injected
         else
-          _doctor_fail "缺少 $CAPBOX_ROOTFS/etc/apk/repositories（重新运行 capbox init）"
+          _doctor_fail_i18n doctor.apk_repos_missing path="$CAPBOX_ROOTFS/etc/apk/repositories"
         fi
         ;;
       ubuntu)
@@ -1675,9 +1678,9 @@ cmd_doctor() {
         if [[ -f "$sl" || -f "$d822" ]]; then
           local which="sources.list"
           [[ -f "$d822" ]] && which="sources.list.d/ubuntu.sources"
-          _doctor_pass "apt 镜像源已注入 ($which)"
+          _doctor_pass_i18n doctor.apt_repos_injected which="$which"
         else
-          _doctor_fail "缺少 apt 源文件（$sl 或 $d822）；重新运行 capbox init"
+          _doctor_fail_i18n doctor.apt_repos_missing sl="$sl" d822="$d822"
         fi
         ;;
     esac
@@ -1720,16 +1723,16 @@ cmd_doctor() {
          echo OK'
     )" || env_rc=$?
     if [[ "$env_rc" -eq 0 && "$env_probe" == *OK* ]]; then
-      _doctor_pass "环境变量已清空（宿主敏感变量不继承；白名单 HOME/PATH 可用）"
+      _doctor_pass_i18n doctor.env_cleared
     else
-      _doctor_fail "环境变量未清空或白名单缺失（probe rc=$env_rc out=${env_probe:-<empty>}）；应无条件 bwrap --clearenv 后再 --setenv"
+      _doctor_fail_i18n doctor.env_not_cleared rc="$env_rc" out="${env_probe:-<empty>}"
     fi
   elif (( _bwrap_launch_ok != 1 && _bwrap_baseline_fail == 1 )); then
-    _doctor_warn "跳过环境清空探测（bwrap 版本低于安全基线）"
+    _doctor_warn_i18n doctor.skip_env_old_bwrap
   elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
-    _doctor_warn "跳过环境清空探测（bwrap 不可用）"
+    _doctor_warn_i18n doctor.skip_env_no_bwrap
   else
-    _doctor_warn "跳过环境清空探测（rootfs 或 bwrap 不可用）"
+    _doctor_warn_i18n doctor.skip_env_no_rootfs
   fi
 
   # 10) 缺失配置路径预占（CVE-2026-25725 同类：guest 不得创建宿主会读的 config/services）
@@ -1744,7 +1747,7 @@ cmd_doctor() {
     _host_log="$CAPBOX_DIR/logs/audit.jsonl"
     if [[ -n "$_cfg_g" && "$_cfg_g" == /workspace/* && -n "$_svc_g" && "$_svc_g" == /workspace/* ]]; then
       if [[ -z "$_log_g" || "$_log_g" != /workspace/* ]]; then
-        _doctor_fail "无法定位 guest 侧 logs/audit.jsonl，不能确认只读"
+        _doctor_fail_i18n doctor.config_preoccupy_no_log
       else
       rm -f -- "${_host_svc_probe}.attempt" 2>/dev/null || true
       _probe_out="$(
@@ -1770,51 +1773,51 @@ cmd_doctor() {
         _log_tampered=1
       fi
       if [[ -f "$_host_cfg" ]] && grep -q 'DOCTOR_INJECT' "$_host_cfg" 2>/dev/null; then
-        _doctor_fail "guest 写入了宿主 config.env（缺失/已存在路径未只读保护）"
+        _doctor_fail_i18n doctor.guest_wrote_config
       elif [[ -f "$_host_svc_probe" ]]; then
-        _doctor_fail "guest 创建了宿主 services/_doctor_probe.env（services 目录未只读保护）"
+        _doctor_fail_i18n doctor.guest_wrote_services
         rm -f -- "$_host_svc_probe" 2>/dev/null || true
       elif [[ "$_probe_out" == *CFG_WRITE_OK* || "$_probe_out" == *SVC_WRITE_OK* ]]; then
-        _doctor_fail "guest 可写受保护配置路径（probe out=${_probe_out:-<empty>}）"
+        _doctor_fail_i18n doctor.guest_wrote_protected out="${_probe_out:-<empty>}"
       elif (( _log_tampered == 1 )); then
-        _doctor_fail "guest 写入了宿主 logs/audit.jsonl（logs 未只读保护）"
+        _doctor_fail_i18n doctor.guest_wrote_audit_log
       else
-        _doctor_pass "配置路径预占生效（缺失/已存在的 config.env、services/ 与 logs/audit.jsonl 均不可被 guest 写入）"
+        _doctor_pass_i18n doctor.config_preoccupy_ok
       fi
       fi
     else
-      _doctor_warn "跳过配置预占探测（CAPBOX_DIR 不在工作区视图内）"
+      _doctor_warn_i18n doctor.skip_preoccupy_capbox_dir
     fi
   elif (( _bwrap_launch_ok != 1 && _bwrap_baseline_fail == 1 )); then
-    _doctor_warn "跳过配置预占探测（bwrap 版本低于安全基线）"
+    _doctor_warn_i18n doctor.skip_preoccupy_old_bwrap
   elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
-    _doctor_warn "跳过配置预占探测（bwrap 不可用）"
+    _doctor_warn_i18n doctor.skip_preoccupy_no_bwrap
   else
-    _doctor_warn "跳过配置预占探测（rootfs 或 bwrap 不可用）"
+    _doctor_warn_i18n doctor.skip_preoccupy_no_rootfs
   fi
 
   # 11) daemon
   if _probe_daemon; then
-    _doctor_pass "守护容器运行中 (pid $(_daemon_json_field pid))"
+    _doctor_pass_i18n doctor.daemon_running pid="$(_daemon_json_field pid)"
   else
-    _doctor_pass "守护容器未运行（按需用后台任务运行 capbox up）"
+    _doctor_pass_i18n doctor.daemon_not_running
   fi
 
   printf '\n'
   local _doc_rc=0 _doc_detail=""
   if (( _bwrap_baseline_fail == 1 )); then
-    printf '自检结果: 安全基线不满足（退出码 6）；%d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
+    printf '%s\n' "$(i18n_fmt doctor.summary_baseline_fail fails="$DOCTOR_FAILS" warns="$DOCTOR_WARNS")"
     _doc_rc=6
-    _doc_detail="安全基线不满足，${DOCTOR_FAILS} 项 FAIL"
+    _doc_detail="$(i18n_fmt doctor.audit_baseline_fail fails="$DOCTOR_FAILS")"
   elif (( DOCTOR_FAILS > 0 )); then
-    printf '自检结果: %d 项 FAIL，%d 项 WARN\n' "$DOCTOR_FAILS" "$DOCTOR_WARNS"
+    printf '%s\n' "$(i18n_fmt doctor.summary_fail fails="$DOCTOR_FAILS" warns="$DOCTOR_WARNS")"
     _doc_rc=1
-    _doc_detail="${DOCTOR_FAILS} 项 FAIL，${DOCTOR_WARNS} 项 WARN"
+    _doc_detail="$(i18n_fmt doctor.audit_fail fails="$DOCTOR_FAILS" warns="$DOCTOR_WARNS")"
   elif (( DOCTOR_WARNS > 0 )); then
-    printf '自检结果: 全部通过（%d 项 WARN）\n' "$DOCTOR_WARNS"
+    printf '%s\n' "$(i18n_fmt doctor.summary_pass_with_warns warns="$DOCTOR_WARNS")"
     _doc_rc=0
   else
-    printf '自检结果: 全部通过\n'
+    printf '%s\n' "$(i18n_get doctor.summary_pass)"
     _doc_rc=0
   fi
   if declare -F audit_command >/dev/null 2>&1; then

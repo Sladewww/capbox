@@ -254,8 +254,8 @@ _security_doctor_report() {
   profile="$(_security_profile 2>/dev/null || echo compat)"
   case "$profile" in
     compat)
-      _doctor_pass "安全档 compat（默认兼容：全量 capability、无 seccomp；不削弱现有行为）"
-      _doctor_warn "userns 边界：guest root ≠ 宿主 root；无 seccomp 时攻击面较大，不可信负载请改 CAPBOX_SECURITY_PROFILE=untrusted|strict"
+      _doctor_pass_i18n doctor.security_compat
+      _doctor_warn_i18n doctor.security_userns_boundary_compat
       ;;
     untrusted | strict)
       local py bpf
@@ -265,17 +265,17 @@ _security_doctor_report() {
           if declare -F _idmap_enabled >/dev/null 2>&1 && _idmap_enabled 2>/dev/null; then
             dus="skipped-idmap"
           fi
-          _doctor_pass "安全档 $profile（seccomp BPF=$(basename "$bpf")，capability drop，disable-userns=${dus:-on}）"
+          _doctor_pass_i18n doctor.security_profile_ok profile="$profile" bpf="$(basename "$bpf")" dus="${dus:-on}"
           if [[ "$dus" == "skipped-idmap" ]]; then
-            _doctor_warn "不可信负载不要和多 UID idmap 一起用：已跳过 --disable-userns，guest 仍可嵌套 user namespace。装包可以开 idmap；跑不可信命令请 CAPBOX_IDMAP=off（或单 UID）后再用 untrusted/strict"
+            _doctor_warn_i18n doctor.security_idmap_skip_disable_userns
           fi
         else
-          _doctor_fail "安全档 $profile 但无法生成 seccomp BPF（拒绝伪实现）"
+          _doctor_fail_i18n doctor.security_bpf_failed profile="$profile"
         fi
       else
-        _doctor_fail "安全档 $profile 需要 python3 + lib/seccomp-gen.py + libseccomp"
+        _doctor_fail_i18n doctor.security_need_seccomp_tools profile="$profile"
       fi
-      _doctor_pass "userns 边界已记录：harden 降低 guest 攻击面，不声称宿主级隔离"
+      _doctor_pass_i18n doctor.security_userns_boundary_recorded
       ;;
   esac
 }
