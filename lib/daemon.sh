@@ -1064,7 +1064,10 @@ cmd_down() {
   # 让 daemon_running 误判为活），没有任何进程会消费 ctl/stop，daemon.json 永远
   # 不会消失，于是 down 会白等满 40s 才走超时分支。实测过这种情况（27s 才返回）。
   #
-  # 判据：服务端一旦真正响应 ctl/stop，会往 daemon.log 写「收到停止请求」。
+  # 判据：服务端一旦真正响应 ctl/stop，会往 daemon.log 写「received stop request」。
+  # 宿主临时同时接受旧短语「收到停止请求」，这是一次升级兼容：已在跑的旧服务端
+  # 仍会写那条中文日志；新服务端只写英文标记。若只认新标记，capbox down 会在
+  # 5s NOACK 后把仍在排空的旧 daemon 当死进程清掉。
   # 给了 NOACK 秒宽限仍不见这条日志、且 daemon.json 也没动 => 判定服务端已死，
   # 直接清理并返回，不必等到 40s。
   local waited=0 limit noack
@@ -1083,7 +1086,7 @@ cmd_down() {
   while (( waited < limit * 10 )); do
     [[ -f "$CAPBOX_DAEMON_DIR/daemon.json" ]] || break
     if (( acked == 0 )) && [[ -f "$logf" ]]; then
-      if tail -n +$(( logbase + 1 )) -- "$logf" 2>/dev/null | grep -q '收到停止请求'; then
+      if tail -n +$(( logbase + 1 )) -- "$logf" 2>/dev/null | grep -q -e 'received stop request' -e '收到停止请求'; then
         acked=1
       fi
     fi

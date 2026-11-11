@@ -358,7 +358,7 @@ while :; do
 
   # 5.4 停止判定
   if [ -f "$CTL/stop" ] || [ "$STOPPING" -eq 1 ]; then
-    log "收到停止请求，等待在跑任务完成（上限 ${STOP_WAIT}s）"
+    log "received stop request, 等待在跑任务完成（上限 ${STOP_WAIT}s）"
 
     # 排空期**必须继续 beat()**，原因是一个真实踩过的矛盾：
     #   * 若排空期不发心跳，则 hb 会在 STOP_WAIT 内停止前进；
