@@ -1052,3 +1052,8 @@ res.fail_closed_memory_max=MEMORY_MAX(requires cgroup memory.max, cannot use prl
 res.fail_closed_pids_max=PIDS_MAX(requires cgroup pids.max)
 res.fail_closed_cpu_max=CPU_MAX(requires cgroup cpu.max)
 res.fail_closed_disk_not_honored=not honored via a private loop
+
+# leftover resources.sh runtime errors interpolated on the host into wrap/cleanup scripts
+res.disk_max_unload_failed_leaving=capbox: DISK_MAX unload failed, leaving {base}
+res.cgroup_procs_write_failed=failed to write cgroup.procs
+res.cgroup_leaf_missing_after_setup=cgroup leaf missing after setup

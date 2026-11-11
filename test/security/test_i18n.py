@@ -460,5 +460,139 @@ class CliResolveTests(unittest.TestCase):
         self.assertNotIn('需要 cgroup', en.stderr)
 
 
+
+class LeftoverResourcesRuntimeErrorTests(unittest.TestCase):
+    """DISK_MAX unload, cgroup.procs write, and missing cgroup-leaf abort follow CAPBOX_LANG.
+
+    The first two messages are translated on the host and interpolated into bash -c
+    child scripts; the child itself must not call i18n_*. The leaf string is a
+    ${var:?word} nounset abort, so the abort text must also follow CAPBOX_LANG.
+    """
+
+    def test_runtime_error_strings_locked_in_zh_and_en(self):
+        zh_cat = i18n.load_catalog('zh')
+        en_cat = i18n.load_catalog('en')
+        self.assertEqual(zh_cat['res.disk_max_unload_failed_leaving'],
+                         'capbox: DISK_MAX 卸载失败，保留 {base}')
+        self.assertEqual(en_cat['res.disk_max_unload_failed_leaving'],
+                         'capbox: DISK_MAX unload failed, leaving {base}')
+        self.assertEqual(zh_cat['res.cgroup_procs_write_failed'], '写入 cgroup.procs 失败')
+        self.assertEqual(en_cat['res.cgroup_procs_write_failed'], 'failed to write cgroup.procs')
+        self.assertEqual(zh_cat['res.cgroup_leaf_missing_after_setup'],
+                         'setup 后缺少 cgroup leaf')
+        self.assertEqual(en_cat['res.cgroup_leaf_missing_after_setup'],
+                         'cgroup leaf missing after setup')
+
+    def test_hardcoded_runtime_error_literals_are_gone_from_resources_sh(self):
+        needles = (
+            'DISK_MAX 卸载失败',
+            '写入 cgroup.procs 失败',
+            'setup 后缺少 cgroup leaf',
+        )
+        for i, line in enumerate((REPO / 'lib/resources.sh').read_text().splitlines(), 1):
+            if line.lstrip().startswith('#'):
+                continue
+            for needle in needles:
+                if needle in line:
+                    self.fail(f'lib/resources.sh:{i} still hardcodes {needle!r}: {line}')
+
+    def test_host_lookup_and_child_scripts_do_not_call_i18n(self):
+        text = (REPO / 'lib/resources.sh').read_text()
+        self.assertIn('unload_fail="$(i18n_get res.disk_max_unload_failed_leaving)"', text)
+        self.assertIn('procs_fail="$(i18n_get res.cgroup_procs_write_failed)"', text)
+        self.assertIn('leaf_missing="$(i18n_get res.cgroup_leaf_missing_after_setup)"', text)
+        self.assertIn("""$(printf '%q' "$unload_fail")""", text)
+        self.assertIn("""$(printf '%q' "$procs_fail")""", text)
+        # Quoted bash -c bodies must not invoke the catalog themselves.
+        in_single = False
+        buf = []
+        chunks = []
+        for line in text.splitlines():
+            if "/bin/bash -c" in line:
+                in_single = True
+                buf = [line]
+                continue
+            if in_single:
+                buf.append(line)
+                # The wrap assignment ends at the closing quote of the script
+                # followed by the bash/$cg/"$base" argument lines.
+                if line.strip() in ('bash',) and buf:
+                    chunks.append('\n'.join(buf))
+                    in_single = False
+                    buf = []
+        self.assertGreaterEqual(len(chunks), 2, chunks)
+        for chunk in chunks:
+            self.assertNotIn('i18n_', chunk, chunk)
+
+    def test_cgroup_leaf_nounset_abort_follows_lang(self):
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                'log_warn() { :; }; log_err() { printf "%s\\n" "$*" >&2; }; '
+                'log_debug() { :; }; have_cmd() { command -v "$1" >/dev/null 2>&1; }; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/resources.sh"; '
+                '_resources_any_configured() { return 0; }; '
+                '_resources_setup_cgroup() { CAPBOX_RESOURCES_CGROUP_LEAF=""; return 0; }; '
+                'cmd=(true); _resources_wrap_argv cmd'
+            )
+            return run_bash(script)
+
+        zh = run('zh')
+        self.assertNotEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('setup 后缺少 cgroup leaf', zh.stderr)
+        self.assertNotIn('cgroup leaf missing after setup', zh.stderr)
+
+        en = run('en')
+        self.assertNotEqual(en.returncode, 0, en.stderr)
+        self.assertIn('cgroup leaf missing after setup', en.stderr)
+        self.assertNotIn('setup 后缺少 cgroup leaf', en.stderr)
+
+    def test_cgroup_procs_write_failure_follows_lang(self):
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                'log_warn() { :; }; log_err() { printf "%s\\n" "$*" >&2; }; '
+                'log_debug() { :; }; have_cmd() { command -v "$1" >/dev/null 2>&1; }; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/resources.sh"; '
+                'leaf=$(mktemp -d); chmod a-w "$leaf"; '
+                'trap \'chmod u+w "$leaf"; rm -rf "$leaf"\' EXIT; '
+                '_resources_any_configured() { return 0; }; '
+                '_resources_setup_cgroup() { CAPBOX_RESOURCES_CGROUP_LEAF="$leaf"; return 0; }; '
+                'cmd=(true); _resources_wrap_argv cmd; "${cmd[@]}"'
+            )
+            return run_bash(script)
+
+        zh = run('zh')
+        self.assertNotEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('写入 cgroup.procs 失败', zh.stderr)
+        self.assertNotIn('failed to write cgroup.procs', zh.stderr)
+
+        en = run('en')
+        self.assertNotEqual(en.returncode, 0, en.stderr)
+        self.assertIn('failed to write cgroup.procs', en.stderr)
+        self.assertNotIn('写入 cgroup.procs 失败', en.stderr)
+
+    def test_disk_max_unload_failure_follows_lang(self):
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; '
+                'unload_fail="$(i18n_get res.disk_max_unload_failed_leaving)"; '
+                "bash -c 'base=$1; _um='\"$(printf '%q' \"$unload_fail\")\"'; "
+                r'''printf "%s\n" "${_um//\{base\}/$base}" >&2' bash /tmp/capbox-disk-base'''
+            )
+            return run_bash(script)
+
+        zh = run('zh')
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('capbox: DISK_MAX 卸载失败，保留 /tmp/capbox-disk-base', zh.stderr)
+        self.assertNotIn('unload failed', zh.stderr)
+
+        en = run('en')
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('capbox: DISK_MAX unload failed, leaving /tmp/capbox-disk-base', en.stderr)
+        self.assertNotIn('卸载失败', en.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()
