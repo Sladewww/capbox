@@ -140,7 +140,7 @@ _fsguard_apply_rootfs_mount() {
       mkdir -p "$u" "$w" || i18n_die 1 fs.unable_create_overlay_directories
       _fm_arr+=(--overlay-src "$rf" --overlay "$u" "$w" /)
       CAPBOX_FS_OVERLAY_ACTIVE=1
-      log_debug "rootfs: overlay RW upper=$u（底层 RO）"
+      log_debug "rootfs: overlay RW upper=$u (lower layer RO)"
     else
       _fm_arr+=(--ro-bind "$rf" /)
       i18n_warn fs.rootfs_ro_1_overlay_unavailable_root_will

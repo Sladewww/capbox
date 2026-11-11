@@ -861,7 +861,7 @@ with_lock() {
       "$@"
     ) 9>"$lockfile"
   else
-    log_debug "宿主无 flock，跳过加锁: $name"
+    log_debug "host has no flock, skipping lock: $name"
     "$@"
   fi
 }
@@ -909,7 +909,7 @@ refresh_resolv() {
     i18n_warn common.unable_generate dst="$dst"
     return 1
   }
-  log_debug "已刷新 $dst"
+  log_debug "refreshed $dst"
   return 0
 }
 
@@ -973,7 +973,7 @@ _http_safe_url() {
     return 0
   }
   if [[ "$url" == https://* ]] && _rootfs_lacks_ca "$rootfs"; then
-    log_debug "$distro rootfs 内无 CA 证书，镜像源降级为 http: $url"
+    log_debug "$distro rootfs has no CA certificates, falling back to http mirror: $url"
     printf 'http://%s' "${url#https://}"
     return 0
   fi
@@ -1260,7 +1260,7 @@ _probe_daemon() {
     mt="$(stat -c %Y "$hb" 2>/dev/null || echo 0)"
     age=$(( now - mt ))
     (( age <= ttl )) && return 0
-    log_debug "守护容器心跳过期（${age}s > ${ttl}s），判为未运行"
+    log_debug "daemon heartbeat expired (${age}s > ${ttl}s), treating as not running"
     return 1
   fi
 
@@ -1865,7 +1865,7 @@ cmd_clean() {
     # 从 _probe_daemon 到 cmd_down 之间 daemon 可能已经自己退出（竞态），
     # 此时返回 3 属正常，不该报「失败」误导用户。
     if (( drc == 3 )); then
-      log_debug "守护容器在停止前已自行退出（rc=3），继续清理"
+      log_debug "daemon already exited before stop (rc=3), continuing cleanup"
     elif (( drc != 0 )); then
       i18n_warn common.failed_stop_daemon_container_rc_continuing_temp drc="$drc"
     fi

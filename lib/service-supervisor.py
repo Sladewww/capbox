@@ -82,10 +82,10 @@ def wait_ready(args: argparse.Namespace, log: str, deadline: float,
         if ok and args.ready_cmd and not ready_cmd(args.ready_cmd):
             ok = False
         if ok:
-            _log(log, "ready: 就绪")
+            _log(log, "ready: ok")
             return True
         time.sleep(0.2)
-    _log(log, "ready: 超时")
+    _log(log, "ready: timeout")
     return False
 
 
@@ -111,7 +111,7 @@ def terminate_tree(proc: subprocess.Popen, stop_timeout: float, log: str) -> Non
         if proc.poll() is not None:
             return
         time.sleep(0.1)
-    _log(log, f"停止超时 {stop_timeout}s → SIGKILL")
+    _log(log, f"stop timed out after {stop_timeout}s → SIGKILL")
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -155,7 +155,7 @@ def main() -> int:
     if child and child[0] == "--":
         child = child[1:]
     if not child:
-        _log(args.log, "supervisor: 缺少子进程 argv")
+        _log(args.log, "supervisor: missing child argv")
         return 2
 
     stop = {"flag": False}
@@ -176,7 +176,7 @@ def main() -> int:
     restarts = 0
     backoff = args.restart_backoff
     while not stop["flag"]:
-        _log(args.log, f"supervisor: 启动 {' '.join(child[:3])}...")
+        _log(args.log, f"supervisor: starting {' '.join(child[:3])}...")
         # bwrap 会消费 BPF 字节。继承的打开文件偏移与监督器共享，
         # 因此每次重启都必须从过滤器开头重新读取。
         for fd in args.pass_fd:
@@ -200,7 +200,7 @@ def main() -> int:
                 return 1
             restarts += 1
             if restarts > args.restart_max:
-                _log(args.log, "就绪失败后超过最大重启次数")
+                _log(args.log, "exceeded max restarts after ready failure")
                 return 1
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
@@ -213,9 +213,9 @@ def main() -> int:
                 time.sleep(args.health_interval)
                 if not health_ok(args):
                     fails += 1
-                    _log(args.log, f"健康检查失败 {fails}/{args.health_retries}")
+                    _log(args.log, f"health check failed {fails}/{args.health_retries}")
                     if fails >= args.health_retries:
-                        _log(args.log, "health: 放弃 → 重启/停止")
+                        _log(args.log, "health: giving up → restart/stop")
                         terminate_tree(proc, args.stop_timeout, args.log)
                         break
                 else:
@@ -227,18 +227,18 @@ def main() -> int:
             status("stopped")
             terminate_tree(proc, args.stop_timeout, args.log)
             proc.wait(timeout=args.stop_timeout + 2)
-            _log(args.log, "supervisor: 已停止")
+            _log(args.log, "supervisor: stopped")
             return 0
 
         rc = proc.wait()
         status("stopped")
-        _log(args.log, f"子进程退出 rc={rc}")
+        _log(args.log, f"child exited rc={rc}")
         should = args.restart == "always" or (args.restart == "on-failure" and rc != 0)
         if not should:
             return rc
         restarts += 1
         if restarts > args.restart_max:
-            _log(args.log, "超过最大重启次数")
+            _log(args.log, "exceeded max restarts")
             return rc
         time.sleep(backoff)
         backoff = min(backoff * 2, 60)
