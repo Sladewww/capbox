@@ -780,32 +780,32 @@ _resources_metrics_json() {
 _resources_doctor_report() {
   _resources_probe_cgroup || true
   case "${CAPBOX_CGROUP_STATUS}" in
-    ready) _doctor_pass "cgroup v2 可写（${CAPBOX_CGROUP_DETAIL}）" ;;
-    denied) _doctor_warn "cgroup v2 存在但不可委派：${CAPBOX_CGROUP_DETAIL}" ;;
-    *) _doctor_warn "cgroup 不可用：${CAPBOX_CGROUP_DETAIL:-unknown}" ;;
+    ready) _doctor_pass_i18n doctor.cgroup_v2_writable detail="${CAPBOX_CGROUP_DETAIL}" ;;
+    denied) _doctor_warn_i18n doctor.cgroup_v2_no_delegate detail="${CAPBOX_CGROUP_DETAIL}" ;;
+    *) _doctor_warn_i18n doctor.cgroup_unavailable detail="$(i18n_or "${CAPBOX_CGROUP_DETAIL:-}" val.unknown)" ;;
   esac
   if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
     _resources_probe_disk || true
     if [[ "${CAPBOX_DISK_STATUS}" == "capable" ]]; then
-      _doctor_pass "DISK_MAX 可兑现：${CAPBOX_DISK_DETAIL}"
+      _doctor_pass_i18n doctor.disk_max_honored detail="${CAPBOX_DISK_DETAIL}"
     else
-      _doctor_warn "DISK_MAX 无法兑现：${CAPBOX_DISK_DETAIL}"
+      _doctor_warn_i18n doctor.disk_max_not_honored detail="${CAPBOX_DISK_DETAIL}"
     fi
   fi
   if ! _resources_any_configured; then
-    _doctor_pass "资源限额未配置（MEMORY/CPU/PIDS/DISK 为空）"
+    _doctor_pass_i18n doctor.resources_unset
     return 0
   fi
-  _doctor_pass "RESOURCES_MODE=$(_resources_mode)"
-  [[ -n "${CAPBOX_MEMORY_MAX:-}" ]] && _doctor_pass "已配置 MEMORY_MAX=$CAPBOX_MEMORY_MAX"
-  [[ -n "${CAPBOX_CPU_MAX:-}" ]] && _doctor_pass "已配置 CPU_MAX=$CAPBOX_CPU_MAX"
-  [[ -n "${CAPBOX_PIDS_MAX:-}" ]] && _doctor_pass "已配置 PIDS_MAX=$CAPBOX_PIDS_MAX"
+  _doctor_pass_i18n doctor.resources_mode mode="$(_resources_mode)"
+  [[ -n "${CAPBOX_MEMORY_MAX:-}" ]] && _doctor_pass_i18n doctor.memory_max_set value="$CAPBOX_MEMORY_MAX"
+  [[ -n "${CAPBOX_CPU_MAX:-}" ]] && _doctor_pass_i18n doctor.cpu_max_set value="$CAPBOX_CPU_MAX"
+  [[ -n "${CAPBOX_PIDS_MAX:-}" ]] && _doctor_pass_i18n doctor.pids_max_set value="$CAPBOX_PIDS_MAX"
   if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
     local gp=""
     if gp="$(_resources_disk_guest_path)"; then
-      _doctor_pass "已配置 DISK_MAX=$CAPBOX_DISK_MAX（guest $gp）"
+      _doctor_pass_i18n doctor.disk_max_set value="$CAPBOX_DISK_MAX" guest="$gp"
     else
-      _doctor_warn "DISK_MAX 的 guest 路径非法"
+      _doctor_warn_i18n doctor.disk_guest_path_invalid
     fi
   fi
 }

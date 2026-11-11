@@ -314,18 +314,18 @@ cmd_snapshot() {
 _fsguard_doctor_report() {
   if _fsguard_rootfs_ro; then
     if _fsguard_overlay_available; then
-      _doctor_pass "ROOTFS_RO=1 且 overlay 实测可用（写入进入 upper）"
+      _doctor_pass_i18n doctor.fs_rootfs_ro_overlay_ok
     else
-      _doctor_warn "ROOTFS_RO=1 但 overlay 不可用：根将只读挂载"
+      _doctor_warn_i18n doctor.fs_rootfs_ro_overlay_unavailable
     fi
   else
-    _doctor_pass "ROOTFS_RO 未启用（rootfs RW bind，兼容默认）"
+    _doctor_pass_i18n doctor.fs_rootfs_ro_off
   fi
   if [[ -n "${CAPBOX_FS_HIDE:-}" || -n "${CAPBOX_FS_BINDS:-}" ]]; then
     if _fsguard_validate_config; then
-      _doctor_pass "FS_HIDE/FS_BINDS 配置校验通过（禁止工作区外 bind）"
+      _doctor_pass_i18n doctor.fs_hide_binds_ok
     else
-      _doctor_fail "FS_HIDE/FS_BINDS 配置非法"
+      _doctor_fail_i18n doctor.fs_hide_binds_invalid
     fi
   fi
 }

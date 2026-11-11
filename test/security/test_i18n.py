@@ -284,6 +284,60 @@ class CliResolveTests(unittest.TestCase):
                 if any(line.lstrip().startswith(p) or f'; {p}' in line for p in prefixes):
                     self.assertFalse(cjk.search(line), f'{rel}:{i}: {line}')
 
+    def test_doctor_unknown_version_fallback_uses_val_unknown(self):
+        """Doctor bwrap path must not leak a hardcoded 未知 into English messages."""
+        common = (REPO / 'lib/common.sh').read_text()
+        start = common.index('_capbox_doctor_check_bwrap()')
+        end = common.index('cmd_doctor()', start)
+        body = common[start:end]
+        self.assertNotIn('未知', body)
+        self.assertIn('val.unknown', body)
+
+        fake = Path(self.tmp.name) / 'bwrap-unparseable'
+        fake.write_text('#!/bin/sh\necho no-version-here\n')
+        fake.chmod(0o755)
+        zh = self.run_cli('doctor', env={'CAPBOX_LANG': 'zh', 'CAPBOX_BWRAP': str(fake)})
+        self.assertIn('FAIL  bwrap 未知 低于安全基线 0.12.0', zh.stdout)
+        self.assertNotIn('bwrap unknown is below', zh.stdout)
+        en = self.run_cli('doctor', env={'CAPBOX_LANG': 'en', 'CAPBOX_BWRAP': str(fake)})
+        self.assertIn('FAIL  bwrap unknown is below the 0.12.0 security baseline', en.stdout)
+        for line in en.stdout.splitlines():
+            if line.startswith('FAIL  bwrap '):
+                self.assertNotIn('未知', line)
+
+    def test_doctor_pass_fail_warn_locked_in_zh_and_en(self):
+        """Representative doctor pass/fail/warn bodies and the summary follow CAPBOX_LANG."""
+        zh = self.run_cli('doctor', env={'CAPBOX_LANG': 'zh'})
+        self.assertIn('PASS  工作区安全', zh.stdout)
+        self.assertIn('FAIL  rootfs 缺失或不可用', zh.stdout)
+        self.assertIn('WARN  resolv.conf 尚未生成', zh.stdout)
+        self.assertIn('自检结果:', zh.stdout)
+        self.assertNotIn('Workspace is safe', zh.stdout)
+        self.assertNotIn('Doctor result:', zh.stdout)
+        self.assertNotIn('rootfs is missing or unavailable', zh.stdout)
+
+        en = self.run_cli('doctor', env={'CAPBOX_LANG': 'en'})
+        self.assertIn('PASS  Workspace is safe', en.stdout)
+        self.assertIn('FAIL  rootfs is missing or unavailable', en.stdout)
+        self.assertIn('WARN  resolv.conf has not been generated yet', en.stdout)
+        self.assertIn('Doctor result:', en.stdout)
+        self.assertNotIn('工作区安全', en.stdout)
+        self.assertNotIn('自检结果:', en.stdout)
+        self.assertNotIn('rootfs 缺失或不可用', en.stdout)
+
+    def test_doctor_catalog_keys_locked_in_both_languages(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['val.unknown'], '未知')
+        self.assertEqual(en['val.unknown'], 'unknown')
+        self.assertEqual(zh['doctor.bwrap_below_baseline'], 'bwrap {ver} 低于安全基线 0.12.0')
+        self.assertEqual(en['doctor.bwrap_below_baseline'],
+                         'bwrap {ver} is below the 0.12.0 security baseline')
+        self.assertEqual(zh['doctor.summary_pass'], '自检结果: 全部通过')
+        self.assertEqual(en['doctor.summary_pass'], 'Doctor result: all passed')
+        self.assertEqual(zh['doctor.workspace_safe'], '工作区安全 ({workspace})')
+        self.assertEqual(en['doctor.workspace_safe'], 'Workspace is safe ({workspace})')
+
 
 if __name__ == '__main__':
     unittest.main()

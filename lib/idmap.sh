@@ -748,25 +748,25 @@ _idmap_doctor_report() {
   _idmap_probe || rc=$?
   case "${CAPBOX_IDMAP_STATUS}" in
     multi)
-      _doctor_pass "UID 映射 multi（${CAPBOX_IDMAP_DETAIL}）"
+      _doctor_pass_i18n doctor.idmap_multi detail="${CAPBOX_IDMAP_DETAIL}"
       if _idmap_ensure_drop_priv_helper; then
-        _doctor_pass "drop-priv helper（${CAPBOX_IDMAP_DROP_HELPER_DETAIL}）"
+        _doctor_pass_i18n doctor.idmap_drop_helper_ok detail="${CAPBOX_IDMAP_DROP_HELPER_DETAIL}"
       else
-        _doctor_warn "drop-priv helper 不可用（${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-unknown}）；--uid 将依赖 guest setpriv/python/chpst/su"
+        _doctor_warn_i18n doctor.idmap_drop_helper_unavailable detail="$(i18n_or "${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-}" val.unknown)"
       fi
       ;;
     single)
-      _doctor_warn "UID 映射 single（${CAPBOX_IDMAP_DETAIL}）。chown/setgroups/多用户服务会失败"
+      _doctor_warn_i18n doctor.idmap_single detail="${CAPBOX_IDMAP_DETAIL}"
       ;;
     blocked)
       if [[ "${CAPBOX_IDMAP:-auto}" == "on" ]]; then
-        _doctor_fail "UID 映射被阻塞且 CAPBOX_IDMAP=on（${CAPBOX_IDMAP_DETAIL}）"
+        _doctor_fail_i18n doctor.idmap_blocked_on detail="${CAPBOX_IDMAP_DETAIL}"
       else
-        _doctor_warn "UID 映射不可用，已回退 single（${CAPBOX_IDMAP_DETAIL}）"
+        _doctor_warn_i18n doctor.idmap_fallback_single detail="${CAPBOX_IDMAP_DETAIL}"
       fi
       ;;
     *)
-      _doctor_warn "UID 映射状态未知"
+      _doctor_warn_i18n doctor.idmap_status_unknown
       ;;
   esac
   return 0

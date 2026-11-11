@@ -368,11 +368,11 @@ _image_doctor_report() {
   if [[ -d "$d" ]]; then
     local n
     n="$(ls "$d"/*.tar.* 2>/dev/null | grep -vc sha256 || true)"
-    _doctor_pass "镜像目录 $d（约 ${n:-0} 个归档）"
+    _doctor_pass_i18n doctor.image_dir_present path="$d" n="${n:-0}"
   else
-    _doctor_pass "镜像目录尚未创建（image export 时建立）"
+    _doctor_pass_i18n doctor.image_dir_missing
   fi
   if [[ -f "$(_image_lock_path)" ]]; then
-    _doctor_pass "存在 package.lock"
+    _doctor_pass_i18n doctor.package_lock_present
   fi
 }

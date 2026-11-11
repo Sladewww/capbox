@@ -895,3 +895,108 @@ common.bwrap_old_details<<
       持久允许: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1
             （会写入审计日志；doctor 仍为 FAIL）
 >>
+
+# doctor report text (_doctor_pass / _doctor_fail / _doctor_warn and *_doctor_report)
+doctor.bwrap_installed=bwrap 已安装 ({bwrap})
+doctor.bwrap_version_ok=bwrap 版本 {ver}（>= 0.12.0）
+doctor.bwrap_below_baseline=bwrap {ver} 低于安全基线 0.12.0
+doctor.bwrap_below_allowed_once=bwrap {ver} 低于基线，本次 --allow-old-bwrap 放行（doctor 仍为 FAIL）
+doctor.bwrap_below_allowed_persist=bwrap {ver} 低于基线，已被 CAPBOX_ALLOW_OLD_BWRAP 放行（doctor 仍为 FAIL）
+doctor.bwrap_unavailable=bwrap 不可用 ({bwrap})；请安装 bubblewrap >= 0.12.0 或设置 CAPBOX_BWRAP
+doctor.workspace_dangerous=工作区为 {home} 或 / ({workspace})；会把整棵目录 RW bind 进容器。请用项目内 .capbox/ 或 CAPBOX_ROOT=/path/to/project
+doctor.workspace_safe=工作区安全 ({workspace})
+doctor.audit_workspace_unsafe=工作区不安全
+doctor.userns_ok=userns 全权限 (uid=0, CapEff={caphex})
+doctor.userns_probe_failed=userns 全权限探测失败：容器内无法获得 uid0 + 全量 capability（检查内核 unprivileged_userns_clone 与 bwrap 版本）
+doctor.userns_not_probed=userns 全权限未探测（bwrap 不可用）
+doctor.idmap_module_missing=UID 映射模块未加载（lib/idmap.sh）
+doctor.deps_complete=依赖命令齐全 (tar/curl/flock/timeout)
+doctor.deps_missing_timeout=缺少 timeout（exec --timeout 将失效），其余依赖齐全
+doctor.deps_missing=缺少依赖命令: {cmds}
+doctor.rootfs_ready=rootfs 就绪 ({rootfs}, {size})
+doctor.rootfs_missing=rootfs 缺失或不可用 ({rootfs})；请运行: capbox init --distro {distro}
+doctor.resolv_ready=resolv.conf 已就绪 ({path})
+doctor.resolv_missing=resolv.conf 尚未生成（首次 exec 时会自动生成）
+doctor.mirror_skipped_none=CAPBOX_MIRROR=none，跳过镜像源连通性检查
+doctor.mirror_url_empty=镜像源 URL 为空（检查 CAPBOX_MIRROR_{distro}）
+doctor.mirror_reachable=镜像源连通 ({url})
+doctor.mirror_unreachable=镜像源不可达 ({url})；检查网络或 CAPBOX_MIRROR 配置
+doctor.host_net_ok=宿主网络可用
+doctor.host_net_probe_failed=宿主到公网镜像的探测失败（可能是离线环境）
+doctor.net_none=CAPBOX_NET=none，容器内无网络（--unshare-net）
+doctor.net_restricted_mirror=CAPBOX_NET=restricted：镜像连通性取决于 allowlist 代理（见下方网络模式项）
+doctor.missing_curl_skip_net=缺少 curl，跳过网络连通性检查
+doctor.socks5_apt_unsupported=socks5 代理下 apt 不原生支持：建议改用 http 代理，或在容器内配置 proxychains
+doctor.proxy_configured=代理已配置 ({proxy})
+doctor.proxy_unset=代理未配置（直连）
+doctor.apk_repos_injected=apk 镜像源已注入
+doctor.apk_repos_missing=缺少 {path}（重新运行 capbox init）
+doctor.apt_repos_injected=apt 镜像源已注入 ({which})
+doctor.apt_repos_missing=缺少 apt 源文件（{sl} 或 {d822}）；重新运行 capbox init
+doctor.env_cleared=环境变量已清空（宿主敏感变量不继承；白名单 HOME/PATH 可用）
+doctor.env_not_cleared=环境变量未清空或白名单缺失（probe rc={rc} out={out}）；应无条件 bwrap --clearenv 后再 --setenv
+doctor.skip_env_old_bwrap=跳过环境清空探测（bwrap 版本低于安全基线）
+doctor.skip_env_no_bwrap=跳过环境清空探测（bwrap 不可用）
+doctor.skip_env_no_rootfs=跳过环境清空探测（rootfs 或 bwrap 不可用）
+doctor.config_preoccupy_no_log=无法定位 guest 侧 logs/audit.jsonl，不能确认只读
+doctor.guest_wrote_config=guest 写入了宿主 config.env（缺失/已存在路径未只读保护）
+doctor.guest_wrote_services=guest 创建了宿主 services/_doctor_probe.env（services 目录未只读保护）
+doctor.guest_wrote_protected=guest 可写受保护配置路径（probe out={out}）
+doctor.guest_wrote_audit_log=guest 写入了宿主 logs/audit.jsonl（logs 未只读保护）
+doctor.config_preoccupy_ok=配置路径预占生效（缺失/已存在的 config.env、services/ 与 logs/audit.jsonl 均不可被 guest 写入）
+doctor.skip_preoccupy_capbox_dir=跳过配置预占探测（CAPBOX_DIR 不在工作区视图内）
+doctor.skip_preoccupy_old_bwrap=跳过配置预占探测（bwrap 版本低于安全基线）
+doctor.skip_preoccupy_no_bwrap=跳过配置预占探测（bwrap 不可用）
+doctor.skip_preoccupy_no_rootfs=跳过配置预占探测（rootfs 或 bwrap 不可用）
+doctor.daemon_running=守护容器运行中 (pid {pid})
+doctor.daemon_not_running=守护容器未运行（按需用后台任务运行 capbox up）
+doctor.summary_baseline_fail=自检结果: 安全基线不满足（退出码 6）；{fails} 项 FAIL，{warns} 项 WARN
+doctor.summary_fail=自检结果: {fails} 项 FAIL，{warns} 项 WARN
+doctor.summary_pass_with_warns=自检结果: 全部通过（{warns} 项 WARN）
+doctor.summary_pass=自检结果: 全部通过
+doctor.audit_baseline_fail=安全基线不满足，{fails} 项 FAIL
+doctor.audit_fail={fails} 项 FAIL，{warns} 项 WARN
+doctor.idmap_multi=UID 映射 multi（{detail}）
+doctor.idmap_drop_helper_ok=drop-priv helper（{detail}）
+doctor.idmap_drop_helper_unavailable=drop-priv helper 不可用（{detail}）；--uid 将依赖 guest setpriv/python/chpst/su
+doctor.idmap_single=UID 映射 single（{detail}）。chown/setgroups/多用户服务会失败
+doctor.idmap_blocked_on=UID 映射被阻塞且 CAPBOX_IDMAP=on（{detail}）
+doctor.idmap_fallback_single=UID 映射不可用，已回退 single（{detail}）
+doctor.idmap_status_unknown=UID 映射状态未知
+doctor.cgroup_v2_writable=cgroup v2 可写（{detail}）
+doctor.cgroup_v2_no_delegate=cgroup v2 存在但不可委派：{detail}
+doctor.cgroup_unavailable=cgroup 不可用：{detail}
+doctor.disk_max_honored=DISK_MAX 可兑现：{detail}
+doctor.disk_max_not_honored=DISK_MAX 无法兑现：{detail}
+doctor.resources_unset=资源限额未配置（MEMORY/CPU/PIDS/DISK 为空）
+doctor.resources_mode=RESOURCES_MODE={mode}
+doctor.memory_max_set=已配置 MEMORY_MAX={value}
+doctor.cpu_max_set=已配置 CPU_MAX={value}
+doctor.pids_max_set=已配置 PIDS_MAX={value}
+doctor.disk_max_set=已配置 DISK_MAX={value}（guest {guest}）
+doctor.disk_guest_path_invalid=DISK_MAX 的 guest 路径非法
+doctor.image_dir_present=镜像目录 {path}（约 {n} 个归档）
+doctor.image_dir_missing=镜像目录尚未创建（image export 时建立）
+doctor.package_lock_present=存在 package.lock
+doctor.net_invalid=CAPBOX_NET 非法（{value}）；拒绝当作 open
+doctor.net_mode_none=网络模式 none（--unshare-net，容器内无网络）
+doctor.net_mode_open=网络模式 open（共享宿主网络；兼容别名 host）
+doctor.net_mode_restricted_ok=网络模式 restricted（unshare-net + allowlist 代理；{pre}；ALLOW={allow})
+doctor.net_mode_restricted_prereq=网络模式 restricted 但前置未满足（需要 python3、nsenter、非空 CAPBOX_NET_ALLOW）；exec 将失败
+doctor.fs_rootfs_ro_overlay_ok=ROOTFS_RO=1 且 overlay 实测可用（写入进入 upper）
+doctor.fs_rootfs_ro_overlay_unavailable=ROOTFS_RO=1 但 overlay 不可用：根将只读挂载
+doctor.fs_rootfs_ro_off=ROOTFS_RO 未启用（rootfs RW bind，兼容默认）
+doctor.fs_hide_binds_ok=FS_HIDE/FS_BINDS 配置校验通过（禁止工作区外 bind）
+doctor.fs_hide_binds_invalid=FS_HIDE/FS_BINDS 配置非法
+doctor.landlock_invalid=CAPBOX_LANDLOCK 只能是 on 或 off（当前: {value}）
+doctor.landlock_off=Landlock 关闭（未设置时 strict 默认开启，compat/untrusted 默认关闭）
+doctor.landlock_helper_failed=Landlock 已启用，但无法构建 helper（需要宿主 gcc -static 与 lib/guest/capbox-landlock.c）
+doctor.landlock_kernel_unsupported=Landlock 已启用，但内核不支持（需要 5.13+ 且 LSM 已启用）
+doctor.landlock_abi=Landlock ABI {abi}（挂载完成之后限制 VFS；不限制 TCP 端口；允许目录之下不能再挖洞）
+doctor.security_compat=安全档 compat（默认兼容：全量 capability、无 seccomp；不削弱现有行为）
+doctor.security_userns_boundary_compat=userns 边界：guest root ≠ 宿主 root；无 seccomp 时攻击面较大，不可信负载请改 CAPBOX_SECURITY_PROFILE=untrusted|strict
+doctor.security_profile_ok=安全档 {profile}（seccomp BPF={bpf}，capability drop，disable-userns={dus}）
+doctor.security_idmap_skip_disable_userns=不可信负载不要和多 UID idmap 一起用：已跳过 --disable-userns，guest 仍可嵌套 user namespace。装包可以开 idmap；跑不可信命令请 CAPBOX_IDMAP=off（或单 UID）后再用 untrusted/strict
+doctor.security_bpf_failed=安全档 {profile} 但无法生成 seccomp BPF（拒绝伪实现）
+doctor.security_need_seccomp_tools=安全档 {profile} 需要 python3 + lib/seccomp-gen.py + libseccomp
+doctor.security_userns_boundary_recorded=userns 边界已记录：harden 降低 guest 攻击面，不声称宿主级隔离
