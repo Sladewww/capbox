@@ -24,6 +24,6 @@ flowchart TD
 - `lib/upgrade.sh`：停机检查与项目升级锁。`upgrade-runtime.py` 暂存/校验完整运行时树，记录私有恢复状态，失败后回滚备份。
 - `lib/package-lock.sh`：调用常规 guest 包封装。`package-lock.py` 校验数据、生成精确包参数并比对已装集合。
 - `lib/audit-report.py` 及其 HTML 模板：对选定的审计 JSONL 快照做有界规范化，再在工作区外发布私有、自包含报告。浏览器交互只用嵌入数据；不暴露启动器或控制服务。
-- `lib/oci-image.py`：不连接 Docker daemon。读取 docker-archive、OCI layout 或 OCI archive，按层展开 whiteout，把 rootfs 写到 `.capbox/images/docker/<name>/`。镜像配置是数据；启动仍只走 `launch.sh`。
+- `lib/oci-image.py`：不连接 Docker daemon。读取 docker-archive、OCI layout 或 OCI archive，按层展开 whiteout，把 rootfs 写到 `.capbox/images/docker/<name>/`。`image docker pull` 只调用宿主的 skopeo 或 crane，先锁定摘要再导入。镜像配置是数据；启动仍只走 `launch.sh`。
 
 宿主启动器、进程身份记录、BPF 与辅助程序留在 guest 可见工作区之外。升级备份用持久宿主状态存储，与一次性运行时文件分开。项目配置与 rootfs 是数据，绝不当作宿主 shell 程序解释。Docker/OCI 镜像同样只当数据展开，不在宿主执行其中的 Entrypoint、Cmd 或 Env。

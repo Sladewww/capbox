@@ -169,7 +169,7 @@ Usage: capbox image <export|import|list|verify|lock|cache|docker> ...
   verify NAME              Verify SHA256
   lock save|show|verify|restore [FILE]  Save, show, verify, or restore a package lock at exact versions
   cache save|restore|path  Offline package cache (pack the apk/apt cache directory)
-  docker ...               Import or run a local docker save archive, OCI layout, or OCI archive
+  docker ...               Import, pull, or run a local Docker/OCI image
                            (no Docker daemon). See: capbox image docker --help
 
 Import does not destroy an existing rootfs by default; --force takes a snapshot-bak first, then replaces.
@@ -177,12 +177,17 @@ A Docker/OCI import is stored under .capbox/images/docker/<name>/ and does not r
 >>
 
 help.image.docker<<
-Usage: capbox image docker <inspect|import|list|show|rm|run> ...
+Usage: capbox image docker <inspect|import|pull|list|show|rm|run> ...
 
   inspect ARCHIVE [--platform OS/ARCH] [--index N] [--tag REF]
                            Print image config as JSON. Does not extract or execute it.
   import ARCHIVE [--name NAME] [--platform OS/ARCH] [--index N] [--tag REF] [--force]
                            Flatten layers into .capbox/images/docker/<name>/rootfs
+  pull REF [--name NAME] [--platform OS/ARCH] [--force]
+                           Copy with host skopeo (else crane) into a temporary OCI layout, then import.
+                           A tag is resolved to a digest before the copy. No Docker daemon and no docker.sock.
+                           CAPBOX_OCI_REGISTRIES is a comma-separated registry allowlist
+                           (default: docker.io,ghcr.io,quay.io,public.ecr.aws,registry.k8s.io; * allows every host).
   list                     List imported Docker/OCI images
   show NAME                Print meta.json
   rm NAME                  Delete one imported image
@@ -696,6 +701,12 @@ oci.busy_symlink=refusing to follow symlink: {path}
 oci.run_needs_target=usage: image docker run NAME|ARCHIVE [--] CMD...
 oci.exec_image_daemon=exec --image cannot be combined with --daemon
 oci.not_rootfs=image rootfs has no usable /bin/sh (exec --image needs one): {path}
+oci.pull_needs_ref=usage: image docker pull REF [--name NAME] [--platform OS/ARCH] [--force]
+oci.pull_tool_missing=image pull needs skopeo or crane on PATH; CapBox does not speak to a registry itself
+oci.pull_bad_ref=refusing image reference: {ref}
+oci.registry_denied=registry is not in CAPBOX_OCI_REGISTRIES: {registry}
+oci.pull_failed=image pull failed via {tool}
+oci.pull_digest_mismatch=pulled digest does not match the pinned digest: {digest}
 doctor.docker_images=imported docker images: {n}
 landlock.capbox_landlock_must_off_got=CAPBOX_LANDLOCK must be on or off (got: {v})
 landlock.missing_lib_guest_capbox_landlock_c=Missing lib/guest/capbox-landlock.c

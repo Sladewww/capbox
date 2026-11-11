@@ -168,7 +168,7 @@ help.image<<
   verify NAME              校验 SHA256
   lock save|show|verify|restore [FILE]  保存/查看/验证/按精确版本恢复包锁
   cache save|restore|path  离线包缓存（apk/apt 缓存目录打包）
-  docker ...               导入或运行本地 docker save 归档、OCI layout 或 OCI archive
+  docker ...               导入、拉取或运行 Docker/OCI 镜像
                            （不连接 Docker daemon）。详见 capbox image docker --help
 
 导入默认不破坏现有 rootfs；--force 会先 snapshot-bak 再替换。
@@ -176,12 +176,17 @@ Docker/OCI 导入落在 .capbox/images/docker/<name>/，不替换 Alpine/Ubuntu 
 >>
 
 help.image.docker<<
-用法: capbox image docker <inspect|import|list|show|rm|run> ...
+用法: capbox image docker <inspect|import|pull|list|show|rm|run> ...
 
   inspect ARCHIVE [--platform OS/ARCH] [--index N] [--tag REF]
                            打印镜像配置 JSON。不展开，也不执行。
   import ARCHIVE [--name NAME] [--platform OS/ARCH] [--index N] [--tag REF] [--force]
                            按层展开到 .capbox/images/docker/<name>/rootfs
+  pull REF [--name NAME] [--platform OS/ARCH] [--force]
+                           用宿主的 skopeo（没有则用 crane）拷到临时 OCI layout，再导入。
+                           先把标签解析成摘要再复制。不连接 Docker daemon，也不读 docker.sock。
+                           CAPBOX_OCI_REGISTRIES 是逗号分隔的 registry 白名单
+                           （默认 docker.io,ghcr.io,quay.io,public.ecr.aws,registry.k8s.io；* 表示全部放行）。
   list                     列出已导入的 Docker/OCI 镜像
   show NAME                打印 meta.json
   rm NAME                  删除一个已导入镜像
@@ -695,6 +700,12 @@ oci.busy_symlink=拒绝跟随符号链接: {path}
 oci.run_needs_target=用法: image docker run NAME|ARCHIVE [--] CMD...
 oci.exec_image_daemon=exec --image 不能与 --daemon 同用
 oci.not_rootfs=镜像 rootfs 没有可用的 /bin/sh（exec --image 需要）: {path}
+oci.pull_needs_ref=用法: image docker pull REF [--name NAME] [--platform OS/ARCH] [--force]
+oci.pull_tool_missing=拉取镜像需要 PATH 上的 skopeo 或 crane；CapBox 自己不连接 registry
+oci.pull_bad_ref=拒绝镜像引用: {ref}
+oci.registry_denied=registry 不在 CAPBOX_OCI_REGISTRIES 白名单中: {registry}
+oci.pull_failed=通过 {tool} 拉取镜像失败
+oci.pull_digest_mismatch=拉到的摘要和锁定的摘要不一致: {digest}
 doctor.docker_images=已导入 docker 镜像: {n}
 landlock.capbox_landlock_must_off_got=CAPBOX_LANDLOCK 只能是 on 或 off（当前: {v}）
 landlock.missing_lib_guest_capbox_landlock_c=缺少 lib/guest/capbox-landlock.c

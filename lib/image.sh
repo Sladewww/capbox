@@ -423,6 +423,144 @@ _image_docker_run() {
   return "$rc"
 }
 
+_image_json_field() {
+  python3 -c 'import json,sys
+data=json.load(sys.stdin)
+value=data.get(sys.argv[1], "")
+if not isinstance(value, str):
+    value=""
+sys.stdout.write(value)' "$1"
+}
+
+# 拉取在宿主上调用 skopeo 或 crane，不连接 docker.sock。
+# 标签先解析成 sha256，再按摘要复制到临时 OCI layout，然后走 import。
+_image_docker_pull_copy() {
+  local tool="$1" reference="$2" digest="$3" layout="$4" oci_tag="$5"
+  local osn="$6" arch="$7" variant="$8" platform="$9"
+  local -a proxy=()
+  if [[ -n "${CAPBOX_PROXY:-}" && -z "${https_proxy:-}" && -z "${HTTPS_PROXY:-}" ]]; then
+    proxy=(env "http_proxy=${CAPBOX_PROXY}" "https_proxy=${CAPBOX_PROXY}")
+  fi
+  local resolved="$digest" src="${reference%%@sha256:*}" out digestfile got note
+  note="$(dirname -- "$layout")/got"
+  if [[ "$tool" == skopeo ]]; then
+    local -a ov=()
+    [[ -n "$osn" ]] && ov+=(--override-os "$osn" --override-arch "$arch")
+    [[ -n "$variant" ]] && ov+=(--override-variant "$variant")
+    if [[ -z "$resolved" ]]; then
+      out="$("${proxy[@]}" skopeo inspect --format '{{.Digest}}' "${ov[@]}" "docker://${reference}")" || return 1
+      resolved="${out//[$'\r\n']/}"
+      if [[ ! "$resolved" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s' "$resolved" >"$note"
+        return 2
+      fi
+    fi
+    digestfile="$(dirname -- "$layout")/digest"
+    "${proxy[@]}" skopeo copy --digestfile "$digestfile" "${ov[@]}" \
+      "docker://${src}@${resolved}" "oci:${layout}:${oci_tag}" || return 1
+    got="$(tr -d '[:space:]' <"$digestfile" 2>/dev/null || true)"
+    if [[ "$got" != "$resolved" ]]; then
+      printf '%s' "${got:-$resolved}" >"$note"
+      return 2
+    fi
+    return 0
+  fi
+  local -a plat=()
+  [[ -n "$platform" ]] && plat+=(--platform "$platform")
+  if [[ -z "$resolved" ]]; then
+    out="$("${proxy[@]}" crane digest "${plat[@]}" "$reference")" || return 1
+    resolved="${out//[$'\r\n']/}"
+    if [[ ! "$resolved" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      printf '%s' "$resolved" >"$note"
+      return 2
+    fi
+  fi
+  "${proxy[@]}" crane pull --format oci "${plat[@]}" "${src}@${resolved}" "$layout" || return 1
+  return 0
+}
+
+_image_docker_pull() {
+  local ref="" name="" platform="" force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="${2:-}"; shift 2 || i18n_die 2 oci.pull_needs_ref ;;
+      --platform) platform="${2:-}"; shift 2 || i18n_die 2 oci.pull_needs_ref ;;
+      --force) force=1; shift ;;
+      -*) i18n_die 2 oci.unknown_option arg="$1" ;;
+      *)
+        [[ -z "$ref" ]] || i18n_die 2 oci.pull_needs_ref
+        ref="$1"
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$ref" ]] || i18n_die 2 oci.pull_needs_ref
+  local tool=""
+  if have_cmd skopeo; then
+    tool=skopeo
+  elif have_cmd crane; then
+    tool=crane
+  else
+    i18n_die 1 oci.pull_tool_missing
+  fi
+  local -a norm=(normalize-ref --ref "$ref")
+  [[ -n "${CAPBOX_OCI_REGISTRIES+x}" ]] && norm+=(--allow "${CAPBOX_OCI_REGISTRIES}")
+  [[ -n "$platform" ]] && norm+=(--platform "$platform")
+  local json
+  json="$(_oci_py_cmd "${norm[@]}")" || return $?
+  local registry reference digest oci_tag default_name osn arch variant
+  registry="$(printf '%s' "$json" | _image_json_field registry)"
+  reference="$(printf '%s' "$json" | _image_json_field reference)"
+  digest="$(printf '%s' "$json" | _image_json_field digest)"
+  oci_tag="$(printf '%s' "$json" | _image_json_field oci_tag)"
+  default_name="$(printf '%s' "$json" | _image_json_field default_name)"
+  osn="$(printf '%s' "$json" | _image_json_field os)"
+  arch="$(printf '%s' "$json" | _image_json_field arch)"
+  variant="$(printf '%s' "$json" | _image_json_field variant)"
+  [[ -n "$reference" && -n "$oci_tag" && -n "$registry" ]] || i18n_die 1 oci.pull_bad_ref ref="$ref"
+  [[ -n "$name" ]] || name="$default_name"
+  _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
+  local base dest
+  base="$(_image_docker_dir)"
+  mkdir -p -- "$base" || i18n_die 1 oci.stage_failed
+  [[ ! -L "$base" ]] || i18n_die 1 oci.busy_symlink path="$base"
+  dest="$base/$name"
+  [[ ! -L "$dest" ]] || i18n_die 1 oci.busy_symlink path="$dest"
+  if [[ -e "$dest" && "$force" -ne 1 ]]; then
+    i18n_die 1 oci.exists name="$name"
+  fi
+  local stage
+  stage="$(mktemp -d "$base/.pull.XXXXXX")" || i18n_die 1 oci.stage_failed
+  [[ ! -L "$stage" ]] || i18n_die 1 oci.busy_symlink path="$stage"
+  (
+    local layout="$stage/layout" copy_rc=0 bytes="" got=""
+    _image_docker_pull_copy "$tool" "$reference" "$digest" "$layout" "$oci_tag" \
+      "$osn" "$arch" "$variant" "$platform" || copy_rc=$?
+    if (( copy_rc != 0 )); then
+      if (( copy_rc == 2 )); then
+        got="$(cat "$stage/got" 2>/dev/null || true)"
+        i18n_die 1 oci.pull_digest_mismatch digest="${got:-unknown}"
+      fi
+      i18n_die 1 oci.pull_failed tool="$tool"
+    fi
+    [[ -d "$layout" && ! -L "$layout" && -f "$layout/index.json" && ! -L "$layout/index.json" \
+      && -f "$layout/oci-layout" && ! -L "$layout/oci-layout" ]] \
+      || i18n_die 1 oci.pull_failed tool="$tool"
+    bytes="$(du -sb -- "$layout" | awk '{print $1}')"
+    [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -le 8589934592 ]] || i18n_die 1 oci.too_large limit='8GiB'
+    local -a imp=("$layout" --name "$name")
+    [[ -n "$platform" ]] && imp+=(--platform "$platform")
+    (( force == 1 )) && imp+=(--force)
+    _image_docker_import "${imp[@]}"
+  )
+  local rc=$?
+  rm -rf --one-file-system -- "$stage"
+  if (( rc == 0 )) && declare -F audit_event >/dev/null 2>&1; then
+    audit_event image ok "object=$name" "detail=docker-pull:$registry" "exit=0" "ms=0"
+  fi
+  return "$rc"
+}
+
 cmd_image_docker() {
   local sub="${1:-}"
   [[ $# -gt 0 ]] && shift
@@ -452,6 +590,9 @@ cmd_image_docker() {
       ;;
     import)
       _image_docker_import "$@"
+      ;;
+    pull)
+      _image_docker_pull "$@"
       ;;
     list)
       local d meta name

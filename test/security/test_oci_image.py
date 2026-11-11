@@ -441,5 +441,195 @@ class CliTests(unittest.TestCase):
         self.assertTrue(mode & stat.S_IXUSR)
 
 
+class PullRefTests(unittest.TestCase):
+    def test_short_name_digest_and_allowlist(self):
+        bare = oci.normalize_pull_ref('alpine')
+        self.assertEqual(bare['reference'], 'docker.io/library/alpine:latest')
+        self.assertEqual(bare['registry'], 'docker.io')
+        pinned = 'a' * 64
+        got = oci.normalize_pull_ref(f'docker://ghcr.io/Org/App:1.2@sha256:{pinned.upper()}')
+        self.assertEqual(got['registry'], 'ghcr.io')
+        self.assertEqual(got['repository'], 'org/app')
+        self.assertEqual(got['digest'], 'sha256:' + pinned)
+        self.assertNotIn(':1.2', got['reference'])
+        with self.assertRaises(oci.OciError) as caught:
+            oci.normalize_pull_ref('evil.example/app:1')
+        self.assertEqual(caught.exception.key, 'oci.registry_denied')
+        allowed = oci.normalize_pull_ref('evil.example/app:1', allow='*')
+        self.assertEqual(allowed['registry'], 'evil.example')
+        for bad in ('docker-daemon:alpine', 'oci:./layout', 'http://ghcr.io/a/b:1', 'alpine:', '../x'):
+            with self.assertRaises(oci.OciError) as caught:
+                oci.normalize_pull_ref(bad)
+            self.assertEqual(caught.exception.key, 'oci.pull_bad_ref', bad)
+        with self.assertRaises(oci.OciError) as caught:
+            oci.normalize_pull_ref('alpine', platform='windows/amd64')
+        self.assertEqual(caught.exception.key, 'oci.unsupported_os')
+
+
+def _write_fake_tool(path: Path, kind: str) -> None:
+    path.write_text(r'''#!/usr/bin/env python3
+import hashlib, io, json, os, sys, tarfile
+from pathlib import Path
+log = Path(os.environ["FAKE_TOOL_LOG"])
+args = sys.argv[1:]
+log.parent.mkdir(parents=True, exist_ok=True)
+with log.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(args) + "\n")
+kind = os.environ["FAKE_TOOL_KIND"]
+
+def layout(root: Path) -> None:
+    layer = io.BytesIO()
+    with tarfile.open(fileobj=layer, mode="w") as tar:
+        payload = b"pulled\n"
+        info = tarfile.TarInfo("etc/pulled")
+        info.size = len(payload)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(payload))
+    blob = layer.getvalue()
+    config = json.dumps({
+        "architecture": "amd64", "os": "linux",
+        "config": {"Entrypoint": ["/bin/sh"], "Cmd": ["-c", "true"], "Env": ["PULLED=1"], "WorkingDir": "/"},
+    }).encode()
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                   "digest": "sha256:" + hashlib.sha256(config).hexdigest(), "size": len(config)},
+        "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar",
+                    "digest": "sha256:" + hashlib.sha256(blob).hexdigest(), "size": len(blob)}],
+    }
+    raw = json.dumps(manifest).encode()
+    blobs = root / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    (blobs / hashlib.sha256(config).hexdigest()).write_bytes(config)
+    (blobs / hashlib.sha256(blob).hexdigest()).write_bytes(blob)
+    (blobs / hashlib.sha256(raw).hexdigest()).write_bytes(raw)
+    (root / "oci-layout").write_text('{"imageLayoutVersion": "1.0.0"}\n', encoding="utf-8")
+    tag = os.environ.get("FAKE_OCI_TAG", "imported")
+    index = {"schemaVersion": 2, "manifests": [{
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "size": len(raw),
+        "platform": {"os": "linux", "architecture": "amd64"},
+        "annotations": {"org.opencontainers.image.ref.name": tag},
+    }]}
+    (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+inspect_digest = os.environ.get("FAKE_INSPECT_DIGEST", "sha256:" + "ab" * 32)
+copy_digest = os.environ.get("FAKE_COPY_DIGEST", inspect_digest)
+if kind == "skopeo" and args[0] == "inspect":
+    ref = args[-1]
+    if not ref.startswith("docker://"):
+        sys.exit(4)
+    print(inspect_digest)
+    sys.exit(0)
+if kind == "skopeo" and args[0] == "copy":
+    dest = next(item for item in args if item.startswith("oci:"))
+    source = next(item for item in args if item.startswith("docker://"))
+    if "@sha256:" not in source:
+        sys.exit(5)
+    digestfile = args[args.index("--digestfile") + 1]
+    body = dest[4:]
+    path, tag = body.rsplit(":", 1)
+    os.environ["FAKE_OCI_TAG"] = tag
+    layout(Path(path))
+    Path(digestfile).write_text(copy_digest + "\n", encoding="utf-8")
+    sys.exit(0)
+if kind == "crane" and args[0] == "digest":
+    print(inspect_digest)
+    sys.exit(0)
+if kind == "crane" and args[0] == "pull":
+    source = args[-2]
+    if "@sha256:" not in source:
+        sys.exit(5)
+    layout(Path(args[-1]))
+    sys.exit(0)
+sys.exit(8)
+''', encoding='utf-8')
+    path.chmod(0o755)
+
+
+class PullCliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-oci-pull-')
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.ws = self.base / 'workspace'
+        self.ws.mkdir()
+        runtime = self.base / 'runtime'
+        runtime.mkdir(mode=0o700)
+        tools = self.base / 'bin'
+        tools.mkdir()
+        self.log = self.base / 'tool.log'
+        _write_fake_tool(tools / 'skopeo', 'skopeo')
+        _write_fake_tool(tools / 'crane', 'crane')
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith('CAPBOX_')}
+        self.env.update({
+            'XDG_RUNTIME_DIR': str(runtime),
+            'CAPBOX_LANG': 'en',
+            'FAKE_TOOL_LOG': str(self.log),
+            'FAKE_TOOL_KIND': 'skopeo',
+            'PATH': f'{tools}:/usr/bin:/bin',
+        })
+
+    def cli(self, *args):
+        return subprocess.run(
+            [str(REPO / 'bin/capbox'), '--root', str(self.ws), *args],
+            env=self.env, capture_output=True, text=True, timeout=60,
+        )
+
+    def calls(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text(encoding='utf-8').splitlines() if line]
+
+    def test_pull_pins_digest_and_imports_without_a_daemon(self):
+        result = self.cli('image', 'docker', 'pull', 'alpine:3.20', '--name', 'app')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.ws / '.capbox/images/docker/app/rootfs/etc/pulled').is_file())
+        self.assertEqual(self.cli('config', 'get', 'DISTRO').stdout.strip(), 'alpine')
+        seen = [' '.join(call) for call in self.calls()]
+        self.assertTrue(any(call[0] == 'inspect' and call[-1] == 'docker://docker.io/library/alpine:3.20' for call in self.calls()))
+        self.assertTrue(any('@sha256:' + 'ab' * 32 in item for item in seen))
+        self.assertFalse(any(path.name.startswith('.pull.') for path in (self.ws / '.capbox/images/docker').iterdir()))
+        again = self.cli('image', 'docker', 'pull', 'alpine:3.20', '--name', 'app')
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn('already exists', again.stderr)
+
+    def test_rejects_other_transports_and_registries_before_the_tool(self):
+        denied = self.cli('image', 'docker', 'pull', 'evil.example/app:1', '--name', 'app')
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn('CAPBOX_OCI_REGISTRIES', denied.stderr)
+        daemon = self.cli('image', 'docker', 'pull', 'docker-daemon:alpine', '--name', 'app')
+        self.assertNotEqual(daemon.returncode, 0)
+        self.assertIn('refusing image reference', daemon.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_digest_mismatch_does_not_import(self):
+        self.env['FAKE_COPY_DIGEST'] = 'sha256:' + 'cd' * 32
+        result = self.cli('image', 'docker', 'pull', 'alpine:3.20', '--name', 'app')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('pinned digest', result.stderr)
+        self.assertFalse((self.ws / '.capbox/images/docker/app').exists())
+        self.assertFalse(any(path.name.startswith('.pull.') for path in (self.ws / '.capbox/images/docker').iterdir()))
+
+    def test_crane_fallback_and_allow_any_registry(self):
+        tools = Path(self.env['PATH'].split(':')[0])
+        (tools / 'skopeo').unlink()
+        self.env['CAPBOX_OCI_REGISTRIES'] = '*'
+        self.env['FAKE_TOOL_KIND'] = 'crane'
+        result = self.cli('image', 'docker', 'pull', 'evil.example/app:1', '--name', 'app', '--platform', 'linux/amd64')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[0] == 'pull' and '@sha256:' in call[-2] for call in self.calls()))
+        missing = dict(self.env)
+        missing['PATH'] = '/usr/bin:/bin'
+        gone = subprocess.run(
+            [str(REPO / 'bin/capbox'), '--root', str(self.ws), 'image', 'docker', 'pull', 'alpine:3', '--name', 'other'],
+            env=missing, capture_output=True, text=True, timeout=60,
+        )
+        self.assertNotEqual(gone.returncode, 0)
+        self.assertIn('skopeo or crane', gone.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

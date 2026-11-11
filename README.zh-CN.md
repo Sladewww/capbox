@@ -124,7 +124,7 @@ capbox recipe apply --locked /path/to/package.lock capbox.recipe
 
 ## Docker / OCI 镜像文件
 
-CapBox 仍然不连接 Docker daemon。`image docker` 读取本机的 `docker save` 归档、OCI layout 目录或 OCI archive，展开层后用原来的 bubblewrap 启动。
+CapBox 仍然不连接 Docker daemon。`image docker` 读取本机的 `docker save` 归档、OCI layout 目录或 OCI archive，展开层后用原来的 bubblewrap 启动。`image docker pull REF` 只调用宿主的 `skopeo`（没有则用 `crane`），先把标签解析成摘要再导入，不打开 `docker.sock`。registry 由 `CAPBOX_OCI_REGISTRIES` 限制。
 
 ```sh
 capbox image docker import alpine.tar --name alpine

@@ -166,7 +166,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   verify NAME              校验 SHA256
   lock save|show|verify|restore [FILE]  保存/查看/验证/按精确版本恢复包锁
   cache save|restore|path  离线包缓存（apk/apt 缓存目录打包）
-  docker ...               导入或运行本地 docker save 归档、OCI layout 或 OCI archive
+  docker ...               导入、拉取或运行 Docker/OCI 镜像
                            （不连接 Docker daemon）。详见 capbox image docker --help
 
 导入默认不破坏现有 rootfs；--force 会先 snapshot-bak 再替换。
@@ -176,12 +176,17 @@ Docker/OCI 导入落在 .capbox/images/docker/<name>/，不替换 Alpine/Ubuntu 
 ## capbox image docker --help
 
 ```text
-用法: capbox image docker <inspect|import|list|show|rm|run> ...
+用法: capbox image docker <inspect|import|pull|list|show|rm|run> ...
 
   inspect ARCHIVE [--platform OS/ARCH] [--index N] [--tag REF]
                            打印镜像配置 JSON。不展开，也不执行。
   import ARCHIVE [--name NAME] [--platform OS/ARCH] [--index N] [--tag REF] [--force]
                            按层展开到 .capbox/images/docker/<name>/rootfs
+  pull REF [--name NAME] [--platform OS/ARCH] [--force]
+                           用宿主的 skopeo（没有则用 crane）拷到临时 OCI layout，再导入。
+                           先把标签解析成摘要再复制。不连接 Docker daemon，也不读 docker.sock。
+                           CAPBOX_OCI_REGISTRIES 是逗号分隔的 registry 白名单
+                           （默认 docker.io,ghcr.io,quay.io,public.ecr.aws,registry.k8s.io；* 表示全部放行）。
   list                     列出已导入的 Docker/OCI 镜像
   show NAME                打印 meta.json
   rm NAME                  删除一个已导入镜像

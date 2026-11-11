@@ -3,6 +3,7 @@
 
 不连接 Docker daemon，不执行镜像里的 Entrypoint、Cmd 或 Env。
 层文件只按数据写入调用方给出的目录。
+registry 拉取不在这里实现：normalize-ref 只校验引用和白名单。
 """
 from __future__ import annotations
 
@@ -82,6 +83,146 @@ def parse_platform(text: str | None) -> tuple[str, str | None, str | None] | Non
     os_name, arch = parts[0], parts[1]
     variant = parts[2] if len(parts) == 3 else None
     return os_name, arch, variant
+
+
+_REF_BAD = re.compile(r'[\s\x00-\x1f\\]')
+_TAG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}\Z')
+_DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}\Z')
+_HOST_RE = re.compile(
+    r'(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))'
+    r'(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*'
+    r'(?::[0-9]{1,5})?\Z'
+)
+_REPO_PART = re.compile(r'[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*\Z')
+DEFAULT_PULL_REGISTRIES = (
+    'docker.io',
+    'ghcr.io',
+    'quay.io',
+    'public.ecr.aws',
+    'registry.k8s.io',
+)
+_OTHER_TRANSPORTS = (
+    'docker-daemon:',
+    'docker-archive:',
+    'oci-archive:',
+    'oci:',
+    'dir:',
+    'containers-storage:',
+)
+
+
+def _allow_hosts(allow: str | None) -> set[str] | None:
+    text = ','.join(DEFAULT_PULL_REGISTRIES) if allow is None or not allow.strip() else allow
+    hosts: set[str] = set()
+    for piece in text.split(','):
+        item = piece.strip().lower()
+        if not item:
+            continue
+        if item == '*':
+            return None
+        hosts.add(item)
+    return hosts or set(DEFAULT_PULL_REGISTRIES)
+
+
+def _default_image_name(registry: str, repository: str, tag: str, digest: str, reference: str) -> str:
+    bits = [registry, repository]
+    if tag:
+        bits.append(tag)
+    elif digest:
+        bits.append(digest.split(':', 1)[1][:12])
+    raw = re.sub(r'[^A-Za-z0-9._@+-]+', '_', '_'.join(bits)).strip('._')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._@+-]*', raw or '') or len(raw) > 128:
+        tail = digest.split(':')[-1][:12] if digest else hashlib.sha256(reference.encode()).hexdigest()[:12]
+        raw = 'img-' + tail
+    return raw
+
+
+def normalize_pull_ref(text: str, allow: str | None = None, platform: str | None = None) -> dict:
+    """把用户写的镜像引用收成 docker 仓库引用。不访问网络。"""
+    shown = text.strip()
+    if not shown or _REF_BAD.search(shown) or shown.startswith('-'):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    lowered = shown.lower()
+    if any(lowered.startswith(prefix) for prefix in _OTHER_TRANSPORTS):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    body = shown
+    if '://' in body:
+        if not lowered.startswith('docker://'):
+            raise OciError('oci.pull_bad_ref', ref=text)
+        body = body[len('docker://'):]
+        if not body or '://' in body:
+            raise OciError('oci.pull_bad_ref', ref=text)
+    digest = ''
+    if '@' in body:
+        name_part, digest_part = body.rsplit('@', 1)
+        digest = digest_part.strip().lower()
+        if not _DIGEST_RE.fullmatch(digest):
+            raise OciError('oci.pull_bad_ref', ref=text)
+        body = name_part
+    else:
+        name_part = body
+    if not name_part or name_part.startswith('/') or name_part.endswith('/'):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    tag = ''
+    if '/' not in name_part:
+        repo = name_part
+        if ':' in repo:
+            repo, tag = repo.split(':', 1)
+            if not tag:
+                raise OciError('oci.pull_bad_ref', ref=text)
+        registry = 'docker.io'
+        repository = 'library/' + repo.lower()
+    else:
+        first, rest = name_part.split('/', 1)
+        if '.' in first or ':' in first or first.lower() == 'localhost':
+            registry = first.lower()
+            repo_and_tag = rest
+        else:
+            registry = 'docker.io'
+            repo_and_tag = name_part
+        leaf = repo_and_tag.rsplit('/', 1)[-1]
+        if ':' in leaf:
+            repo_and_tag, tag = repo_and_tag.rsplit(':', 1)
+            if not tag:
+                raise OciError('oci.pull_bad_ref', ref=text)
+        repository = repo_and_tag.lower()
+    if tag and not _TAG_RE.fullmatch(tag):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    parts = repository.split('/')
+    if not parts or any(not _REPO_PART.fullmatch(part) for part in parts):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    if not _HOST_RE.fullmatch(registry):
+        raise OciError('oci.pull_bad_ref', ref=text)
+    if not tag and not digest:
+        tag = 'latest'
+    hosts = _allow_hosts(allow)
+    if hosts is not None and registry not in hosts:
+        raise OciError('oci.registry_denied', registry=registry)
+    os_name = arch = variant = ''
+    if platform:
+        parsed = parse_platform(platform)
+        if parsed is None:
+            raise OciError('oci.bad_platform', platform=platform)
+        os_name, arch = parsed[0], parsed[1]
+        variant = parsed[2] or ''
+        if os_name != 'linux':
+            raise OciError('oci.unsupported_os', os=os_name)
+    if digest:
+        reference = f'{registry}/{repository}@{digest}'
+    else:
+        reference = f'{registry}/{repository}:{tag}'
+    return {
+        'registry': registry,
+        'repository': repository,
+        'reference': reference,
+        'tag': tag,
+        'digest': digest,
+        'oci_tag': tag or 'imported',
+        'default_name': _default_image_name(registry, repository, tag, digest, reference),
+        'os': os_name,
+        'arch': arch,
+        'variant': variant,
+    }
 
 
 def sha256_file(path: Path) -> str:
@@ -1032,6 +1173,10 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument('args', nargs='*')
     envp = sub.add_parser('env-pairs')
     envp.add_argument('--meta', required=True)
+    refp = sub.add_parser('normalize-ref')
+    refp.add_argument('--ref', required=True)
+    refp.add_argument('--allow', default='')
+    refp.add_argument('--platform', default='')
 
     ns = parser.parse_args(argv)
     lang = _lang(ns.lang)
@@ -1065,6 +1210,11 @@ def main(argv: list[str] | None = None) -> int:
                 if not ENV_KEY.fullmatch(key):
                     raise OciError('oci.env_key', key=key)
                 out.write(key.encode('utf-8') + b'\0' + value.encode('utf-8') + b'\0')
+            return 0
+        if ns.cmd == 'normalize-ref':
+            meta = normalize_pull_ref(ns.ref, ns.allow or None, ns.platform or None)
+            json.dump(meta, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write('\n')
             return 0
     except OciError as err:
         emit_error(lang, err)

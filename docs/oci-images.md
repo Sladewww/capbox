@@ -1,6 +1,6 @@
 # Docker / OCI 镜像文件
 
-CapBox 不连接 Docker daemon，也不读取 `docker.sock`。`image docker` 只接受本机已经存在的镜像文件，把层展开成目录，再用原来的 bubblewrap 启动。
+CapBox 不连接 Docker daemon，也不读取 `docker.sock`。`image docker import` 接受本机已经存在的镜像文件；`image docker pull` 只通过宿主的 `skopeo` 或 `crane` 把仓库镜像拷成 OCI layout。两种输入都展开成目录，再用原来的 bubblewrap 启动。
 
 支持三种输入：
 
@@ -19,6 +19,15 @@ capbox image docker run alpine --entrypoint /bin/sh -- -c 'echo "$IMAGE_ENV"'
 ```
 
 `import` 写到 `.capbox/images/docker/<name>/rootfs`，并在旁边放 `meta.json`。不改 `DISTRO`，也不替换 `os/alpine` 或 `os/ubuntu`。同名已存在时要 `--force`。`run` 的参数如果是文件，会按该文件重新展开后再启动。
+
+`pull` 不自己实现仓库协议，也不连接 Docker daemon 或 `docker.sock`。宿主 PATH 上有 `skopeo` 时用它，否则用 `crane`；两个都没有就失败。标签会先解析成 `sha256`，再按这个摘要复制到临时 OCI layout，然后走同一条 `import`。复制结果的摘要必须和解析到的一致。
+
+```sh
+capbox image docker pull alpine:3.20 --name alpine
+capbox image docker pull ghcr.io/org/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+默认只允许 `docker.io`、`ghcr.io`、`quay.io`、`public.ecr.aws`、`registry.k8s.io`。`CAPBOX_OCI_REGISTRIES` 用逗号列出其他主机；`*` 关闭白名单。短名字按 Docker Hub 规则补全（`alpine` → `docker.io/library/alpine`）。登录态用 `skopeo` / `crane` 自己的配置，CapBox 不读取 `~/.docker`。拉取走宿主网络；`CAPBOX_PROXY` 只在尚未设置 `https_proxy` 时传给这两个命令。临时 layout 超过 8GiB 会拒绝。
 
 多平台镜像默认选宿主架构（`linux/amd64` 或 `linux/arm64`）。可以用 `--platform linux/arm64`、`--index N` 或 `--tag REF` 指定。非 Linux 镜像直接拒绝。
 

@@ -124,7 +124,7 @@ Package locks bind distro, architecture and the complete installed package/versi
 
 ## Docker and OCI image files
 
-CapBox still does not talk to a Docker daemon. `image docker` reads a local `docker save` archive, an OCI layout directory, or an OCI archive, flattens the layers, and starts that tree with the same bubblewrap launcher.
+CapBox still does not talk to a Docker daemon. `image docker` reads a local `docker save` archive, an OCI layout directory, or an OCI archive, flattens the layers, and starts that tree with the same bubblewrap launcher. `image docker pull REF` shells out to host `skopeo` (or `crane`), resolves the tag to a digest, and imports that layout. It does not open `docker.sock`. Registries are allowlisted by `CAPBOX_OCI_REGISTRIES`.
 
 ```sh
 capbox image docker import alpine.tar --name alpine
