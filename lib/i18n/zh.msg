@@ -1000,3 +1000,54 @@ doctor.security_idmap_skip_disable_userns=不可信负载不要和多 UID idmap 
 doctor.security_bpf_failed=安全档 {profile} 但无法生成 seccomp BPF（拒绝伪实现）
 doctor.security_need_seccomp_tools=安全档 {profile} 需要 python3 + lib/seccomp-gen.py + libseccomp
 doctor.security_userns_boundary_recorded=userns 边界已记录：harden 降低 guest 攻击面，不声称宿主级隔离
+
+# Shared CAPBOX_*_DETAIL / CAPBOX_BWRAP_VERSION_DETAIL / cgroup find-why text
+common.bwrap_version_unparseable=无法解析 {bin} --version（需要 >= 0.12.0）
+common.bwrap_version_detail_below=bwrap {ver} 低于 0.12.0（发行版撤回的 0.11.x 补丁不算；需要 >= 0.12.0）
+idmap.detail_off=CAPBOX_IDMAP=off（强制单 UID）
+idmap.detail_missing_helpers=缺少 newuidmap/newgidmap（安装 uidmap 包）；内核仅允许单 UID 自映射
+idmap.detail_no_subuid=用户 {user} 在 /etc/subuid 无可用条目
+idmap.detail_uid_map_unparseable=CAPBOX_UID_MAP 无法解析: {spec}
+idmap.detail_gid_map_unparseable=CAPBOX_GID_MAP 无法解析: {spec}
+idmap.detail_tmp_dir_failed=无法创建 idmap 探测临时目录
+idmap.detail_probe_file_failed=无法创建 idmap 探测文件
+idmap.detail_map_write_failed=newuidmap 存在但写入多行映射失败：{detail}
+idmap.drop_helper_missing_src=缺少 capbox-drop-priv.c
+idmap.drop_helper_no_gcc=没有 gcc/cc，无法构建静态助手
+idmap.drop_helper_gcc_failed=gcc -static 失败: {err}
+idmap.drop_helper_ready=静态助手已就绪，可供只读 bind（{bin}）
+idmap.drop_helper_missing_after_build=构建后仍缺少助手
+res.cgroup_dual_hint=兑现限额需同时满足：(1) 进程自身 cgroup 可写（才能把任务迁入子 cgroup）；(2) 限额根为空且已委派（可 mkdir、写 cgroup.subtree_control 与 memory.max）。可 systemctl --user start capbox.slice，设 CAPBOX_CGROUP_ROOT 指向该 slice，并在可写的 user scope 中运行。
+res.detail_no_sys_fs_cgroup=无 /sys/fs/cgroup
+res.detail_not_cgroup_v2=非 cgroup v2 统一层级（缺 cgroup.controllers）
+res.detail_root_ok_self_not_writable=限额根探针通过（{root}），但进程自身 cgroup 不可写，无法迁入子 cgroup。{hint}
+res.detail_cgroup_root_writable=CAPBOX_CGROUP_ROOT={root}（真实探针：subtree_control+memory.max 可写）
+res.detail_writable_cgroup_root=可写 cgroup 根: {root}（真实探针：subtree_control+memory.max 可写）
+res.detail_cgroup_root_unwritable_fallback=不可写或子 cgroup 缺少可写 memory.max
+res.detail_cgroup_root_unusable=CAPBOX_CGROUP_ROOT={root} 不可用：{reason}
+res.detail_no_usable_cgroup_parent=无法获得可用 cgroup 父目录（self={self}）；{reason}。控制器有 {controllers}
+res.detail_no_usable_cgroup_parent_no_delegate=无法获得可用 cgroup 父目录（self={self}）；{reason}。控制器有 {controllers} 但当前路径无有效委派。{hint}
+res.detail_mkdir_evidence=mkdir 证据: {err}
+res.find_why_not_dir=不是目录
+res.find_why_mkdir_failed=无法 mkdir 子目录: {err}
+res.find_why_subtree_control=无法写入 cgroup.subtree_control(+memory): {err}（限额根须为空且已委派；父 cgroup 内有进程时会 EBUSY）。{hint}
+res.find_why_no_memory_max=子 cgroup 无 memory.max（父级未能委派 memory）。{hint}
+res.find_why_memory_max_unwritable=无法写入子 cgroup memory.max: {err}。{hint}
+res.find_why_no_usable_parent=无可用 cgroup 父目录
+res.disk_detail_unset=未配置 CAPBOX_DISK_MAX
+res.disk_detail_guest_path_invalid=CAPBOX_DISK_GUEST_PATH 非法（必须是绝对路径，且不能含 .. 或 /.）
+res.disk_detail_missing_tools=缺少 losetup/mkfs.ext4/mount（需 e2fsprogs + util-linux）
+res.disk_detail_no_loop_control=无 /dev/loop-control
+res.disk_detail_priv_direct=priv=direct；loop→{guest}（需 mount 权限，非 rootless）
+res.disk_detail_priv_sudo=priv=sudo -n；loop→{guest}（需宿主授权，非 rootless）
+res.disk_detail_no_priv=无 loop/mount 特权: {lsout}；需要 root/disk 组或 sudo -n（拒绝假装已限额）
+res.disk_detail_state_symlink=state/disk 是符号链接，拒绝建立配额盘
+res.disk_detail_quota_dir_not_real=配额目录不是真实目录
+res.disk_detail_loop_setup_failed=建立 loop 配额盘失败（priv={mode}）
+res.disk_detail_no_dashdash=argv 中没有 --，无法把配额盘挂进 guest
+
+# fail-closed resource limit reasons interpolated into require-mode errors
+res.fail_closed_memory_max=MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)
+res.fail_closed_pids_max=PIDS_MAX(需要 cgroup pids.max)
+res.fail_closed_cpu_max=CPU_MAX(需要 cgroup cpu.max)
+res.fail_closed_disk_not_honored=未按私有 loop 兑现

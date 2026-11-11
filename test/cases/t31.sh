@@ -69,6 +69,9 @@ set +e
   log_err() { printf 'ERR %s\n' "$*" >&2; }
   log_debug() { :; }
   have_cmd() { command -v "$1" >/dev/null 2>&1; }
+  # 单独 source resources.sh 时也要加载目录；test/lib.sh 已钉 CAPBOX_LANG=zh。
+  # shellcheck source=/dev/null
+  source "$repo_lib/i18n.sh"
   # shellcheck source=/dev/null
   source "$repo_lib/resources.sh"
 

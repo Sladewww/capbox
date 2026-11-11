@@ -208,7 +208,7 @@ _capbox_bwrap_apply_version_result() {
   local bin="${1:-bwrap}" maj min pat
   if [[ ! "${CAPBOX_BWRAP_VERSION:-}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     CAPBOX_BWRAP_VERSION=""
-    CAPBOX_BWRAP_VERSION_DETAIL="无法解析 ${bin} --version（需要 >= 0.12.0）"
+    CAPBOX_BWRAP_VERSION_DETAIL="$(i18n_fmt common.bwrap_version_unparseable bin="$bin")"
     return 1
   fi
   maj="${BASH_REMATCH[1]}"
@@ -218,7 +218,7 @@ _capbox_bwrap_apply_version_result() {
     CAPBOX_BWRAP_VERSION_DETAIL="${CAPBOX_BWRAP_VERSION}"
     return 0
   fi
-  CAPBOX_BWRAP_VERSION_DETAIL="bwrap ${CAPBOX_BWRAP_VERSION} 低于 0.12.0（发行版撤回的 0.11.x 补丁不算；需要 >= 0.12.0）"
+  CAPBOX_BWRAP_VERSION_DETAIL="$(i18n_fmt common.bwrap_version_detail_below ver="${CAPBOX_BWRAP_VERSION}")"
   return 1
 }
 
@@ -298,7 +298,7 @@ _capbox_bwrap_version_ok() {
   CAPBOX_BWRAP_VERSION=""
   CAPBOX_BWRAP_VERSION_DETAIL=""
   if [[ -z "$bin" || ! -x "$bin" ]]; then
-    CAPBOX_BWRAP_VERSION_DETAIL="无法解析 ${bin:-bwrap} --version（需要 >= 0.12.0）"
+    CAPBOX_BWRAP_VERSION_DETAIL="$(i18n_fmt common.bwrap_version_unparseable bin="${bin:-bwrap}")"
     return 1
   fi
   if _capbox_bwrap_cache_hit "$bin"; then

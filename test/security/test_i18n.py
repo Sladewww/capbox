@@ -338,6 +338,127 @@ class CliResolveTests(unittest.TestCase):
         self.assertEqual(zh['doctor.workspace_safe'], '工作区安全 ({workspace})')
         self.assertEqual(en['doctor.workspace_safe'], 'Workspace is safe ({workspace})')
 
+    def test_shared_detail_values_locked_and_not_leaked_in_english_doctor(self):
+        """CAPBOX_*_DETAIL assignment sites follow CAPBOX_LANG; English doctor must not embed Chinese details."""
+        zh_cat = i18n.load_catalog('zh')
+        en_cat = i18n.load_catalog('en')
+        self.assertEqual(
+            zh_cat['idmap.detail_missing_helpers'],
+            '缺少 newuidmap/newgidmap（安装 uidmap 包）；内核仅允许单 UID 自映射')
+        self.assertEqual(
+            en_cat['idmap.detail_missing_helpers'],
+            'newuidmap/newgidmap are missing (install the uidmap package); '
+            'the kernel only allows a single-UID self-mapping')
+        self.assertEqual(
+            zh_cat['common.bwrap_version_unparseable'],
+            '无法解析 {bin} --version（需要 >= 0.12.0）')
+        self.assertEqual(
+            en_cat['common.bwrap_version_unparseable'],
+            'unable to parse {bin} --version (need >= 0.12.0)')
+        self.assertEqual(zh_cat['res.cgroup_dual_hint'].startswith('兑现限额需同时满足'), True)
+        self.assertIn('Honoring limits requires both', en_cat['res.cgroup_dual_hint'])
+
+        chinese_details = (
+            '缺少 newuidmap/newgidmap',
+            '内核仅允许单 UID 自映射',
+            '无法获得可用 cgroup 父目录',
+            '兑现限额需同时满足',
+            '无法 mkdir 子目录',
+            '无法解析',
+        )
+        zh = self.run_cli('doctor', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('doctor', env={'CAPBOX_LANG': 'en'})
+        en_text = en.stdout + en.stderr
+        for phrase in chinese_details:
+            self.assertNotIn(phrase, en_text, phrase)
+        # On hosts without uidmap, the representative idmap detail must flip with the language.
+        if '缺少 newuidmap/newgidmap' in zh.stdout:
+            self.assertIn('newuidmap/newgidmap are missing', en.stdout)
+
+        fake = Path(self.tmp.name) / 'bwrap-unparseable-detail'
+        fake.write_text('#!/bin/sh\necho no-version-here\n')
+        fake.chmod(0o755)
+        def version_detail(lang):
+            quoted = subprocess.list2cmdline([str(fake)])
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/common.sh"; '
+                f'_capbox_bwrap_version_ok {quoted} || true; '
+                'printf "%s\n" "$CAPBOX_BWRAP_VERSION_DETAIL"'
+            )
+            result = run_bash(script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+        zh_detail = version_detail('zh')
+        en_detail = version_detail('en')
+        self.assertIn('无法解析', zh_detail)
+        self.assertNotIn('unable to parse', zh_detail)
+        self.assertIn('unable to parse', en_detail)
+        self.assertNotIn('无法解析', en_detail)
+
+        import re
+        cjk = re.compile(r'[\u4e00-\u9fff]')
+        for rel, needles in (
+            ('lib/common.sh', ('CAPBOX_BWRAP_VERSION_DETAIL=',)),
+            ('lib/idmap.sh', ('CAPBOX_IDMAP_DETAIL=', 'CAPBOX_IDMAP_DROP_HELPER_DETAIL=')),
+            ('lib/resources.sh', ('CAPBOX_CGROUP_DETAIL=', 'CAPBOX_CGROUP_FIND_WHY=', 'CAPBOX_DISK_DETAIL=')),
+        ):
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if line.lstrip().startswith('#'):
+                    continue
+                if any(n in line for n in needles) and cjk.search(line):
+                    self.fail(f'{rel}:{i} still has a Chinese DETAIL literal: {line}')
+
+    def test_fail_closed_limit_reasons_locked_in_zh_and_en(self):
+        """Require-mode fail-closed reasons, including the empty DISK_MAX fallback, follow CAPBOX_LANG."""
+        zh_cat = i18n.load_catalog('zh')
+        en_cat = i18n.load_catalog('en')
+        self.assertEqual(
+            zh_cat['res.fail_closed_memory_max'],
+            'MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)')
+        self.assertEqual(
+            en_cat['res.fail_closed_memory_max'],
+            'MEMORY_MAX(requires cgroup memory.max, cannot use prlimit)')
+        self.assertEqual(zh_cat['res.fail_closed_pids_max'], 'PIDS_MAX(需要 cgroup pids.max)')
+        self.assertEqual(en_cat['res.fail_closed_pids_max'], 'PIDS_MAX(requires cgroup pids.max)')
+        self.assertEqual(zh_cat['res.fail_closed_cpu_max'], 'CPU_MAX(需要 cgroup cpu.max)')
+        self.assertEqual(en_cat['res.fail_closed_cpu_max'], 'CPU_MAX(requires cgroup cpu.max)')
+        self.assertEqual(zh_cat['res.fail_closed_disk_not_honored'], '未按私有 loop 兑现')
+        self.assertEqual(en_cat['res.fail_closed_disk_not_honored'], 'not honored via a private loop')
+
+        def run_fail_closed(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/resources.sh"; '
+                '_resources_probe_disk() { CAPBOX_DISK_DETAIL=""; return 1; }; '
+                'CAPBOX_RESOURCES_MODE=require; '
+                'CAPBOX_MEMORY_MAX=32M; CAPBOX_PIDS_MAX=64; '
+                'CAPBOX_CPU_MAX=50%; CAPBOX_DISK_MAX=1G; '
+                'unset CAPBOX_RESOURCES_APPLIED_MEMORY CAPBOX_RESOURCES_APPLIED_PIDS; '
+                'unset CAPBOX_RESOURCES_APPLIED_CPU CAPBOX_RESOURCES_APPLIED_DISK; '
+                '_resources_fail_closed_check'
+            )
+            return run_bash(script)
+
+        zh = run_fail_closed('zh')
+        self.assertNotEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)', zh.stderr)
+        self.assertIn('PIDS_MAX(需要 cgroup pids.max)', zh.stderr)
+        self.assertIn('CPU_MAX(需要 cgroup cpu.max)', zh.stderr)
+        self.assertIn('DISK_MAX(未按私有 loop 兑现)', zh.stderr)
+        self.assertNotIn('cannot use prlimit', zh.stderr)
+        self.assertNotIn('not honored via a private loop', zh.stderr)
+
+        en = run_fail_closed('en')
+        self.assertNotEqual(en.returncode, 0, en.stderr)
+        self.assertIn('MEMORY_MAX(requires cgroup memory.max, cannot use prlimit)', en.stderr)
+        self.assertIn('PIDS_MAX(requires cgroup pids.max)', en.stderr)
+        self.assertIn('CPU_MAX(requires cgroup cpu.max)', en.stderr)
+        self.assertIn('DISK_MAX(not honored via a private loop)', en.stderr)
+        self.assertNotIn('不能用 prlimit', en.stderr)
+        self.assertNotIn('未按私有 loop 兑现', en.stderr)
+        self.assertNotIn('需要 cgroup', en.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

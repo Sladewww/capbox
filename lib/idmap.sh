@@ -111,14 +111,14 @@ _idmap_probe() {
   case "$mode" in
     off)
       CAPBOX_IDMAP_STATUS="single"
-      CAPBOX_IDMAP_DETAIL="CAPBOX_IDMAP=off（强制单 UID）"
+      CAPBOX_IDMAP_DETAIL="$(i18n_get idmap.detail_off)"
       return 1
       ;;
   esac
 
   if ! _idmap_have_helpers; then
     CAPBOX_IDMAP_STATUS="blocked"
-    CAPBOX_IDMAP_DETAIL="缺少 newuidmap/newgidmap（安装 uidmap 包）；内核仅允许单 UID 自映射"
+    CAPBOX_IDMAP_DETAIL="$(i18n_get idmap.detail_missing_helpers)"
     [[ "$mode" == "on" ]] && return 2
     return 1
   fi
@@ -129,7 +129,7 @@ _idmap_probe() {
   else
     uid_spec="$(_idmap_auto_spec uid)" || {
       CAPBOX_IDMAP_STATUS="blocked"
-      CAPBOX_IDMAP_DETAIL="用户 $(_idmap_host_user) 在 /etc/subuid 无可用条目"
+      CAPBOX_IDMAP_DETAIL="$(i18n_fmt idmap.detail_no_subuid user="$(_idmap_host_user)")"
       [[ "$mode" == "on" ]] && return 2
       return 1
     }
@@ -143,12 +143,12 @@ _idmap_probe() {
   local -a ug uh uc gg gh gc
   _idmap_parse_spec "$uid_spec" ug uh uc || {
     CAPBOX_IDMAP_STATUS="blocked"
-    CAPBOX_IDMAP_DETAIL="CAPBOX_UID_MAP 无法解析: $uid_spec"
+    CAPBOX_IDMAP_DETAIL="$(i18n_fmt idmap.detail_uid_map_unparseable spec="$uid_spec")"
     return 2
   }
   _idmap_parse_spec "$gid_spec" gg gh gc || {
     CAPBOX_IDMAP_STATUS="blocked"
-    CAPBOX_IDMAP_DETAIL="CAPBOX_GID_MAP 无法解析: $gid_spec"
+    CAPBOX_IDMAP_DETAIL="$(i18n_fmt idmap.detail_gid_map_unparseable spec="$gid_spec")"
     return 2
   }
 
@@ -160,7 +160,7 @@ _idmap_probe() {
   private="$(_capbox_host_state_dir)" || return 1
   probe_dir="$(mktemp -d "$private/capbox-idmap.XXXXXX")" || {
     CAPBOX_IDMAP_STATUS="blocked"
-    CAPBOX_IDMAP_DETAIL="无法创建 idmap 探测临时目录"
+    CAPBOX_IDMAP_DETAIL="$(i18n_get idmap.detail_tmp_dir_failed)"
     [[ "$mode" == "on" ]] && return 2
     return 1
   }
@@ -168,7 +168,7 @@ _idmap_probe() {
   : >"$probe_file" || {
     rmdir "$probe_dir" 2>/dev/null || true
     CAPBOX_IDMAP_STATUS="blocked"
-    CAPBOX_IDMAP_DETAIL="无法创建 idmap 探测文件"
+    CAPBOX_IDMAP_DETAIL="$(i18n_get idmap.detail_probe_file_failed)"
     [[ "$mode" == "on" ]] && return 2
     return 1
   }
@@ -257,7 +257,7 @@ PY
   fi
 
   CAPBOX_IDMAP_STATUS="blocked"
-  CAPBOX_IDMAP_DETAIL="newuidmap 存在但写入多行映射失败：${detail:-unknown}"
+  CAPBOX_IDMAP_DETAIL="$(i18n_fmt idmap.detail_map_write_failed detail="$(i18n_or "${detail:-}" val.unknown)")"
   [[ "$mode" == "on" ]] && return 2
   return 1
 }
@@ -465,7 +465,7 @@ _idmap_drop_priv_guest_bin() {
 _idmap_ensure_drop_priv_helper() {
   local src bin guest_abs cc tmp err
   src="$(_idmap_drop_priv_src)" || {
-    CAPBOX_IDMAP_DROP_HELPER_DETAIL="缺少 capbox-drop-priv.c"
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="$(i18n_get idmap.drop_helper_missing_src)"
     return 1
   }
   bin="$(_idmap_drop_priv_host_bin)" || return 1
@@ -478,13 +478,13 @@ _idmap_ensure_drop_priv_helper() {
     elif have_cmd cc; then
       cc=cc
     else
-      CAPBOX_IDMAP_DROP_HELPER_DETAIL="没有 gcc/cc，无法构建静态助手"
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="$(i18n_get idmap.drop_helper_no_gcc)"
       return 1
     fi
     tmp="$(mktemp "$(dirname "$bin")/build.XXXXXX")" || return 1
     err="$("$cc" -static -O2 -s -o "$tmp" "$src" 2>&1)" || {
       rm -f "$tmp"
-      CAPBOX_IDMAP_DROP_HELPER_DETAIL="gcc -static 失败: ${err:-unknown}"
+      CAPBOX_IDMAP_DROP_HELPER_DETAIL="$(i18n_fmt idmap.drop_helper_gcc_failed err="$(i18n_or "${err:-}" val.unknown)")"
       return 1
     }
     mv -f "$tmp" "$bin"
@@ -492,10 +492,10 @@ _idmap_ensure_drop_priv_helper() {
   fi
 
   if [[ -x "$bin" ]]; then
-    CAPBOX_IDMAP_DROP_HELPER_DETAIL="静态助手已就绪，可供只读 bind（$bin）"
+    CAPBOX_IDMAP_DROP_HELPER_DETAIL="$(i18n_fmt idmap.drop_helper_ready bin="$bin")"
     return 0
   fi
-  CAPBOX_IDMAP_DROP_HELPER_DETAIL="构建后仍缺少助手"
+  CAPBOX_IDMAP_DROP_HELPER_DETAIL="$(i18n_get idmap.drop_helper_missing_after_build)"
   return 1
 }
 
