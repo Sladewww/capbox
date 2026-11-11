@@ -33,7 +33,7 @@ class UpgradeTests(unittest.TestCase):
         (self.rootfs / 'data').write_text('rootfs data')
         (self.ws / 'business-data').write_text('business data')
         version = self.state / 'lib/version.sh'
-        version.write_text(version.read_text().replace('0.4.2', '0.3.5'))
+        version.write_text(version.read_text().replace('0.5.0', '0.3.5'))
         (self.state / 'lib/removed-in-upgrade.sh').write_text('# obsolete\n')
 
     def cli(self, *args, check=False):
@@ -66,7 +66,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['status'], 'upgraded')
         self.assertFalse((self.state / 'lib/removed-in-upgrade.sh').exists())
-        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.4.2')
+        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.5.0')
         self.assert_data_preserved()
         result = self.upgrade('rollback')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -133,7 +133,7 @@ class UpgradeTests(unittest.TestCase):
         version.write_text('corrupted backup')
         result = self.upgrade('rollback')
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.4.2')
+        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.5.0')
         self.assert_data_preserved()
 
     def test_corrupt_transaction_record_is_refused_without_traceback(self):
@@ -145,7 +145,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('事务记录格式无效', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
-        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.4.2')
+        self.assertEqual(self.cli('version').stdout.strip(), 'CapBox 0.5.0')
         self.assert_data_preserved()
 
     def test_missing_backup_is_an_error(self):

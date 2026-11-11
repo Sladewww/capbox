@@ -1,6 +1,6 @@
 # CLI 参考
 
-由 `python3 tools/generate-docs.py` 生成；不要手改命令输出。CLI 版本：**0.4.2**。本文件固定以 `CAPBOX_LANG=zh` 生成，不随 locale 切换（仓库文档政策：README.md 英文，README.zh-CN.md 与 docs/ 中文）。
+由 `python3 tools/generate-docs.py` 生成；不要手改命令输出。CLI 版本：**0.5.0**。本文件固定以 `CAPBOX_LANG=zh` 生成，不随 locale 切换（仓库文档政策：README.md 英文，README.zh-CN.md 与 docs/ 中文）。
 
 ## capbox --help
 
