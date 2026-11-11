@@ -14,21 +14,12 @@
 
 set -u
 
-# 文案由宿主 run_bootstrap 经环境变量注入（已翻译，已按 POSIX 引号转义）。
-# 本脚本在 guest 内运行：不得 source 目录，也不得调用 i18n_*。
 MARKER=/etc/capbox-bootstrap.done
 VERSION="${CAPBOX_VERSION:-0.4.2}"
 DISTRO=""
 
 say() { printf '[bootstrap] %s\n' "$*"; }
-warn() { printf '[bootstrap] %s %s\n' "${CAPBOX_BOOTSTRAP_WARN_PREFIX:-hint:}" "$*" >&2; }
-_bootstrap_fmt() {
-  # $1 = 已翻译的 printf 格式；其余为参数。格式来自宿主，不含用户输入。
-  _fmt=$1
-  shift
-  # shellcheck disable=SC2059
-  printf "$_fmt" "$@"
-}
+warn() { printf '[bootstrap] 提示: %s\n' "$*" >&2; }
 
 # ---------- 1. 环境识别 -------------------------------------------------------
 
@@ -39,14 +30,14 @@ elif [ -r /etc/os-release ]; then
     DISTRO="ubuntu"
   fi
 fi
-[ -n "$DISTRO" ] || DISTRO="${CAPBOX_DISTRO:-${CAPBOX_BOOTSTRAP_UNKNOWN:-unknown}}"
+[ -n "$DISTRO" ] || DISTRO="${CAPBOX_DISTRO:-未知}"
 
-say "$(_bootstrap_fmt "${CAPBOX_BOOTSTRAP_BANNER:-distro: %s; uid=%s; version: %s}" "$DISTRO" "$(id -u 2>/dev/null || echo '?')" "$VERSION")"
+say "发行版: $DISTRO；uid=$(id -u 2>/dev/null || echo '?')；版本: $VERSION"
 
 # ---------- 2. 基础目录 -------------------------------------------------------
 
 for d in /root /tmp /run /var/tmp /workspace /etc/profile.d; do
-  mkdir -p "$d" 2>/dev/null || warn "$(_bootstrap_fmt "${CAPBOX_BOOTSTRAP_CANNOT_CREATE_DIR:-cannot create directory %s}" "$d")"
+  mkdir -p "$d" 2>/dev/null || warn "无法创建目录 $d"
 done
 chmod 1777 /tmp /var/tmp 2>/dev/null || true
 chmod 0755 /root 2>/dev/null || true
@@ -58,7 +49,7 @@ if [ ! -s /etc/hosts ] || ! grep -q 'localhost' /etc/hosts 2>/dev/null; then
     echo '127.0.0.1   localhost'
     echo '::1         localhost ip6-localhost ip6-loopback'
     echo '127.0.1.1   capbox'
-  } >/etc/hosts 2>/dev/null || warn "${CAPBOX_BOOTSTRAP_CANNOT_WRITE_HOSTS:-cannot write /etc/hosts}"
+  } >/etc/hosts 2>/dev/null || warn "无法写 /etc/hosts"
 fi
 
 printf 'capbox\n' >/etc/hostname 2>/dev/null || true
@@ -80,20 +71,20 @@ PROFILE
 # ---------- 5. CA 证书探测（只提示，不装包） ----------------------------------
 
 if [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ -z "$(ls -A /etc/ssl/certs 2>/dev/null)" ]; then
-  warn "${CAPBOX_BOOTSTRAP_NO_CA_CERTS:-no CA certificates in the rootfs; https sources may fail. capbox already bind-mounted the host /etc/ssl/certs read-only,}"
-  warn "${CAPBOX_BOOTSTRAP_INSTALL_CA_CERTS:-for lasting use, install the package: capbox pkg install ca-certificates}"
+  warn "rootfs 内没有 CA 证书；https 源可能失败。capbox 已把宿主 /etc/ssl/certs 只读挂入，"
+  warn "如需长期使用请装包：capbox pkg install ca-certificates"
 fi
 
 # ---------- 6. /dev /proc 可见性自检 -----------------------------------------
 
-[ -e /proc/self/status ] || warn "${CAPBOX_BOOTSTRAP_PROC_UNAVAILABLE:-/proc is unavailable (unexpected)}"
-[ -w /dev ] || warn "${CAPBOX_BOOTSTRAP_DEV_NOT_WRITABLE:-/dev is not writable (unexpected)}"
+[ -e /proc/self/status ] || warn "/proc 不可用（异常）"
+[ -w /dev ] || warn "/dev 不可写（异常）"
 
 # ---------- 7. 能力自检（只报告，不失败） ------------------------------------
 
 CAPEFF="$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null || echo '')"
 if [ -n "$CAPEFF" ]; then
-  say "$(_bootstrap_fmt "${CAPBOX_BOOTSTRAP_CAPEFF:-CapEff=%s (not 0000000000000000 when capabilities are complete)}" "$CAPEFF")"
+  say "CapEff=$CAPEFF（全量 capability 时非 0000000000000000）"
 fi
 
 # ---------- 8. 发行版特定收尾 -------------------------------------------------
@@ -110,7 +101,7 @@ fi
 
 # alpine 的 apk 源若为空，提示（实际注入由宿主侧完成）
 if [ "$DISTRO" = "alpine" ] && [ ! -s /etc/apk/repositories ]; then
-  warn "${CAPBOX_BOOTSTRAP_EMPTY_APK_REPOS:-/etc/apk/repositories is empty; run capbox init or set CAPBOX_MIRROR}"
+  warn "/etc/apk/repositories 为空；请运行 capbox init 或设置 CAPBOX_MIRROR"
 fi
 
 # ---------- 9. 落标记 ---------------------------------------------------------
@@ -119,7 +110,7 @@ fi
   echo "version=$VERSION"
   echo "distro=$DISTRO"
   echo "bootstrapped_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
-} >"$MARKER" 2>/dev/null || warn "$(_bootstrap_fmt "${CAPBOX_BOOTSTRAP_CANNOT_WRITE_MARKER:-cannot write marker file %s}" "$MARKER")"
+} >"$MARKER" 2>/dev/null || warn "无法写标记文件 $MARKER"
 
-say "${CAPBOX_BOOTSTRAP_COMPLETE:-bootstrap complete}"
+say "引导完成"
 exit 0

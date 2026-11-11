@@ -24,97 +24,6 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-/* Host-translated printf formats. The helper never loads catalogs itself.
- * Missing --messages file keeps the English fallbacks below. */
-#define LL_MSG_STORE 8192
-#define LL_MSG_LINE 512
-
-struct ll_msg {
-  const char *key;
-  const char *fallback;
-  const char *text;
-};
-
-static struct ll_msg ll_msgs[] = {
-  {"reject_path", "capbox-landlock: rejected rule path %s", NULL},
-  {"open_failed", "capbox-landlock: cannot open %s: %s", NULL},
-  {"no_access_bits", "capbox-landlock: %s has no usable access bits", NULL},
-  {"add_rule_failed", "capbox-landlock: failed to add rule %s: %s", NULL},
-  {"open_rules_failed", "capbox-landlock: cannot open rules %s: %s", NULL},
-  {"fdopen_rules_failed", "capbox-landlock: fdopen of rules failed: %s", NULL},
-  {"rule_line_too_long", "capbox-landlock: rule line too long", NULL},
-  {"rule_format", "capbox-landlock: rule format must be ro|rw followed by an absolute path", NULL},
-  {"unknown_rule_type", "capbox-landlock: unknown rule type %s", NULL},
-  {"too_many_rules", "capbox-landlock: too many rules", NULL},
-  {"rules_empty", "capbox-landlock: rules are empty", NULL},
-  {"kernel_unsupported", "capbox-landlock: kernel does not support Landlock", NULL},
-  {"kernel_unsupported_lsm", "capbox-landlock: kernel does not support Landlock (needs 5.13+ with the LSM enabled)", NULL},
-  {"rules_missing_path", "capbox-landlock: --rules is missing a path", NULL},
-  {"create_ruleset_failed", "capbox-landlock: failed to create ruleset: %s", NULL},
-  {"no_new_privs_failed", "capbox-landlock: no_new_privs failed: %s", NULL},
-  {"restrict_self_failed", "capbox-landlock: restrict_self failed: %s", NULL},
-  {"exec_failed", "capbox-landlock: exec %s failed: %s", NULL},
-  {NULL, NULL, NULL}
-};
-
-static char ll_msg_store[LL_MSG_STORE];
-
-static const char *ll_m(const char *key) {
-  size_t i;
-  for (i = 0; ll_msgs[i].key != NULL; i++) {
-    if (strcmp(ll_msgs[i].key, key) == 0)
-      return ll_msgs[i].text != NULL ? ll_msgs[i].text : ll_msgs[i].fallback;
-  }
-  return key;
-}
-
-static void ll_load_messages(const char *file) {
-  int fd;
-  FILE *fp;
-  char line[LL_MSG_LINE];
-  size_t used = 0;
-
-  if (file == NULL || file[0] == '\0')
-    return;
-  fd = open(file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0)
-    return;
-  fp = fdopen(fd, "r");
-  if (fp == NULL) {
-    close(fd);
-    return;
-  }
-  while (fgets(line, sizeof(line), fp) != NULL) {
-    char *eq;
-    char *val;
-    char *nl;
-    size_t i;
-    size_t n;
-    nl = strchr(line, '\n');
-    if (nl)
-      *nl = '\0';
-    if (line[0] == '\0' || line[0] == '#')
-      continue;
-    eq = strchr(line, '=');
-    if (eq == NULL)
-      continue;
-    *eq = '\0';
-    val = eq + 1;
-    n = strlen(val) + 1;
-    if (used + n > sizeof(ll_msg_store))
-      break;
-    memcpy(ll_msg_store + used, val, n);
-    for (i = 0; ll_msgs[i].key != NULL; i++) {
-      if (strcmp(ll_msgs[i].key, line) == 0) {
-        ll_msgs[i].text = ll_msg_store + used;
-        break;
-      }
-    }
-    used += n;
-  }
-  fclose(fp);
-}
-
 /* Stable UAPI bits: compile with older headers, enable only after ABI probing. */
 #ifndef LANDLOCK_ACCESS_FS_REFER
 #define LANDLOCK_ACCESS_FS_REFER (1ULL << 13)
@@ -186,14 +95,12 @@ static int add_path(int ruleset, const char *path, __u64 access) {
   struct landlock_path_beneath_attr beneath;
 
   if (path[0] != '/' || strstr(path, "..") != NULL) {
-    fprintf(stderr, ll_m("reject_path"), path);
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: 拒绝规则路径 %s\n", path);
     return -1;
   }
   fd = open(path, O_PATH | O_CLOEXEC);
   if (fd < 0) {
-    fprintf(stderr, ll_m("open_failed"), path, strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: 打不开 %s: %s\n", path, strerror(errno));
     return -1;
   }
   if (fstat(fd, &st) != 0) {
@@ -203,8 +110,7 @@ static int add_path(int ruleset, const char *path, __u64 access) {
   }
   access = mask_for_mode(st.st_mode, access);
   if (access == 0) {
-    fprintf(stderr, ll_m("no_access_bits"), path);
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: %s 没有可用的访问位\n", path);
     close(fd);
     return -1;
   }
@@ -212,8 +118,7 @@ static int add_path(int ruleset, const char *path, __u64 access) {
   beneath.allowed_access = access;
   beneath.parent_fd = fd;
   if (ll_add(ruleset, &beneath) != 0) {
-    fprintf(stderr, ll_m("add_rule_failed"), path, strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: 添加规则 %s 失败: %s\n", path, strerror(errno));
     close(fd);
     return -1;
   }
@@ -230,14 +135,12 @@ static int load_rules(int ruleset, const char *file, __u64 handled) {
   /* O_NOFOLLOW: a swapped symlink is not a rules file. */
   fd = open(file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (fd < 0) {
-    fprintf(stderr, ll_m("open_rules_failed"), file, strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: 打不开规则 %s: %s\n", file, strerror(errno));
     return -1;
   }
   fp = fdopen(fd, "r");
   if (fp == NULL) {
-    fprintf(stderr, ll_m("fdopen_rules_failed"), strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: fdopen 规则失败: %s\n", strerror(errno));
     close(fd);
     return -1;
   }
@@ -251,7 +154,7 @@ static int load_rules(int ruleset, const char *file, __u64 handled) {
 
     n = strlen(p);
     if (n > 0 && p[n - 1] != '\n' && !feof(fp)) {
-      fprintf(stderr, "%s\n", ll_m("rule_line_too_long"));
+      fprintf(stderr, "capbox-landlock: 规则行过长\n");
       fclose(fp);
       return -1;
     }
@@ -266,7 +169,7 @@ static int load_rules(int ruleset, const char *file, __u64 handled) {
     mode = p;
     path = strpbrk(p, " \t");
     if (path == NULL) {
-      fprintf(stderr, "%s\n", ll_m("rule_format"));
+      fprintf(stderr, "capbox-landlock: 规则格式必须是 ro|rw 绝对路径\n");
       fclose(fp);
       return -1;
     }
@@ -278,8 +181,7 @@ static int load_rules(int ruleset, const char *file, __u64 handled) {
     else if (strcmp(mode, "rw") == 0)
       rw = 1;
     else {
-      fprintf(stderr, ll_m("unknown_rule_type"), mode);
-      fputc('\n', stderr);
+      fprintf(stderr, "capbox-landlock: 未知规则类型 %s\n", mode);
       fclose(fp);
       return -1;
     }
@@ -289,14 +191,14 @@ static int load_rules(int ruleset, const char *file, __u64 handled) {
     }
     count++;
     if (count > 4096) {
-      fprintf(stderr, "%s\n", ll_m("too_many_rules"));
+      fprintf(stderr, "capbox-landlock: 规则过多\n");
       fclose(fp);
       return -1;
     }
   }
   fclose(fp);
   if (count == 0) {
-    fprintf(stderr, "%s\n", ll_m("rules_empty"));
+    fprintf(stderr, "capbox-landlock: 规则为空\n");
     return -1;
   }
   return 0;
@@ -307,47 +209,30 @@ int main(int argc, char **argv) {
   int ruleset;
   __u64 handled;
   const char *rules = NULL;
-  const char *messages = NULL;
   int i;
   struct landlock_ruleset_attr attr;
-
-  for (i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--messages") == 0 && i + 1 < argc) {
-      messages = argv[i + 1];
-      break;
-    }
-  }
-  ll_load_messages(messages);
 
   abi = probe_abi();
   if (argc >= 2 && strcmp(argv[1], "--probe") == 0) {
     if (abi < 1) {
-      fprintf(stderr, "%s\n", ll_m("kernel_unsupported"));
+      fprintf(stderr, "capbox-landlock: 内核不支持 Landlock\n");
       return 5;
     }
     printf("%d\n", abi);
     return 0;
   }
   if (abi < 1) {
-    fprintf(stderr, "%s\n", ll_m("kernel_unsupported_lsm"));
+    fprintf(stderr, "capbox-landlock: 内核不支持 Landlock（需要 5.13+ 且已启用 LSM）\n");
     return 5;
   }
 
   for (i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--rules") == 0) {
       if (i + 1 >= argc) {
-        fprintf(stderr, "%s\n", ll_m("rules_missing_path"));
+        fprintf(stderr, "capbox-landlock: --rules 缺少路径\n");
         return 2;
       }
       rules = argv[++i];
-      continue;
-    }
-    if (strcmp(argv[i], "--messages") == 0) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "usage: capbox-landlock --rules FILE -- CMD [ARGS...]\n");
-        return 2;
-      }
-      i++;
       continue;
     }
     if (strcmp(argv[i], "--") == 0) {
@@ -367,8 +252,7 @@ int main(int argc, char **argv) {
   attr.handled_access_fs = handled;
   ruleset = ll_create(&attr, sizeof(attr), 0);
   if (ruleset < 0) {
-    fprintf(stderr, ll_m("create_ruleset_failed"), strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: 创建规则集失败: %s\n", strerror(errno));
     return 1;
   }
   if (load_rules(ruleset, rules, handled) != 0) {
@@ -376,20 +260,17 @@ int main(int argc, char **argv) {
     return 1;
   }
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-    fprintf(stderr, ll_m("no_new_privs_failed"), strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: no_new_privs 失败: %s\n", strerror(errno));
     close(ruleset);
     return 1;
   }
   if (ll_restrict(ruleset) != 0) {
-    fprintf(stderr, ll_m("restrict_self_failed"), strerror(errno));
-    fputc('\n', stderr);
+    fprintf(stderr, "capbox-landlock: restrict_self 失败: %s\n", strerror(errno));
     close(ruleset);
     return 1;
   }
   close(ruleset);
   execvp(argv[i], &argv[i]);
-  fprintf(stderr, ll_m("exec_failed"), argv[i], strerror(errno));
-  fputc('\n', stderr);
+  fprintf(stderr, "capbox-landlock: exec %s 失败: %s\n", argv[i], strerror(errno));
   return 127;
 }

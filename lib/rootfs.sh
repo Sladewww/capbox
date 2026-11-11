@@ -491,26 +491,6 @@ inject_proxy_files() {
 
 # ---------- 5. 首次引导 -------------------------------------------------------
 
-# 在宿主上查好已翻译文案，拼进 guest 命令；guest 内的 bootstrap.sh 不得调用 i18n_*。
-_bootstrap_guest_command() {
-  local guest_script="$1"
-  printf 'CAPBOX_VERSION=%s ' "$(_shq "$CAPBOX_VERSION")"
-  printf 'CAPBOX_BOOTSTRAP_WARN_PREFIX=%s ' "$(_shq "$(i18n_get bootstrap.warn_hint)")"
-  printf 'CAPBOX_BOOTSTRAP_UNKNOWN=%s ' "$(_shq "$(i18n_get bootstrap.unknown_distro)")"
-  printf 'CAPBOX_BOOTSTRAP_BANNER=%s ' "$(_shq "$(i18n_printf_fmt bootstrap.banner)")"
-  printf 'CAPBOX_BOOTSTRAP_CANNOT_CREATE_DIR=%s ' "$(_shq "$(i18n_printf_fmt bootstrap.cannot_create_dir)")"
-  printf 'CAPBOX_BOOTSTRAP_CANNOT_WRITE_HOSTS=%s ' "$(_shq "$(i18n_get bootstrap.cannot_write_hosts)")"
-  printf 'CAPBOX_BOOTSTRAP_NO_CA_CERTS=%s ' "$(_shq "$(i18n_get bootstrap.no_ca_certs)")"
-  printf 'CAPBOX_BOOTSTRAP_INSTALL_CA_CERTS=%s ' "$(_shq "$(i18n_get bootstrap.install_ca_certs)")"
-  printf 'CAPBOX_BOOTSTRAP_PROC_UNAVAILABLE=%s ' "$(_shq "$(i18n_get bootstrap.proc_unavailable)")"
-  printf 'CAPBOX_BOOTSTRAP_DEV_NOT_WRITABLE=%s ' "$(_shq "$(i18n_get bootstrap.dev_not_writable)")"
-  printf 'CAPBOX_BOOTSTRAP_CAPEFF=%s ' "$(_shq "$(i18n_printf_fmt bootstrap.capeff)")"
-  printf 'CAPBOX_BOOTSTRAP_EMPTY_APK_REPOS=%s ' "$(_shq "$(i18n_get bootstrap.empty_apk_repositories)")"
-  printf 'CAPBOX_BOOTSTRAP_CANNOT_WRITE_MARKER=%s ' "$(_shq "$(i18n_printf_fmt bootstrap.cannot_write_marker)")"
-  printf 'CAPBOX_BOOTSTRAP_COMPLETE=%s ' "$(_shq "$(i18n_get bootstrap.complete)")"
-  printf 'sh %s' "$(_shq "$guest_script")"
-}
-
 # run_bootstrap [DISTRO]：首次引导
 # 在容器内用一次性容器跑 lib/guest/bootstrap.sh；失败只告警（rootfs 仍可用）。
 run_bootstrap() {
@@ -535,7 +515,7 @@ run_bootstrap() {
   guest_root="$(_guest_workspace_path "$CAPBOX_DIR")"
   guest_script="$guest_root/lib/guest/bootstrap.sh"
   local rc=0
-  exec_in_guest "$(_bootstrap_guest_command "$guest_script")" /workspace 300
+  exec_in_guest "CAPBOX_VERSION=$(_shq "$CAPBOX_VERSION") sh $(_shq "$guest_script")" /workspace 300
   rc=$?
   if (( rc != 0 )); then
     i18n_warn rootfs.bootstrap_returned_not_fatal_rootfs_still_usable rc="$rc"

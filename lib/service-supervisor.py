@@ -15,13 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import List, Optional
-
-_LIB_DIR = str(Path(__file__).resolve().parent)
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-import i18n
 
 
 def _log(path: str, msg: str) -> None:
@@ -82,10 +76,10 @@ def wait_ready(args: argparse.Namespace, log: str, deadline: float,
         if ok and args.ready_cmd and not ready_cmd(args.ready_cmd):
             ok = False
         if ok:
-            _log(log, i18n.t("supervisor.ready"))
+            _log(log, "ready: 就绪")
             return True
         time.sleep(0.2)
-    _log(log, i18n.t("supervisor.ready_timeout"))
+    _log(log, "ready: 超时")
     return False
 
 
@@ -111,7 +105,7 @@ def terminate_tree(proc: subprocess.Popen, stop_timeout: float, log: str) -> Non
         if proc.poll() is not None:
             return
         time.sleep(0.1)
-    _log(log, i18n.t("supervisor.stop_timeout_sigkill", seconds=stop_timeout))
+    _log(log, f"停止超时 {stop_timeout}s → SIGKILL")
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -119,7 +113,7 @@ def terminate_tree(proc: subprocess.Popen, stop_timeout: float, log: str) -> Non
 
 
 def main() -> int:
-    ap = i18n.I18nArgumentParser()
+    ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--log", required=True)
     ap.add_argument("--pidfile", required=True)
@@ -149,13 +143,13 @@ def main() -> int:
     status("starting")
     for fd in args.pass_fd:
         if fd < 3:
-            ap.error(i18n.t("supervisor.pass_fd_must_be_gt_stderr"))
+            ap.error("--pass-fd 必须是大于 stderr 的描述符")
         os.fstat(fd)  # 报告监督器运行前先失败关闭。
     child: List[str] = list(args.child)
     if child and child[0] == "--":
         child = child[1:]
     if not child:
-        _log(args.log, i18n.t("supervisor.missing_child_argv"))
+        _log(args.log, "supervisor: 缺少子进程 argv")
         return 2
 
     stop = {"flag": False}
@@ -176,7 +170,7 @@ def main() -> int:
     restarts = 0
     backoff = args.restart_backoff
     while not stop["flag"]:
-        _log(args.log, i18n.t("supervisor.starting", cmd=" ".join(child[:3])))
+        _log(args.log, f"supervisor: 启动 {' '.join(child[:3])}...")
         # bwrap 会消费 BPF 字节。继承的打开文件偏移与监督器共享，
         # 因此每次重启都必须从过滤器开头重新读取。
         for fd in args.pass_fd:
@@ -200,7 +194,7 @@ def main() -> int:
                 return 1
             restarts += 1
             if restarts > args.restart_max:
-                _log(args.log, i18n.t("supervisor.ready_failed_max_restarts"))
+                _log(args.log, "就绪失败后超过最大重启次数")
                 return 1
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
@@ -213,9 +207,9 @@ def main() -> int:
                 time.sleep(args.health_interval)
                 if not health_ok(args):
                     fails += 1
-                    _log(args.log, i18n.t("supervisor.health_failed", fails=fails, retries=args.health_retries))
+                    _log(args.log, f"健康检查失败 {fails}/{args.health_retries}")
                     if fails >= args.health_retries:
-                        _log(args.log, i18n.t("supervisor.health_give_up"))
+                        _log(args.log, "health: 放弃 → 重启/停止")
                         terminate_tree(proc, args.stop_timeout, args.log)
                         break
                 else:
@@ -227,18 +221,18 @@ def main() -> int:
             status("stopped")
             terminate_tree(proc, args.stop_timeout, args.log)
             proc.wait(timeout=args.stop_timeout + 2)
-            _log(args.log, i18n.t("supervisor.stopped"))
+            _log(args.log, "supervisor: 已停止")
             return 0
 
         rc = proc.wait()
         status("stopped")
-        _log(args.log, i18n.t("supervisor.child_exited", rc=rc))
+        _log(args.log, f"子进程退出 rc={rc}")
         should = args.restart == "always" or (args.restart == "on-failure" and rc != 0)
         if not should:
             return rc
         restarts += 1
         if restarts > args.restart_max:
-            _log(args.log, i18n.t("supervisor.max_restarts"))
+            _log(args.log, "超过最大重启次数")
             return rc
         time.sleep(backoff)
         backoff = min(backoff * 2, 60)

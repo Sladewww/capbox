@@ -1504,72 +1504,10 @@ audit.html.total_foot=Matches among the {count} records in this report
 audit.html.p95_foot=Based on {count} exec duration records
 audit.html.p95_foot_empty=No exec duration records available
 audit.html.filtered_label={filtered} / {total}
-# Guest bootstrap (host interpolates; guest never calls i18n_*)
-bootstrap.warn_hint=hint:
-bootstrap.unknown_distro=unknown
-bootstrap.banner=distro: {distro}; uid={uid}; version: {version}
-bootstrap.cannot_create_dir=cannot create directory {d}
-bootstrap.cannot_write_hosts=cannot write /etc/hosts
-bootstrap.no_ca_certs=no CA certificates in the rootfs; https sources may fail. capbox already bind-mounted the host /etc/ssl/certs read-only,
-bootstrap.install_ca_certs=for lasting use, install the package: capbox pkg install ca-certificates
-bootstrap.proc_unavailable=/proc is unavailable (unexpected)
-bootstrap.dev_not_writable=/dev is not writable (unexpected)
-bootstrap.capeff=CapEff={capeff} (not 0000000000000000 when capabilities are complete)
-bootstrap.empty_apk_repositories=/etc/apk/repositories is empty; run capbox init or set CAPBOX_MIRROR
-bootstrap.cannot_write_marker=cannot write marker file {marker}
-bootstrap.complete=bootstrap complete
-
-# Landlock helper (runs in the guest; host writes already-translated printf formats)
-landlock.unable_create_landlock_messages_file=Unable to create Landlock messages file
-landlock.failed_write_landlock_messages=Failed to write Landlock messages
-landlock.helper_reject_path=capbox-landlock: rejected rule path {path}
-landlock.helper_open_failed=capbox-landlock: cannot open {path}: {err}
-landlock.helper_no_access_bits=capbox-landlock: {path} has no usable access bits
-landlock.helper_add_rule_failed=capbox-landlock: failed to add rule {path}: {err}
-landlock.helper_open_rules_failed=capbox-landlock: cannot open rules {file}: {err}
-landlock.helper_fdopen_rules_failed=capbox-landlock: fdopen of rules failed: {err}
-landlock.helper_rule_line_too_long=capbox-landlock: rule line too long
-landlock.helper_rule_format=capbox-landlock: rule format must be ro|rw followed by an absolute path
-landlock.helper_unknown_rule_type=capbox-landlock: unknown rule type {mode}
-landlock.helper_too_many_rules=capbox-landlock: too many rules
-landlock.helper_rules_empty=capbox-landlock: rules are empty
-landlock.helper_kernel_unsupported=capbox-landlock: kernel does not support Landlock
-landlock.helper_kernel_unsupported_lsm=capbox-landlock: kernel does not support Landlock (needs 5.13+ with the LSM enabled)
-landlock.helper_rules_missing_path=capbox-landlock: --rules is missing a path
-landlock.helper_create_ruleset_failed=capbox-landlock: failed to create ruleset: {err}
-landlock.helper_no_new_privs_failed=capbox-landlock: no_new_privs failed: {err}
-landlock.helper_restrict_self_failed=capbox-landlock: restrict_self failed: {err}
-landlock.helper_exec_failed=capbox-landlock: exec {cmd} failed: {err}
-
-# Service supervisor (host-side)
-supervisor.ready=ready: ready
-supervisor.ready_timeout=ready: timed out
-supervisor.stop_timeout_sigkill=stop timed out after {seconds}s → SIGKILL
-supervisor.pass_fd_must_be_gt_stderr=--pass-fd must be a file descriptor greater than stderr
-supervisor.missing_child_argv=supervisor: missing child argv
-supervisor.starting=supervisor: starting {cmd}...
-supervisor.ready_failed_max_restarts=exceeded max restarts after ready failure
-supervisor.health_failed=health check failed {fails}/{retries}
-supervisor.health_give_up=health: giving up → restart/stop
-supervisor.stopped=supervisor: stopped
-supervisor.child_exited=child exited rc={rc}
-supervisor.max_restarts=exceeded max restarts
-
-# seccomp-gen (host-side)
-seccomp.lib_not_found=libseccomp not found (please install libseccomp)
-seccomp.unknown_profile=unknown seccomp profile: {profile}
-seccomp.compat_needs_extra_restriction=compat requires an explicit extra restriction
-seccomp.init_failed=seccomp_init failed
-seccomp.export_failed=seccomp_export_bpf failed: {rc}
-seccomp.bpf_too_small=BPF too small ({size}); libseccomp export failed
-seccomp.unresolved_syscalls=seccomp-gen profile={profile} unresolved syscalls: {missing}
-seccomp.generated=seccomp-gen profile={profile} arch={arch} rules={added} bytes={size}
-seccomp.help_out=BPF output path
-seccomp.tool_description=Generate a seccomp BPF for a CapBox untrusted/strict profile.
-
-# Empty-list placeholders
+# Empty-list placeholders and the capbox ps fallback count line
 fs.no_snapshots=(no snapshots)
 image.no_exported_images=(no exported images)
 image.no_package_lock=(no package.lock; run image lock save first)
 svc.no_service_dir=(no service definition directory {d})
 svc.no_service_defs=(no *.env service definitions yet)
+sandbox.ps_total={count} processes
