@@ -1304,3 +1304,38 @@ cred.hint_empty_net_allow=No credentials bound: CAPBOX_NET_ALLOW is empty. First
 cred.hint_empty_store=No credentials bound: the host secret store is empty. Run: printf "%s" "$KEY" | capbox secret set <service> --value-stdin; the guest only sees capbox-sec-… placeholders.
 cred.hint_domains_not_in_net_allow=No credentials bound: stored secret domains are not in CAPBOX_NET_ALLOW (the allowlist is not widened silently). Add the provider host to NET_ALLOW, or secret set --custom --host ….
 net.publish_child_netns_not_ready=publish: child netns is not ready
+# status / distros / config list table output
+status.label_distro=Distro       : {value}
+status.label_rootfs=rootfs       : {path} ({state}, {size})
+status.state_missing=missing
+status.state_ready=ready
+status.daemon_running=Daemon       : running (pid {pid}, up for {uptime}s)
+status.daemon_stopped=Daemon       : not running
+status.daemon_stopped_hint=Daemon       : not running (start with capbox up in a background task)
+status.heartbeat=  Heartbeat  : {age}s ago (threshold {ttl}s)
+status.ipc=  IPC        : {path}
+status.log=  Log        : {path}
+status.label_net=Network mode : {value}
+status.label_mirror=Mirror       : {mirror} ({url})
+status.mirror_none=Mirror       : none (not injected)
+status.mirror_url_unset=(not injected)
+status.label_proxy=Proxy        : {value}
+status.proxy_none=Proxy        : none (direct)
+status.label_hostname=Hostname     : {value}
+status.label_bwrap=bwrap        : {value}
+status.label_workspace=Workspace    : {value}
+status.label_version=Version      : {value}
+config.list_file=# config file: {path}
+distros.header=Available distros:
+distros.entry<<
+  {distro}  ({state})
+    Tarball  : {name}
+    Download : {url}
+    Cached   : {cached}
+>>
+distros.footer=Current default distro: {distro} (switch with capbox init --distro <name>)
+distros.state_ready=initialized
+distros.state_missing=not initialized
+distros.cached_yes=yes
+distros.cached_no=no
+distros.url_none=(none)

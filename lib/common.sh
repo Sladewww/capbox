@@ -1319,33 +1319,35 @@ status_oneshot() {
     return 0
   fi
 
-  local rootfs_state="缺失"
+  local rootfs_state
   if rootfs_ready; then
-    rootfs_state="就绪"
+    rootfs_state="$(i18n_get status.state_ready)"
+  else
+    rootfs_state="$(i18n_get status.state_missing)"
   fi
 
-  printf '发行版     : %s\n' "$CAPBOX_DISTRO"
-  printf 'rootfs     : %s（%s，%s）\n' "$CAPBOX_ROOTFS" "$rootfs_state" "$(human_bytes "$bytes")"
+  printf '%s\n' "$(i18n_fmt status.label_distro value="$CAPBOX_DISTRO")"
+  printf '%s\n' "$(i18n_fmt status.label_rootfs path="$CAPBOX_ROOTFS" state="$rootfs_state" size="$(human_bytes "$bytes")")"
   if [[ "$running" == true ]]; then
-    printf '守护进程   : 运行中（pid %s，已运行 %ss）\n' "$pid" "$uptime"
+    printf '%s\n' "$(i18n_fmt status.daemon_running pid="$pid" uptime="$uptime")"
   else
-    printf '守护进程   : 未运行\n'
+    printf '%s\n' "$(i18n_get status.daemon_stopped)"
   fi
-  printf '网络模式   : %s\n' "${CAPBOX_NET:-open}"
+  printf '%s\n' "$(i18n_fmt status.label_net value="${CAPBOX_NET:-open}")"
   if [[ "${CAPBOX_MIRROR:-cn}" == "none" ]]; then
-    printf '镜像源     : none（未注入）\n'
+    printf '%s\n' "$(i18n_get status.mirror_none)"
   else
-    printf '镜像源     : %s（%s）\n' "${CAPBOX_MIRROR:-cn}" "$mirror_url"
+    printf '%s\n' "$(i18n_fmt status.label_mirror mirror="${CAPBOX_MIRROR:-cn}" url="$mirror_url")"
   fi
   if [[ -n "${CAPBOX_PROXY:-}" ]]; then
-    printf '代理       : %s\n' "$CAPBOX_PROXY"
+    printf '%s\n' "$(i18n_fmt status.label_proxy value="$CAPBOX_PROXY")"
   else
-    printf '代理       : 无（直连）\n'
+    printf '%s\n' "$(i18n_get status.proxy_none)"
   fi
-  printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
-  printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
-  printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "$CAPBOX_VERSION"
+  printf '%s\n' "$(i18n_fmt status.label_hostname value="${CAPBOX_HOSTNAME:-capbox}")"
+  printf '%s\n' "$(i18n_fmt status.label_bwrap value="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)")"
+  printf '%s\n' "$(i18n_fmt status.label_workspace value="$CAPBOX_WORKSPACE")"
+  printf '%s\n' "$(i18n_fmt status.label_version value="$CAPBOX_VERSION")"
   return 0
 }
 
@@ -1367,7 +1369,7 @@ _config_list() {
     [[ -n "$v" ]] || v="''"
     printf 'CAPBOX_%-*s = %s\n' "$width" "$k" "$v"
   done
-  printf '# 配置文件: %s\n' "$CAPBOX_DIR/config.env"
+  printf '%s\n' "$(i18n_fmt config.list_file path="$CAPBOX_DIR/config.env")"
 }
 
 cmd_config() {
@@ -1429,20 +1431,19 @@ cmd_config() {
 
 cmd_distros() {
   local d name url cached state buf="" _chunk=""
-  printf '可用发行版：\n'
+  printf '%s\n' "$(i18n_get distros.header)"
   for d in "${CAPBOX_SUPPORTED_DISTROS[@]}"; do
     name="$(_distro_tarball_name "$d" 2>/dev/null || true)"
     url="$(_distro_tarball_url "$d" 2>/dev/null || true)"
-    [[ -n "$name" ]] || name="(未知)"
-    cached="否"
-    [[ -s "$CAPBOX_CACHE_DIR/$name" ]] && cached="是"
-    state="未初始化"
-    rootfs_ready_at "$CAPBOX_DIR/os/$d" && state="已初始化"
-    printf -v _chunk '\n  %s  （%s）\n    镜像包 : %s\n    下载   : %s\n    已缓存 : %s\n' \
-      "$d" "$state" "$name" "${url:-（无）}" "$cached"
+    [[ -n "$name" ]] || name="($(i18n_get val.unknown))"
+    cached="$(i18n_get distros.cached_no)"
+    [[ -s "$CAPBOX_CACHE_DIR/$name" ]] && cached="$(i18n_get distros.cached_yes)"
+    state="$(i18n_get distros.state_missing)"
+    rootfs_ready_at "$CAPBOX_DIR/os/$d" && state="$(i18n_get distros.state_ready)"
+    printf -v _chunk '\n%s\n' "$(i18n_fmt distros.entry distro="$d" state="$state" name="$name" url="${url:-$(i18n_get distros.url_none)}" cached="$cached")"
     buf+="$_chunk"
   done
-  printf -v _chunk '\n当前默认发行版: %s（capbox init --distro <名字> 切换）\n' "$CAPBOX_DISTRO"
+  printf -v _chunk '\n%s\n' "$(i18n_fmt distros.footer distro="$CAPBOX_DISTRO")"
   buf+="$_chunk"
   # 一次性写出：避免多次小写入在管道提前关闭时刷出 EPIPE 噪音
   printf '%s' "$buf"

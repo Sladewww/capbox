@@ -1151,8 +1151,6 @@ cmd_status() {
   if declare -F mirror_url_for >/dev/null 2>&1; then
     mirror_url="$(mirror_url_for "$CAPBOX_DISTRO" 2>/dev/null || true)"
   fi
-  [[ -n "$mirror_url" ]] || mirror_url="(未注入)"
-
   local rootfs_ok=0
   if declare -F rootfs_ready >/dev/null 2>&1; then
     rootfs_ready && rootfs_ok=1
@@ -1176,36 +1174,41 @@ cmd_status() {
     return 0
   fi
 
-  local rootfs_state="缺失"
-  (( rootfs_ok == 1 )) && rootfs_state="就绪"
+  local rootfs_state
+  if (( rootfs_ok == 1 )); then
+    rootfs_state="$(i18n_get status.state_ready)"
+  else
+    rootfs_state="$(i18n_get status.state_missing)"
+  fi
 
-  printf '发行版     : %s\n' "$CAPBOX_DISTRO"
-  printf 'rootfs     : %s（%s，%s）\n' "$CAPBOX_ROOTFS" "$rootfs_state" "$(human_bytes "$bytes")"
+  printf '%s\n' "$(i18n_fmt status.label_distro value="$CAPBOX_DISTRO")"
+  printf '%s\n' "$(i18n_fmt status.label_rootfs path="$CAPBOX_ROOTFS" state="$rootfs_state" size="$(human_bytes "$bytes")")"
   if [[ "$running" == true ]]; then
-    printf '守护进程   : 运行中（pid %s，已运行 %ss）\n' "$pid" "$uptime"
+    printf '%s\n' "$(i18n_fmt status.daemon_running pid="$pid" uptime="$uptime")"
     local hb_age
     hb_age="$(_daemon_hb_age)"
-    printf '  心跳     : %ss 前（阈值 %ss）\n' "$hb_age" "$(_daemon_hb_ttl)"
-    printf '  IPC      : %s\n' "$CAPBOX_DAEMON_DIR"
-    printf '  日志     : %s\n' "$CAPBOX_DAEMON_DIR/daemon.log"
+    printf '%s\n' "$(i18n_fmt status.heartbeat age="$hb_age" ttl="$(_daemon_hb_ttl)")"
+    printf '%s\n' "$(i18n_fmt status.ipc path="$CAPBOX_DAEMON_DIR")"
+    printf '%s\n' "$(i18n_fmt status.log path="$CAPBOX_DAEMON_DIR/daemon.log")"
   else
-    printf '守护进程   : 未运行（用后台任务运行 capbox up 启动）\n'
+    printf '%s\n' "$(i18n_get status.daemon_stopped_hint)"
   fi
-  printf '网络模式   : %s\n' "${CAPBOX_NET:-host}"
+  printf '%s\n' "$(i18n_fmt status.label_net value="${CAPBOX_NET:-host}")"
   if [[ "${CAPBOX_MIRROR:-cn}" == "none" ]]; then
-    printf '镜像源     : none（未注入）\n'
+    printf '%s\n' "$(i18n_get status.mirror_none)"
   else
-    printf '镜像源     : %s（%s）\n' "${CAPBOX_MIRROR:-cn}" "$mirror_url"
+    [[ -n "$mirror_url" ]] || mirror_url="$(i18n_get status.mirror_url_unset)"
+    printf '%s\n' "$(i18n_fmt status.label_mirror mirror="${CAPBOX_MIRROR:-cn}" url="$mirror_url")"
   fi
   if [[ -n "${CAPBOX_PROXY:-}" ]]; then
-    printf '代理       : %s\n' "$CAPBOX_PROXY"
+    printf '%s\n' "$(i18n_fmt status.label_proxy value="$CAPBOX_PROXY")"
   else
-    printf '代理       : 无（直连）\n'
+    printf '%s\n' "$(i18n_get status.proxy_none)"
   fi
-  printf '宿主名     : %s\n' "${CAPBOX_HOSTNAME:-capbox}"
-  printf 'bwrap      : %s\n' "${CAPBOX_BWRAP:-未设置}"
-  printf '工作区     : %s\n' "$CAPBOX_WORKSPACE"
-  printf '版本       : %s\n' "${CAPBOX_VERSION:-0.4.2}"
+  printf '%s\n' "$(i18n_fmt status.label_hostname value="${CAPBOX_HOSTNAME:-capbox}")"
+  printf '%s\n' "$(i18n_fmt status.label_bwrap value="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)")"
+  printf '%s\n' "$(i18n_fmt status.label_workspace value="$CAPBOX_WORKSPACE")"
+  printf '%s\n' "$(i18n_fmt status.label_version value="${CAPBOX_VERSION:-0.4.2}")"
   return 0
 }
 
