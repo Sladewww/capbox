@@ -1827,26 +1827,30 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
 
 
 class DaemonStopMarkerTests(unittest.TestCase):
-    """Guest stop ack is a fixed English marker; host greps that same token."""
+    """Guest writes a fixed English stop marker; host temporarily also accepts the old phrase."""
 
     MARKER = 'received stop request'
+    OLD_PHRASE = '收到停止请求'
+    HOST_GREP = "grep -q -e 'received stop request' -e '收到停止请求'"
 
     def test_guest_emits_english_marker(self):
         guest = (REPO / 'lib/guest/daemon.sh').read_text()
         self.assertIn(
             f'log "{self.MARKER}, 等待在跑任务完成（上限 ${{STOP_WAIT}}s）"',
             guest)
-        self.assertNotIn('收到停止请求', guest)
+        self.assertNotIn(self.OLD_PHRASE, guest)
         # 标记是写死的英文，不走 i18n，也不进目录。
         self.assertNotIn('i18n.t', guest)
         self.assertNotRegex(guest, r'i18n_[A-Za-z0-9_]+.*received stop request')
 
-    def test_host_criterion_matches_the_same_marker(self):
+    def test_host_criterion_matches_the_new_marker_and_old_phrase(self):
         host = (REPO / 'lib/daemon.sh').read_text()
-        self.assertIn(f"grep -q '{self.MARKER}'", host)
-        self.assertEqual(host.count(f"grep -q '{self.MARKER}'"), 1)
+        self.assertIn(self.HOST_GREP, host)
+        self.assertEqual(host.count('grep -q'), 1)
         self.assertIn(f'会往 daemon.log 写「{self.MARKER}」', host)
-        self.assertNotIn('收到停止请求', host)
+        self.assertIn('一次升级兼容', host)
+        self.assertIn(f'「{self.OLD_PHRASE}」', host)
+        self.assertIn('新服务端只写英文标记', host)
 
     def test_marker_is_not_a_catalog_key_or_value(self):
         for lang in ('zh', 'en'):
@@ -1859,23 +1863,24 @@ class DaemonStopMarkerTests(unittest.TestCase):
                     self.MARKER, value,
                     f'catalog {lang}:{key} contains marker')
 
-    def test_host_grep_matches_guest_log_line_only(self):
+    def test_host_grep_matches_new_and_old_guest_lines_only(self):
         log_prefix = '[capbox-daemon] '
         guest_line = f'{log_prefix}{self.MARKER}, 等待在跑任务完成（上限 30s）\n'
-        old_line = f'{log_prefix}收到停止请求，等待在跑任务完成（上限 30s）\n'
+        old_line = f'{log_prefix}{self.OLD_PHRASE}，等待在跑任务完成（上限 30s）\n'
         other_line = f'{log_prefix}收到终止信号（TERM/INT），准备优雅退出\n'
         warn_line = 'Server did not acknowledge the stop request within 5s\n'
 
         def greps(text):
             result = subprocess.run(
-                ['grep', '-q', self.MARKER],
+                ['grep', '-q', '-e', self.MARKER, '-e', self.OLD_PHRASE],
                 input=text, text=True, capture_output=True)
             return result.returncode
 
         self.assertEqual(greps(guest_line), 0)
-        self.assertEqual(greps(old_line), 1)
+        self.assertEqual(greps(old_line), 0)
         self.assertEqual(greps(other_line), 1)
         self.assertEqual(greps(warn_line), 1)
+
 
 
 if __name__ == '__main__':
