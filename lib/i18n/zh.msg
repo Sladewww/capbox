@@ -1303,3 +1303,38 @@ cred.hint_empty_net_allow=未绑定凭据：CAPBOX_NET_ALLOW 为空。先 config
 cred.hint_empty_store=未绑定凭据：宿主密钥库为空。运行: printf "%s" "$KEY" | capbox secret set <service> --value-stdin；guest 只会看到 capbox-sec-… 占位符。
 cred.hint_domains_not_in_net_allow=未绑定凭据：已存密钥的域名不在 CAPBOX_NET_ALLOW 中（不会静默放宽）。把 provider host 写入 NET_ALLOW，或 secret set --custom --host …。
 net.publish_child_netns_not_ready=publish: 子 netns 尚未就绪
+# status / distros / config list table output
+status.label_distro=发行版     : {value}
+status.label_rootfs=rootfs     : {path}（{state}，{size}）
+status.state_missing=缺失
+status.state_ready=就绪
+status.daemon_running=守护进程   : 运行中（pid {pid}，已运行 {uptime}s）
+status.daemon_stopped=守护进程   : 未运行
+status.daemon_stopped_hint=守护进程   : 未运行（用后台任务运行 capbox up 启动）
+status.heartbeat=  心跳     : {age}s 前（阈值 {ttl}s）
+status.ipc=  IPC      : {path}
+status.log=  日志     : {path}
+status.label_net=网络模式   : {value}
+status.label_mirror=镜像源     : {mirror}（{url}）
+status.mirror_none=镜像源     : none（未注入）
+status.mirror_url_unset=(未注入)
+status.label_proxy=代理       : {value}
+status.proxy_none=代理       : 无（直连）
+status.label_hostname=宿主名     : {value}
+status.label_bwrap=bwrap      : {value}
+status.label_workspace=工作区     : {value}
+status.label_version=版本       : {value}
+config.list_file=# 配置文件: {path}
+distros.header=可用发行版：
+distros.entry<<
+  {distro}  （{state}）
+    镜像包 : {name}
+    下载   : {url}
+    已缓存 : {cached}
+>>
+distros.footer=当前默认发行版: {distro}（capbox init --distro <名字> 切换）
+distros.state_ready=已初始化
+distros.state_missing=未初始化
+distros.cached_yes=是
+distros.cached_no=否
+distros.url_none=（无）

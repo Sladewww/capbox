@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -727,6 +728,276 @@ class PythonCliHelpTests(unittest.TestCase):
         self.assertEqual(en.returncode, 0, en.stderr)
         self.assertIn('security profile', en.stdout)
         self.assertNotIn('安全配置档', en.stdout)
+
+
+class TableOutputI18nTests(unittest.TestCase):
+    """Human-facing status / distros / config list tables follow CAPBOX_LANG.
+
+    Machine field names, column identifiers, and enum-like cell values stay
+    English in both languages. cmd_status (daemon.sh) is the CLI path;
+    status_oneshot in common.sh is the fallback when daemon.sh is not loaded.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-tables-')
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = Path(self.tmp.name) / 'ws'
+        self.ws.mkdir()
+
+    def run_cli(self, *args, env=None):
+        merged = base_env()
+        if env:
+            merged.update(env)
+        return subprocess.run(
+            [str(CLI), '--root', str(self.ws), *args],
+            env=merged, capture_output=True, text=True, timeout=30)
+
+    def test_catalog_table_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['status.label_distro'], '发行版     : {value}')
+        self.assertEqual(en['status.label_distro'], 'Distro       : {value}')
+        self.assertEqual(zh['status.label_rootfs'], 'rootfs     : {path}（{state}，{size}）')
+        self.assertEqual(en['status.label_rootfs'], 'rootfs       : {path} ({state}, {size})')
+        self.assertEqual(zh['status.state_missing'], '缺失')
+        self.assertEqual(en['status.state_missing'], 'missing')
+        self.assertEqual(zh['status.state_ready'], '就绪')
+        self.assertEqual(en['status.state_ready'], 'ready')
+        self.assertEqual(zh['status.daemon_stopped_hint'],
+                         '守护进程   : 未运行（用后台任务运行 capbox up 启动）')
+        self.assertEqual(en['status.daemon_stopped_hint'],
+                         'Daemon       : not running (start with capbox up in a background task)')
+        self.assertEqual(zh['status.daemon_stopped'], '守护进程   : 未运行')
+        self.assertEqual(en['status.daemon_stopped'], 'Daemon       : not running')
+        self.assertEqual(zh['status.mirror_none'], '镜像源     : none（未注入）')
+        self.assertEqual(en['status.mirror_none'], 'Mirror       : none (not injected)')
+        self.assertEqual(zh['status.proxy_none'], '代理       : 无（直连）')
+        self.assertEqual(en['status.proxy_none'], 'Proxy        : none (direct)')
+        self.assertEqual(zh['config.list_file'], '# 配置文件: {path}')
+        self.assertEqual(en['config.list_file'], '# config file: {path}')
+        self.assertEqual(zh['distros.header'], '可用发行版：')
+        self.assertEqual(en['distros.header'], 'Available distros:')
+        self.assertEqual(zh['distros.state_missing'], '未初始化')
+        self.assertEqual(en['distros.state_missing'], 'not initialized')
+        self.assertEqual(zh['distros.state_ready'], '已初始化')
+        self.assertEqual(en['distros.state_ready'], 'initialized')
+        self.assertEqual(zh['distros.cached_yes'], '是')
+        self.assertEqual(en['distros.cached_yes'], 'yes')
+        self.assertEqual(zh['distros.cached_no'], '否')
+        self.assertEqual(en['distros.cached_no'], 'no')
+        self.assertEqual(zh['val.unset'], '未设置')
+        self.assertEqual(en['val.unset'], 'not set')
+
+    def test_status_table_follows_lang_and_keeps_machine_tokens(self):
+        zh = self.run_cli('status', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('发行版     : alpine', zh.stdout)
+        self.assertIn('rootfs     :', zh.stdout)
+        self.assertIn('（缺失，0B）', zh.stdout)
+        self.assertIn('守护进程   : 未运行（用后台任务运行 capbox up 启动）', zh.stdout)
+        self.assertIn('网络模式   : open', zh.stdout)
+        self.assertIn('镜像源     : cn（', zh.stdout)
+        self.assertIn('代理       : 无（直连）', zh.stdout)
+        self.assertIn('宿主名     : capbox', zh.stdout)
+        self.assertIn('bwrap      :', zh.stdout)
+        self.assertIn('工作区     :', zh.stdout)
+        self.assertIn('版本       :', zh.stdout)
+        self.assertNotIn('Distro', zh.stdout)
+        self.assertNotIn('Network mode', zh.stdout)
+        self.assertNotIn('not running', zh.stdout)
+
+        en = self.run_cli('status', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('Distro       : alpine', en.stdout)
+        self.assertIn('rootfs       :', en.stdout)
+        self.assertIn('(missing, 0B)', en.stdout)
+        self.assertIn('Daemon       : not running (start with capbox up in a background task)', en.stdout)
+        self.assertIn('Network mode : open', en.stdout)
+        self.assertIn('Mirror       : cn (', en.stdout)
+        self.assertIn('Proxy        : none (direct)', en.stdout)
+        self.assertIn('Hostname     : capbox', en.stdout)
+        self.assertIn('bwrap        :', en.stdout)
+        self.assertIn('Workspace    :', en.stdout)
+        self.assertIn('Version      :', en.stdout)
+        self.assertNotIn('发行版', en.stdout)
+        self.assertNotIn('守护进程', en.stdout)
+        self.assertNotIn('网络模式', en.stdout)
+        self.assertNotIn('缺失', en.stdout)
+        self.assertNotIn('未运行', en.stdout)
+        self.assertNotIn('无（直连）', en.stdout)
+        # Machine field names and enum-like values stay English in both languages.
+        for out in (zh.stdout, en.stdout):
+            self.assertIn('rootfs', out)
+            self.assertIn('bwrap', out)
+            self.assertIn('alpine', out)
+            self.assertIn('open', out)
+            self.assertIn('cn', out)
+
+    def test_status_json_stays_machine_english(self):
+        zh = self.run_cli('status', '--json', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('status', '--json', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertEqual(zh.stdout, en.stdout)
+        self.assertIn('"distro":"alpine"', zh.stdout)
+        self.assertIn('"rootfs":"', zh.stdout)
+        self.assertIn('"running":false', zh.stdout.replace(' ', ''))
+        self.assertIn('"net":"open"', zh.stdout)
+        self.assertIn('"mirror":"cn"', zh.stdout)
+        self.assertNotIn('发行版', zh.stdout)
+        self.assertNotIn('Distro', zh.stdout)
+        self.assertNotIn('缺失', zh.stdout)
+        self.assertNotIn('missing', zh.stdout)
+        self.assertNotIn('未注入', zh.stdout)
+        self.assertNotIn('not injected', zh.stdout)
+
+    def test_status_oneshot_fallback_follows_lang(self):
+        """common.sh status_oneshot (no daemon.sh) uses the same catalog keys."""
+        runtime = ('os', 'cache', 'run', 'state', 'logs', 'secrets', 'services')
+        before = {name: (REPO / name).exists() for name in runtime}
+
+        def _cleanup_repo_runtime():
+            for name, existed in before.items():
+                if not existed:
+                    path = REPO / name
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+
+        self.addCleanup(_cleanup_repo_runtime)
+
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{REPO}/lib/common.sh"; '
+                'status_oneshot'
+            )
+            result = run_bash(script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+        zh = run('zh')
+        en = run('en')
+        self.assertIn('发行版     : alpine', zh)
+        self.assertIn('守护进程   : 未运行', zh)
+        self.assertNotIn('用后台任务运行 capbox up 启动', zh)
+        self.assertNotIn('Distro', zh)
+        self.assertIn('Distro       : alpine', en)
+        self.assertIn('Daemon       : not running', en)
+        self.assertNotIn('start with capbox up', en)
+        self.assertNotIn('发行版', en)
+        self.assertNotIn('守护进程', en)
+        for out in (zh, en):
+            self.assertIn('rootfs', out)
+            self.assertIn('alpine', out)
+            self.assertIn('open', out)
+
+    def test_distros_table_follows_lang_and_keeps_machine_tokens(self):
+        zh = self.run_cli('distros', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('可用发行版：', zh.stdout)
+        self.assertIn('  alpine  （未初始化）', zh.stdout)
+        self.assertIn('  ubuntu  （未初始化）', zh.stdout)
+        self.assertIn('镜像包 :', zh.stdout)
+        self.assertIn('下载   :', zh.stdout)
+        self.assertIn('已缓存 : 否', zh.stdout)
+        self.assertIn('当前默认发行版: alpine（capbox init --distro <名字> 切换）', zh.stdout)
+        self.assertNotIn('Available distros', zh.stdout)
+        self.assertNotIn('not initialized', zh.stdout)
+
+        en = self.run_cli('distros', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('Available distros:', en.stdout)
+        self.assertIn('  alpine  (not initialized)', en.stdout)
+        self.assertIn('  ubuntu  (not initialized)', en.stdout)
+        self.assertIn('Tarball  :', en.stdout)
+        self.assertIn('Download :', en.stdout)
+        self.assertIn('Cached   : no', en.stdout)
+        self.assertIn('Current default distro: alpine (switch with capbox init --distro <name>)', en.stdout)
+        self.assertNotIn('可用发行版', en.stdout)
+        self.assertNotIn('未初始化', en.stdout)
+        self.assertNotIn('镜像包', en.stdout)
+        self.assertNotIn('已缓存', en.stdout)
+        for out in (zh.stdout, en.stdout):
+            self.assertIn('alpine-minirootfs-', out)
+            self.assertIn('ubuntu-base-', out)
+            self.assertIn('https://', out)
+
+    def test_config_list_footer_follows_lang_keys_stay_english(self):
+        zh = self.run_cli('config', 'list', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('# 配置文件: ', zh.stdout)
+        self.assertIn('CAPBOX_DISTRO', zh.stdout)
+        self.assertIn('= alpine', zh.stdout)
+        self.assertIn('CAPBOX_MIRROR', zh.stdout)
+        self.assertIn('= cn', zh.stdout)
+        self.assertIn('CAPBOX_NET', zh.stdout)
+        self.assertIn('= open', zh.stdout)
+        self.assertNotIn('# config file:', zh.stdout)
+
+        en = self.run_cli('config', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('# config file: ', en.stdout)
+        self.assertIn('CAPBOX_DISTRO', en.stdout)
+        self.assertIn('= alpine', en.stdout)
+        self.assertIn('CAPBOX_MIRROR', en.stdout)
+        self.assertIn('= cn', en.stdout)
+        self.assertIn('CAPBOX_NET', en.stdout)
+        self.assertIn('= open', en.stdout)
+        self.assertNotIn('配置文件', en.stdout)
+        # Values that are machine enums stay English in both languages.
+        for out in (zh.stdout, en.stdout):
+            self.assertIn('CAPBOX_RESOURCES_MODE', out)
+            self.assertIn('= warn', out)
+            self.assertIn('CAPBOX_IDMAP', out)
+            self.assertIn('= auto', out)
+            self.assertIn('CAPBOX_SECURITY_PROFILE', out)
+            self.assertIn('= compat', out)
+            self.assertIn('CAPBOX_AUDIT', out)
+            self.assertIn('= summary', out)
+
+    def test_hardcoded_table_literals_are_gone_from_both_status_paths(self):
+        needles = (
+            '发行版     :',
+            '守护进程   :',
+            '网络模式   :',
+            '镜像源     :',
+            '代理       :',
+            '宿主名     :',
+            '工作区     :',
+            '版本       :',
+            '未运行（用后台任务运行 capbox up 启动）',
+            '无（直连）',
+            'none（未注入）',
+            '可用发行版：',
+            '已缓存 :',
+            '当前默认发行版:',
+            '# 配置文件:',
+        )
+        for rel in ('lib/common.sh', 'lib/daemon.sh'):
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if line.lstrip().startswith('#'):
+                    continue
+                for needle in needles:
+                    if needle in line:
+                        self.fail(f'{rel}:{i} still hardcodes {needle!r}: {line}')
+        common = (REPO / 'lib/common.sh').read_text()
+        daemon = (REPO / 'lib/daemon.sh').read_text()
+        for key in (
+            'status.label_distro', 'status.label_rootfs', 'status.state_missing',
+            'status.state_ready', 'status.daemon_running', 'status.label_net',
+            'status.label_mirror', 'status.proxy_none', 'status.label_bwrap',
+        ):
+            self.assertIn(key, common)
+            self.assertIn(key, daemon)
+        self.assertIn('status.daemon_stopped_hint', daemon)
+        self.assertIn('status.daemon_stopped', common)
+        self.assertIn('status.heartbeat', daemon)
+        self.assertNotIn('status.heartbeat', common)
+        self.assertIn('config.list_file', common)
+        self.assertIn('distros.header', common)
+        self.assertIn('distros.entry', common)
+        self.assertIn('distros.footer', common)
+
+
 
 
 if __name__ == '__main__':
