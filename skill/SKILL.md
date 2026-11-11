@@ -105,6 +105,8 @@ capbox exec --cwd /root -- pwd                # 指定容器内工作目录
 
 **完成判据**：拿到容器内的输出，且退出码是你预期的那个。
 
+本机已有 `docker save` 或 OCI 镜像文件时，用 `capbox image docker import FILE --name NAME`，再 `capbox exec --image NAME -- CMD`。`capbox image docker run FILE -- CMD` 会按镜像的 Entrypoint/Cmd/User/Env 启动。两条路径都不连接 Docker daemon，也不替换项目的 Alpine/Ubuntu rootfs。不可信镜像加 `--profile untrusted`。
+
 ## 3. 装系统软件包
 
 ```sh

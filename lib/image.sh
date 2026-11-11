@@ -154,6 +154,357 @@ _image_write_meta() {
   } >"${arch}.meta"
 }
 
+# Docker / OCI 镜像是数据：只展开层，不执行 Entrypoint、Cmd、Env。
+_oci_py() {
+  if [[ -n "${CAPBOX_LIB_DIR:-}" && -f "${CAPBOX_LIB_DIR}/oci-image.py" ]]; then
+    printf '%s/oci-image.py' "$CAPBOX_LIB_DIR"
+    return 0
+  fi
+  printf '%s/oci-image.py' "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+}
+
+_image_docker_dir() { printf '%s/docker' "$(_image_dir)"; }
+_image_docker_home() { printf '%s/%s' "$(_image_docker_dir)" "$1"; }
+_image_docker_meta() { printf '%s/%s/meta.json' "$(_image_docker_dir)" "$1"; }
+_image_docker_rootfs() { printf '%s/%s/rootfs' "$(_image_docker_dir)" "$1"; }
+
+_oci_py_cmd() {
+  python3 "$(_oci_py)" --lang "${CAPBOX_UI_LANG:-en}" "$@"
+}
+
+# 把已导入的 docker rootfs 接到本次启动。不改 DISTRO，不写 config.env。
+_image_docker_use_rootfs() {
+  local name="${1:-}" root base real
+  _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
+  root="$(_image_docker_rootfs "$name")"
+  [[ -d "$root" && ! -L "$root" && -f "$(_image_docker_meta "$name")" && ! -L "$(_image_docker_meta "$name")" ]] \
+    || i18n_die 1 oci.missing name="$name"
+  base="$(realpath -- "$(_image_docker_dir)")" || i18n_die 1 oci.missing name="$name"
+  real="$(realpath -- "$root")" || i18n_die 1 oci.busy_symlink path="$root"
+  [[ "$real" == "$base"/* ]] || i18n_die 1 oci.busy_symlink path="$root"
+  CAPBOX_ROOTFS="$real"
+  export CAPBOX_ROOTFS
+}
+
+# 镜像 Env 只变成 bwrap --setenv。文件必须在 images/docker 下面，且不是符号链接。
+_oci_append_image_env() {
+  local -n _arr="$1"
+  local file="${2:-}" real base key value pairs rc=0
+  [[ -n "$file" && -f "$file" && ! -L "$file" ]] || {
+    i18n_err oci.env_file_unusable
+    return 1
+  }
+  base="$(realpath -- "$(_image_docker_dir)" 2>/dev/null)" || {
+    i18n_err oci.env_file_outside
+    return 1
+  }
+  real="$(realpath -- "$file" 2>/dev/null)" || {
+    i18n_err oci.env_file_outside
+    return 1
+  }
+  [[ "$real" == "$base"/* ]] || {
+    i18n_err oci.env_file_outside
+    return 1
+  }
+  pairs="$(mktemp "${TMPDIR:-/tmp}/capbox-oci-env.XXXXXX")" || return 1
+  _oci_py_cmd env-pairs --meta "$file" >"$pairs" || rc=$?
+  if (( rc != 0 )); then
+    rm -f -- "$pairs"
+    return "$rc"
+  fi
+  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      rm -f -- "$pairs"
+      i18n_err oci.env_key key="$key"
+      return 1
+    }
+    _arr+=(--setenv "$key" "$value")
+  done <"$pairs"
+  rm -f -- "$pairs"
+}
+
+_image_docker_suggest_name() {
+  python3 -c 'import json,sys,re
+m=json.loads(sys.stdin.read())
+tags=m.get("repo_tags") or []
+raw=tags[0] if tags else ""
+raw=re.sub(r"[^A-Za-z0-9._@+-]+","_", raw).strip("._")
+digest=(m.get("source_sha256") or "").split(":")[-1]
+fallback="img-"+(digest[:12] or "noname")
+print(raw if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+-]*", raw or "") else fallback)'
+}
+
+_image_docker_import() {
+  local src="" name="" platform="" index="" tag="" force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        name="${2:-}"
+        shift 2 || i18n_die 2 oci.import_needs_archive
+        ;;
+      --platform)
+        platform="${2:-}"
+        shift 2 || i18n_die 2 oci.import_needs_archive
+        ;;
+      --index)
+        index="${2:-}"
+        shift 2 || i18n_die 2 oci.import_needs_archive
+        ;;
+      --tag)
+        tag="${2:-}"
+        shift 2 || i18n_die 2 oci.import_needs_archive
+        ;;
+      --force) force=1; shift ;;
+      -*) i18n_die 2 oci.unknown_option arg="$1" ;;
+      *)
+        [[ -z "$src" ]] || i18n_die 2 oci.import_needs_archive
+        src="$1"
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$src" && -e "$src" && ! -L "$src" ]] || i18n_die 1 oci.not_an_image path="${src:-<empty>}"
+  local -a inspect=(inspect --input "$src")
+  [[ -n "$platform" ]] && inspect+=(--platform "$platform")
+  [[ -n "$index" ]] && inspect+=(--index "$index")
+  [[ -n "$tag" ]] && inspect+=(--tag "$tag")
+  local preview
+  preview="$(_oci_py_cmd "${inspect[@]}")" || return $?
+  if [[ -z "$name" ]]; then
+    name="$(printf '%s' "$preview" | _image_docker_suggest_name)" || return 1
+  fi
+  _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
+  local base dest stage
+  base="$(_image_docker_dir)"
+  mkdir -p -- "$base" || i18n_die 1 oci.stage_failed
+  dest="$base/$name"
+  [[ ! -L "$dest" && ! -L "$base" ]] || i18n_die 1 oci.busy_symlink path="$dest"
+  if [[ -e "$dest" && "$force" -ne 1 ]]; then
+    i18n_die 1 oci.exists name="$name"
+  fi
+  stage="$(mktemp -d "$base/.stage.XXXXXX")" || i18n_die 1 oci.stage_failed
+  mkdir -p -- "$stage/rootfs" || {
+    rm -rf --one-file-system -- "$stage"
+    i18n_die 1 oci.stage_failed
+  }
+  local -a mat=(materialize --input "$src" --dest "$stage/rootfs")
+  [[ -n "$platform" ]] && mat+=(--platform "$platform")
+  [[ -n "$index" ]] && mat+=(--index "$index")
+  [[ -n "$tag" ]] && mat+=(--tag "$tag")
+  local json rc=0
+  json="$(_oci_py_cmd "${mat[@]}")" || rc=$?
+  if (( rc != 0 )); then
+    rm -rf --one-file-system -- "$stage"
+    return "$rc"
+  fi
+  printf '%s\n' "$json" >"$stage/meta.json" || {
+    rm -rf --one-file-system -- "$stage"
+    i18n_die 1 oci.stage_failed
+  }
+  if [[ -e "$dest" ]]; then
+    local bak="$base/.bak.$name.$$"
+    mv -- "$dest" "$bak" || {
+      rm -rf --one-file-system -- "$stage"
+      i18n_die 1 oci.stage_failed
+    }
+    if ! mv -- "$stage" "$dest"; then
+      mv -- "$bak" "$dest" || true
+      rm -rf --one-file-system -- "$stage"
+      i18n_die 1 oci.stage_failed
+    fi
+    rm -rf --one-file-system -- "$bak"
+  elif ! mv -- "$stage" "$dest"; then
+    rm -rf --one-file-system -- "$stage"
+    i18n_die 1 oci.stage_failed
+  fi
+  [[ -d "$dest/rootfs" && ! -L "$dest/rootfs" && -f "$dest/meta.json" && ! -L "$dest/meta.json" ]] \
+    || i18n_die 1 oci.stage_failed
+  if declare -F audit_event >/dev/null 2>&1; then
+    audit_event image ok "object=$name" "detail=docker-import" "exit=0" "ms=0"
+  fi
+  i18n_info oci.import_ok name="$name" path="$dest/rootfs"
+  printf '%s\n' "$dest/rootfs"
+}
+
+_image_docker_run() {
+  local target="" name="" platform="" index="" tag="" cwd="" user="" timeout_s="" net_override="" profile="" entrypoint=""
+  local clear=0
+  local -a cmd=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --platform) platform="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --index) index="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --tag) tag="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --cwd) cwd="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --user) user="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --timeout) timeout_s="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --net) net_override="${2:-}"; shift 2 || i18n_die 2 sandbox.exec_net_requires_mode_none_restricted_open ;;
+      --profile) profile="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --entrypoint) entrypoint="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
+      --clear-entrypoint) clear=1; shift ;;
+      --) shift; cmd+=("$@"); break ;;
+      -*) i18n_die 2 oci.unknown_option arg="$1" ;;
+      *)
+        if [[ -z "$target" ]]; then
+          target="$1"
+          shift
+        else
+          cmd+=("$@")
+          break
+        fi
+        ;;
+    esac
+  done
+  [[ -n "$target" ]] || i18n_die 2 oci.run_needs_target
+  local use_name="$name" imported=""
+  if [[ -e "$target" && ! -L "$target" && ( -f "$target" || -d "$target" ) ]]; then
+    local -a imp=("$target" --force)
+    [[ -n "$name" ]] && imp+=(--name "$name")
+    [[ -n "$platform" ]] && imp+=(--platform "$platform")
+    [[ -n "$index" ]] && imp+=(--index "$index")
+    [[ -n "$tag" ]] && imp+=(--tag "$tag")
+    imported="$(_image_docker_import "${imp[@]}")" || return $?
+    use_name="$(basename -- "$(dirname -- "$imported")")"
+  else
+    use_name="${name:-$target}"
+  fi
+  _image_docker_use_rootfs "$use_name" || return $?
+  if [[ -n "$net_override" ]]; then
+    _capbox_declare_net "$net_override" exec || return $?
+  fi
+  if [[ -n "$profile" ]]; then
+    case "$profile" in
+      compat | untrusted | strict) CAPBOX_SECURITY_PROFILE="$profile" ;;
+      *) i18n_die 2 sandbox.exec_profile_must_compat_untrusted_strict_got profile_override="$profile" ;;
+    esac
+  fi
+  [[ -n "$timeout_s" ]] || timeout_s="${CAPBOX_EXEC_TIMEOUT:-600}"
+  [[ "$timeout_s" =~ ^[0-9]+$ ]] || i18n_die 2 sandbox.exec_timeout_must_non_negative_integer_number timeout_s="$timeout_s"
+  local plan meta
+  meta="$(_image_docker_meta "$use_name")"
+  plan="$(mktemp -d "${TMPDIR:-/tmp}/capbox-oci-plan.XXXXXX")" || i18n_die 1 oci.stage_failed
+  local -a plan_cmd=(plan --meta "$meta" --rootfs "$CAPBOX_ROOTFS" --out-dir "$plan")
+  [[ -n "$cwd" ]] && plan_cmd+=(--cwd "$cwd")
+  [[ -n "$user" ]] && plan_cmd+=(--user "$user")
+  [[ -n "$entrypoint" ]] && plan_cmd+=(--entrypoint "$entrypoint")
+  (( clear == 1 )) && plan_cmd+=(--clear-entrypoint)
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    plan_cmd+=(-- "${cmd[@]}")
+  fi
+  if ! _oci_py_cmd "${plan_cmd[@]}"; then
+    rm -rf --one-file-system -- "$plan"
+    return 1
+  fi
+  local pcwd puid pgid
+  IFS= read -r pcwd <"$plan/cwd" || pcwd=/
+  IFS= read -r puid <"$plan/uid" || puid=0
+  IFS= read -r pgid <"$plan/gid" || pgid=0
+  [[ "$puid" =~ ^[0-9]+$ && "$pgid" =~ ^[0-9]+$ ]] || {
+    rm -rf --one-file-system -- "$plan"
+    i18n_die 1 oci.user_unresolved user="${user:-image}"
+  }
+  local -a argv=()
+  mapfile -d '' argv <"$plan/argv"
+  if [[ ${#argv[@]} -gt 0 && -z "${argv[-1]}" ]]; then
+    unset 'argv[-1]'
+  fi
+  if [[ ${#argv[@]} -eq 0 ]]; then
+    rm -rf --one-file-system -- "$plan"
+    i18n_die 2 oci.no_argv
+  fi
+  rm -rf --one-file-system -- "$plan"
+  export CAPBOX_EXEC_UID_OVERRIDE="$puid"
+  export CAPBOX_EXEC_GID_OVERRIDE="$pgid"
+  CAPBOX_OCI_ENV_FILE="$meta"
+  run_bwrap_oneshot "$pcwd" "$timeout_s" "${argv[@]}"
+  local rc=$?
+  unset CAPBOX_OCI_ENV_FILE
+  return "$rc"
+}
+
+cmd_image_docker() {
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    "" | -h | --help)
+      i18n_print help.image.docker
+      return 0
+      ;;
+    inspect)
+      local src="${1:-}"
+      shift || true
+      [[ -n "$src" ]] || i18n_die 2 oci.import_needs_archive
+      local platform="" index="" tag=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --platform) platform="${2:-}"; shift 2 || i18n_die 2 oci.unknown_option arg="$1" ;;
+          --index) index="${2:-}"; shift 2 || i18n_die 2 oci.unknown_option arg="$1" ;;
+          --tag) tag="${2:-}"; shift 2 || i18n_die 2 oci.unknown_option arg="$1" ;;
+          *) i18n_die 2 oci.unknown_option arg="$1" ;;
+        esac
+      done
+      local -a args=(inspect --input "$src")
+      [[ -n "$platform" ]] && args+=(--platform "$platform")
+      [[ -n "$index" ]] && args+=(--index "$index")
+      [[ -n "$tag" ]] && args+=(--tag "$tag")
+      _oci_py_cmd "${args[@]}"
+      ;;
+    import)
+      _image_docker_import "$@"
+      ;;
+    list)
+      local d meta name
+      d="$(_image_docker_dir)"
+      if [[ ! -d "$d" ]]; then
+        i18n_print oci.none
+        return 0
+      fi
+      local any=0
+      shopt -s nullglob
+      for meta in "$d"/*/meta.json; do
+        [[ -f "$meta" && ! -L "$meta" ]] || continue
+        any=1
+        name="$(basename -- "$(dirname -- "$meta")")"
+        python3 -c 'import json,sys
+m=json.load(open(sys.argv[1], encoding="utf-8"))
+tags=",".join(m.get("repo_tags") or []) or "-"
+print("%s\t%s/%s\t%s" % (sys.argv[2], m.get("os") or "?", m.get("architecture") or "?", tags))' \
+          "$meta" "$name"
+      done
+      shopt -u nullglob
+      (( any == 0 )) && i18n_print oci.none
+      return 0
+      ;;
+    show)
+      local name="${1:-}"
+      _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
+      local meta="$(_image_docker_meta "$name")"
+      [[ -f "$meta" && ! -L "$meta" ]] || i18n_die 1 oci.missing name="$name"
+      python3 -m json.tool -- "$meta"
+      ;;
+    rm)
+      local name="${1:-}"
+      _image_valid_name "$name" || i18n_die 2 image.invalid_image_name
+      local dest base real
+      dest="$(_image_docker_home "$name")"
+      [[ -d "$dest" && ! -L "$dest" ]] || i18n_die 1 oci.missing name="$name"
+      base="$(realpath -- "$(_image_docker_dir)")" || i18n_die 1 oci.missing name="$name"
+      real="$(realpath -- "$dest")" || i18n_die 1 oci.busy_symlink path="$dest"
+      [[ "$real" == "$base"/* ]] || i18n_die 1 oci.busy_symlink path="$dest"
+      rm -rf --one-file-system -- "$real"
+      i18n_info oci.removed name="$name"
+      return 0
+      ;;
+    run)
+      _image_docker_run "$@"
+      ;;
+    *)
+      i18n_die 2 oci.unknown sub="${sub:-}"
+      ;;
+  esac
+}
+
 cmd_image() {
   local sub="${1:-}"
   [[ $# -gt 0 ]] && shift
@@ -358,6 +709,9 @@ cmd_image() {
       esac
       return 0
       ;;
+    docker)
+      cmd_image_docker "$@"
+      ;;
     *) i18n_die 2 image.image_unknown_subcommand sub="$sub" ;;
   esac
 }
@@ -375,4 +729,14 @@ _image_doctor_report() {
   if [[ -f "$(_image_lock_path)" ]]; then
     _doctor_pass_i18n doctor.package_lock_present
   fi
+  local docker_n=0 meta
+  if [[ -d "$(_image_docker_dir)" ]]; then
+    shopt -s nullglob
+    for meta in "$(_image_docker_dir)"/*/meta.json; do
+      [[ -f "$meta" && ! -L "$meta" ]] || continue
+      docker_n=$(( docker_n + 1 ))
+    done
+    shopt -u nullglob
+  fi
+  _doctor_pass_i18n doctor.docker_images n="$docker_n"
 }

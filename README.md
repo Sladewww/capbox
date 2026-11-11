@@ -122,6 +122,18 @@ Recipes reject unknown keys, duplicates and invalid lines. Every value is valida
 
 Package locks bind distro, architecture and the complete installed package/version set. Restoration fails if an exact version is unavailable or verification differs; it never silently substitutes newer versions. They do not preserve a disappearing upstream repository. Keep rootfs images or repository snapshots when long-term reproducibility is required. [Package locks](docs/package-locks.md).
 
+## Docker and OCI image files
+
+CapBox still does not talk to a Docker daemon. `image docker` reads a local `docker save` archive, an OCI layout directory, or an OCI archive, flattens the layers, and starts that tree with the same bubblewrap launcher.
+
+```sh
+capbox image docker import alpine.tar --name alpine
+capbox exec --image alpine -- cat /etc/os-release
+capbox image docker run alpine.tar -- uname -a
+```
+
+Import stores `.capbox/images/docker/<name>/` and does not replace the Alpine or Ubuntu rootfs or change `DISTRO`. `exec --image` swaps the rootfs for one command. `image docker run` also applies the image `Entrypoint`, `Cmd`, `User`, `WorkingDir`, and `Env` as data: arguments go to bwrap, and environment entries are `--setenv` only. Non-Linux images are rejected. [Details](docs/oci-images.md).
+
 ## Upgrade an existing project
 
 First use the **old CLI** to stop services and the daemon, and finish other exec calls. Then invoke the new template's CLI:

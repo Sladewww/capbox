@@ -86,6 +86,7 @@ cmd_exec() {
   local net_override=""
   local uid_override="" gid_override="" user_override=""
   local profile_override=""
+  local image_name=""
   local -a cmd=()
 
   while [[ $# -gt 0 ]]; do
@@ -149,6 +150,14 @@ cmd_exec() {
         profile_override="${1#*=}"
         shift
         ;;
+      --image)
+        image_name="${2:-}"
+        shift 2 || shift
+        ;;
+      --image=*)
+        image_name="${1#*=}"
+        shift
+        ;;
       --root)
         root_mode=1
         cwd="/"
@@ -189,6 +198,14 @@ cmd_exec() {
       compat | untrusted | strict) CAPBOX_SECURITY_PROFILE="$profile_override" ;;
       *) i18n_die 2 sandbox.exec_profile_must_compat_untrusted_strict_got profile_override="$profile_override" ;;
     esac
+  fi
+
+  # --image 只替换这一次的 rootfs，不改 DISTRO / config.env，也不能套进已启动的守护容器。
+  # 放在 --user / --cwd 之前，让 passwd 和工作目录都按该镜像解释。
+  if [[ -n "$image_name" ]]; then
+    (( use_daemon == 1 )) && i18n_die 2 oci.exec_image_daemon
+    _image_docker_use_rootfs "$image_name" || return $?
+    rootfs_ready_at "$CAPBOX_ROOTFS" || i18n_die 4 oci.not_rootfs path="$CAPBOX_ROOTFS"
   fi
 
   # --user / --uid / --gid：覆盖容器内身份

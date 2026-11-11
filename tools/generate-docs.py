@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
                  '本文件固定以 `CAPBOX_LANG=zh` 生成，不随 locale 切换'
                  '（仓库文档政策：README.md 英文，README.zh-CN.md 与 docs/ 中文）。\n')]
     for command in [('--help',), ('init', '--help'), ('upgrade', '--help'),
-                    ('recipe', '--help'), ('image', '--help'), ('service', '--help'),
+                    ('recipe', '--help'), ('image', '--help'), ('image', 'docker', '--help'), ('service', '--help'),
                     ('task', '--help'), ('task', 'start', '--help'),
                     ('policy', '--help'), ('setup', '--help'), ('bundle', '--help'), ('mcp', '--help'),
                     ('audit', '--help'), ('audit', 'report', '--help'), ('pkg', '--help')]:

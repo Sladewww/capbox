@@ -122,6 +122,18 @@ capbox recipe apply --locked /path/to/package.lock capbox.recipe
 
 包锁记录发行版、架构和完整已安装版本集合。精确版本不可用或恢复后集合不符时失败，不替换成其它版本。长期复现还需要保留 rootfs 镜像或软件源快照。[包锁说明](docs/package-locks.md)。
 
+## Docker / OCI 镜像文件
+
+CapBox 仍然不连接 Docker daemon。`image docker` 读取本机的 `docker save` 归档、OCI layout 目录或 OCI archive，展开层后用原来的 bubblewrap 启动。
+
+```sh
+capbox image docker import alpine.tar --name alpine
+capbox exec --image alpine -- cat /etc/os-release
+capbox image docker run alpine.tar -- uname -a
+```
+
+导入位置是 `.capbox/images/docker/<name>/`。不替换 Alpine/Ubuntu rootfs，也不改 `DISTRO`。`exec --image` 只更换这一次命令的 rootfs。`image docker run` 还会把 `Entrypoint`、`Cmd`、`User`、`WorkingDir`、`Env` 当数据使用：参数交给 bwrap，环境变量只走 `--setenv`。非 Linux 镜像会拒绝。[说明](docs/oci-images.md)。
+
 ## 更新已有项目
 
 先用旧 CLI 停止全部 service、daemon 和其它 exec。再从新模板调用：

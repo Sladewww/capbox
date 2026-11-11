@@ -114,6 +114,15 @@ build_bwrap_args() {
   a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
   a+=(--setenv TERM "${TERM:-xterm-256color}")
   a+=(--setenv LANG "${LANG:-C.UTF-8}")
+  # docker/OCI 镜像的 Env 只在 image docker run 设置 CAPBOX_OCI_ENV_FILE 时注入。
+  # 值来自 meta.json，经 --setenv 进入 guest，不 export 到宿主 shell。
+  if [[ -n "${CAPBOX_OCI_ENV_FILE:-}" ]]; then
+    if ! declare -F _oci_append_image_env >/dev/null 2>&1; then
+      i18n_err oci.env_module_missing
+      return 1
+    fi
+    _oci_append_image_env a "$CAPBOX_OCI_ENV_FILE" || return $?
+  fi
 
   # 宿主凭证代理：此处只有占位符（真实密钥留在宿主 inject map）。
   if declare -F _credentials_append_bwrap_args >/dev/null 2>&1; then
