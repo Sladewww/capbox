@@ -62,7 +62,9 @@ build_bwrap_args() {
   fi
 
   # CA 证书：rootfs 内没有就借用宿主的（坑 7）
-  if _rootfs_lacks_ca && [[ -d /etc/ssl/certs ]]; then
+  # RHEL/CentOS 系 /etc/ssl/certs 常是指向 /etc/pki/tls/certs 的符号链接，
+  # bwrap 不允许挂载到符号链接目标；这类镜像自带 ca-bundle.crt，跳过宿主 CA bind。
+  if _rootfs_lacks_ca && [[ -d /etc/ssl/certs ]] && [[ ! -L "$CAPBOX_ROOTFS/etc/ssl/certs" ]]; then
     mkdir -p "$CAPBOX_ROOTFS/etc/ssl/certs" 2>/dev/null || true
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi

@@ -280,7 +280,9 @@ def open_tar_blob(blob) -> tarfile.TarFile:
     magic = blob.read(4)
     blob.seek(0)
     if magic.startswith(GZIP_MAGIC):
-        return tarfile.open(fileobj=gzip.GzipFile(fileobj=blob), mode='r|')
+        # 不显式给 mode 时 GzipFile 会按 fileobj.mode 推断；
+        # SpooledTemporaryFile 的 w+b 会被误判成写模式（EBADF）。
+        return tarfile.open(fileobj=gzip.GzipFile(fileobj=blob, mode='rb'), mode='r|')
     if magic == ZSTD_MAGIC:
         plain = zstd_decompress(blob)
         return tarfile.open(fileobj=plain, mode='r:')
@@ -596,6 +598,15 @@ def _annotate(image: dict, desc: dict) -> dict:
     return image
 
 
+def _is_attestation(desc: dict) -> bool:
+    """跳过 os/architecture 为 unknown 的 attestation / provenance 清单。"""
+    plat = desc.get('platform') or {}
+    if not isinstance(plat, dict):
+        return False
+    return (str(plat.get('os') or '').lower() == 'unknown'
+            or str(plat.get('architecture') or '').lower() == 'unknown')
+
+
 def _oci_images(archive: Archive) -> list[dict]:
     index = _json_bytes(archive.read_named('index.json'), 'index.json')
     if not isinstance(index, dict):
@@ -614,8 +625,10 @@ def _oci_images(archive: Archive) -> list[dict]:
             if not isinstance(nested, dict):
                 raise OciError('oci.not_an_image', path='index')
             for child in nested.get('manifests') or []:
-                if isinstance(child, dict):
+                if isinstance(child, dict) and not _is_attestation(child):
                     images.append(_annotate(_oci_manifest_from(archive, child), child))
+            continue
+        if _is_attestation(desc):
             continue
         images.append(_annotate(_oci_manifest_from(archive, desc), desc))
     return images
@@ -716,9 +729,34 @@ class RootfsWriter:
         self.bytes = 0
         self.skipped_special = 0
         self.root_fd = os.open(dest, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        # 目录最终权限按镜像原样保留；写入期间属主必须有 w 位
+        # （例：CentOS 7 的 /root 是 0550，同层还要写 .bash_logout）。
+        self._perm_fixes: list[tuple[tuple[str, ...], int]] = []
 
     def close(self) -> None:
+        # 从深到浅恢复，避免父目录先变回只读后无法处理子目录。
+        for parts, mode in sorted(self._perm_fixes, key=lambda item: len(item[0]), reverse=True):
+            fd = self.root_fd
+            opened: list[int] = []
+            try:
+                for part in parts[:-1]:
+                    fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    opened.append(fd)
+                os.chmod(parts[-1], mode, dir_fd=fd)
+            except OSError:
+                pass
+            finally:
+                for item in reversed(opened):
+                    os.close(item)
         os.close(self.root_fd)
+
+    def _ensure_writable(self, fd: int, parts: list[str]) -> None:
+        st = os.fstat(fd)
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & 0o200:
+            return
+        os.fchmod(fd, mode | 0o200)
+        self._perm_fixes.append((tuple(parts), mode))
 
     def _open_dir(self, parts: list[str], create: bool, depth: int = 0) -> int:
         if depth > 16:
@@ -745,6 +783,7 @@ class RootfsWriter:
                         target = _guest_parts(walked, link)
                         return self._open_dir(target + parts[len(walked) + 1:], create, depth + 1)
                     raise OciError('oci.unsafe_path', path='/'.join(walked + [part])) from exc
+                self._ensure_writable(nxt, walked + [part])
                 os.close(fd)
                 fd = nxt
                 walked.append(part)

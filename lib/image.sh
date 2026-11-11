@@ -312,6 +312,8 @@ _image_docker_import() {
       rm -rf --one-file-system -- "$stage"
       i18n_die 1 oci.stage_failed
     fi
+    # 导入镜像可能含无 w 位的目录，宿主侧删除前先补属主写权限。
+    chmod -R u+w -- "$bak" 2>/dev/null || true
     rm -rf --one-file-system -- "$bak"
   elif ! mv -- "$stage" "$dest"; then
     rm -rf --one-file-system -- "$stage"
@@ -633,6 +635,9 @@ print("%s\t%s/%s\t%s" % (sys.argv[2], m.get("os") or "?", m.get("architecture") 
       base="$(realpath -- "$(_image_docker_dir)")" || i18n_die 1 oci.missing name="$name"
       real="$(realpath -- "$dest")" || i18n_die 1 oci.busy_symlink path="$dest"
       [[ "$real" == "$base"/* ]] || i18n_die 1 oci.busy_symlink path="$dest"
+      # 镜像层可能含无 w 位的目录（CentOS 7 的 /usr/lib64 0555、/root 0550），
+      # 宿主侧删除前先补属主写权限，否则 rm 报「权限不够」。
+      chmod -R u+w -- "$real" 2>/dev/null || true
       rm -rf --one-file-system -- "$real"
       i18n_info oci.removed name="$name"
       return 0
