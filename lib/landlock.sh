@@ -204,10 +204,12 @@ _landlock_apply_argv() {
   local guest_rules=/run/capbox-landlock.rules
   local -a head=("${_ll_cmd[@]:0:dd}")
   local -a tail=("${_ll_cmd[@]:dd+1}")
+  # bwrap 会 --clearenv；把已规范的 CAPBOX_UI_LANG 传给 guest 里的 helper。
   _ll_cmd=(
     "${head[@]}"
     --ro-bind "$helper" "$guest_helper"
     --ro-bind "$rules" "$guest_rules"
+    --setenv CAPBOX_UI_LANG "${CAPBOX_UI_LANG:-en}"
     --
     "$guest_helper" --rules "$guest_rules" --
     "${tail[@]}"

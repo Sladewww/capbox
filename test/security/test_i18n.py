@@ -1427,5 +1427,200 @@ class EmptyListAndProcessCountI18nTests(unittest.TestCase):
         self.assertNotIn('个进程', en_f.stdout)
 
 
+class LandlockHelperI18nTests(unittest.TestCase):
+    """C landlock helper uses static zh/en sets keyed off CAPBOX_UI_LANG."""
+
+    SRC = REPO / 'lib/guest/capbox-landlock.c'
+    LANDLOCK_SH = REPO / 'lib/landlock.sh'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory(prefix='capbox-landlock-i18n-')
+        cls.helper = Path(cls.tmpdir.name) / 'capbox-landlock'
+        built = subprocess.run(
+            ['gcc', '-O2', '-o', str(cls.helper), str(cls.SRC)],
+            capture_output=True, text=True, timeout=30)
+        if built.returncode != 0:
+            cls.tmpdir.cleanup()
+            raise unittest.SkipTest(
+                f'cannot compile landlock helper: {built.stderr}')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    def run_helper(self, args, ui_lang, rules_text=None):
+        env = base_env()
+        if ui_lang is None:
+            env.pop('CAPBOX_UI_LANG', None)
+        else:
+            env['CAPBOX_UI_LANG'] = ui_lang
+        work = Path(self.tmpdir.name)
+        cmd = [str(self.helper), *args]
+        if rules_text is not None:
+            rules = work / 'rules'
+            rules.write_text(rules_text)
+            cmd = [str(rules) if arg == 'RULES' else arg for arg in cmd]
+        return subprocess.run(
+            cmd, env=env, capture_output=True, text=True, timeout=20,
+            cwd=str(work))
+
+    def test_source_has_static_sets_and_no_catalog_parse(self):
+        src = self.SRC.read_text()
+        self.assertIn('getenv("CAPBOX_UI_LANG")', src)
+        self.assertIn('拒绝规则路径', src)
+        self.assertIn('rejected rule path', src)
+        self.assertIn('内核不支持 Landlock', src)
+        self.assertIn('kernel does not support Landlock', src)
+        self.assertNotIn('.msg', src)
+        self.assertNotIn('i18n', src)
+        self.assertNotIn('"--messages"', src)
+        self.assertNotRegex(src, r'strcmp\s*\([^)]*--messages')
+        lowered = src.lower()
+        self.assertNotIn('catalog', lowered)
+        self.assertNotRegex(src, r'\bload_msg\b|\bmsgfile\b')
+
+    def test_host_landlock_sh_passes_ui_lang_and_keeps_catalog_errors(self):
+        text = self.LANDLOCK_SH.read_text()
+        self.assertIn('--setenv CAPBOX_UI_LANG "${CAPBOX_UI_LANG:-en}"', text)
+        self.assertIn('i18n_err landlock.missing_lib_guest_capbox_landlock_c', text)
+        self.assertNotIn('--messages', text)
+
+    def test_usage_stays_english_in_both_languages(self):
+        usage = 'usage: capbox-landlock --rules FILE -- CMD [ARGS...]'
+        for lang in ('zh', 'en', None, '', 'C', 'zh_TW', 'zh_CN'):
+            result = self.run_helper(['--nope'], lang)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn(usage, result.stderr)
+            self.assertNotIn('用法', result.stderr)
+
+    def test_rules_flag_and_empty_file_follow_ui_lang(self):
+        zh = self.run_helper(['--rules'], 'zh')
+        en = self.run_helper(['--rules'], 'en')
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('capbox-landlock: --rules 缺少路径', zh.stderr)
+        self.assertIn('capbox-landlock: --rules is missing a path', en.stderr)
+        self.assertNotIn('缺少路径', en.stderr)
+        self.assertNotIn('missing a path', zh.stderr)
+
+        zh = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'zh', '')
+        en = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'en', '')
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn('capbox-landlock: 规则为空', zh.stderr)
+        self.assertIn('capbox-landlock: rules are empty', en.stderr)
+        self.assertNotIn('规则为空', en.stderr)
+
+    def test_rule_parse_errors_follow_ui_lang(self):
+        cases = [
+            ('nopath\n', '规则格式必须是 ro|rw 绝对路径',
+             'rule format must be ro|rw absolute path'),
+            ('xx /tmp\n', '未知规则类型 xx', 'unknown rule type xx'),
+            ('ro relative\n', '拒绝规则路径 relative', 'rejected rule path relative'),
+            ('ro /tmp/../etc\n', '拒绝规则路径 /tmp/../etc',
+             'rejected rule path /tmp/../etc'),
+        ]
+        for rules, zh_need, en_need in cases:
+            zh = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'zh', rules)
+            en = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'en', rules)
+            self.assertEqual(zh.returncode, 1, zh.stderr)
+            self.assertEqual(en.returncode, 1, en.stderr)
+            self.assertIn('capbox-landlock: ' + zh_need, zh.stderr)
+            self.assertIn('capbox-landlock: ' + en_need, en.stderr)
+            self.assertNotIn(zh_need, en.stderr)
+
+        missing = Path(self.tmpdir.name) / 'missing-rules'
+        zh = self.run_helper(['--rules', str(missing), '--', '/bin/true'], 'zh')
+        en = self.run_helper(['--rules', str(missing), '--', '/bin/true'], 'en')
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn(f'capbox-landlock: 打不开规则 {missing}:', zh.stderr)
+        self.assertIn(f'capbox-landlock: cannot open rules {missing}:', en.stderr)
+        self.assertNotIn('打不开规则', en.stderr)
+
+        zh = self.run_helper(
+            ['--rules', 'RULES', '--', '/bin/true'], 'zh',
+            'ro /no-such-capbox-ll-path\n')
+        en = self.run_helper(
+            ['--rules', 'RULES', '--', '/bin/true'], 'en',
+            'ro /no-such-capbox-ll-path\n')
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn('capbox-landlock: 打不开 /no-such-capbox-ll-path:', zh.stderr)
+        self.assertIn('capbox-landlock: cannot open /no-such-capbox-ll-path:',
+                      en.stderr)
+        self.assertNotIn('打不开 /no-such', en.stderr)
+
+        long_line = 'ro /' + ('a' * 9000) + '\n'
+        zh = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'zh', long_line)
+        en = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'en', long_line)
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn('capbox-landlock: 规则行过长', zh.stderr)
+        self.assertIn('capbox-landlock: rule line too long', en.stderr)
+        self.assertNotIn('规则行过长', en.stderr)
+
+        too_many = ''.join('rw /tmp\n' for _ in range(4097))
+        zh = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'zh', too_many)
+        en = self.run_helper(['--rules', 'RULES', '--', '/bin/true'], 'en', too_many)
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn('capbox-landlock: 规则过多', zh.stderr)
+        self.assertIn('capbox-landlock: too many rules', en.stderr)
+        self.assertNotIn('规则过多', en.stderr)
+
+    def test_exec_failure_follows_ui_lang(self):
+        missing = '/no-such-capbox-landlock-cmd'
+        zh = self.run_helper(['--rules', 'RULES', '--', missing], 'zh', 'rw /tmp\n')
+        en = self.run_helper(['--rules', 'RULES', '--', missing], 'en', 'rw /tmp\n')
+        self.assertEqual(zh.returncode, 127, zh.stderr)
+        self.assertEqual(en.returncode, 127, en.stderr)
+        self.assertIn(f'capbox-landlock: exec {missing} 失败:', zh.stderr)
+        self.assertIn(f'capbox-landlock: exec {missing} failed:', en.stderr)
+        self.assertNotIn('失败:', en.stderr)
+
+    def test_only_exact_zh_selects_chinese(self):
+        zh = self.run_helper(['--rules'], 'zh')
+        self.assertIn('缺少路径', zh.stderr)
+        for lang in (None, '', 'en', 'C', 'C.UTF-8', 'en_US', 'zh_TW', 'zh_HK',
+                     'zh_CN', 'zh.UTF-8'):
+            result = self.run_helper(['--rules'], lang)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn('--rules is missing a path', result.stderr)
+            self.assertNotIn('缺少路径', result.stderr)
+
+    def test_apply_argv_injects_normalized_ui_lang(self):
+        for lang in ('zh', 'en'):
+            d = Path(self.tmpdir.name) / f'apply-{lang}'
+            d.mkdir(parents=True, exist_ok=True)
+            body = (
+                f'set -euo pipefail; '
+                f'export CAPBOX_LANG={lang}; '
+                f'export CAPBOX_DIR="{d}/cb"; '
+                f'export CAPBOX_WORKSPACE="{d}/ws"; '
+                f'export CAPBOX_LANDLOCK=on; '
+                f'mkdir -p "$CAPBOX_DIR" "$CAPBOX_WORKSPACE"; '
+                f'source "{I18N_SH}"; '
+                f'source "{REPO}/lib/common.sh"; '
+                f'source "{REPO}/lib/landlock.sh"; '
+                'cmd=(/usr/sbin/bwrap --bind / / -- /bin/true); '
+                '_landlock_apply_argv cmd; '
+                'printf "UI=%s\\n" "$CAPBOX_UI_LANG"; '
+                'i=0; while (( i < ${#cmd[@]} )); do '
+                '  if [[ "${cmd[$i]}" == "--setenv" '
+                '        && "${cmd[$((i+1))]}" == "CAPBOX_UI_LANG" ]]; then '
+                '    printf "SET=%s\\n" "${cmd[$((i+2))]}"; '
+                '  fi; '
+                '  i=$((i+1)); '
+                'done'
+            )
+            result = run_bash(body, env={'CAPBOX_LANG': lang})
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn(f'UI={lang}', result.stdout)
+            self.assertIn(f'SET={lang}', result.stdout)
+
+
+
 if __name__ == '__main__':
     unittest.main()
