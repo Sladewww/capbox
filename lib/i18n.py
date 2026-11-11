@@ -247,3 +247,8 @@ class I18nArgumentParser(argparse.ArgumentParser):
     def format_usage(self):
         with argparse_i18n_locale():
             return super().format_usage()
+
+    def error(self, message):
+        # parse 之后调用 ap.error() 时，也走同一套 argparse 文案。
+        with argparse_i18n_locale():
+            return super().error(message)
