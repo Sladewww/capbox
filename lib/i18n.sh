@@ -163,6 +163,19 @@ i18n_fmt() {
   printf '%s' "$text"
 }
 
+# Convert {name} placeholders into POSIX printf %s, in appearance order.
+# For host-assembled guest / child scripts and the Landlock helper messages file.
+# Existing % in the catalog value is escaped first so it stays literal.
+i18n_printf_fmt() {
+  local text
+  text="$(i18n_get "$1")"
+  text="${text//%/%%}"
+  while [[ "$text" =~ \{[A-Za-z0-9_]+\} ]]; do
+    text="${text/${BASH_REMATCH[0]}/%s}"
+  done
+  printf '%s' "$text"
+}
+
 _capbox_i18n_apply_prefixes() {
   local v
   v="$(i18n_get log.prefix.info)"

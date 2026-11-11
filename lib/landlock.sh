@@ -155,6 +155,42 @@ _landlock_write_rules() {
   printf '%s' "$file"
 }
 
+# 由宿主写入已翻译的 printf 格式；helper 在 guest 内只读此文件，不查目录。
+_landlock_write_messages() {
+  local dir file
+  dir="$(_landlock_private_dir)" || return 5
+  file="$dir/capbox-landlock.msg"
+  if [[ -L "$file" ]]; then
+    i18n_err landlock.unable_create_landlock_messages_file
+    return 5
+  fi
+  {
+    printf 'reject_path=%s\n' "$(i18n_printf_fmt landlock.helper_reject_path)"
+    printf 'open_failed=%s\n' "$(i18n_printf_fmt landlock.helper_open_failed)"
+    printf 'no_access_bits=%s\n' "$(i18n_printf_fmt landlock.helper_no_access_bits)"
+    printf 'add_rule_failed=%s\n' "$(i18n_printf_fmt landlock.helper_add_rule_failed)"
+    printf 'open_rules_failed=%s\n' "$(i18n_printf_fmt landlock.helper_open_rules_failed)"
+    printf 'fdopen_rules_failed=%s\n' "$(i18n_printf_fmt landlock.helper_fdopen_rules_failed)"
+    printf 'rule_line_too_long=%s\n' "$(i18n_printf_fmt landlock.helper_rule_line_too_long)"
+    printf 'rule_format=%s\n' "$(i18n_printf_fmt landlock.helper_rule_format)"
+    printf 'unknown_rule_type=%s\n' "$(i18n_printf_fmt landlock.helper_unknown_rule_type)"
+    printf 'too_many_rules=%s\n' "$(i18n_printf_fmt landlock.helper_too_many_rules)"
+    printf 'rules_empty=%s\n' "$(i18n_printf_fmt landlock.helper_rules_empty)"
+    printf 'kernel_unsupported=%s\n' "$(i18n_printf_fmt landlock.helper_kernel_unsupported)"
+    printf 'kernel_unsupported_lsm=%s\n' "$(i18n_printf_fmt landlock.helper_kernel_unsupported_lsm)"
+    printf 'rules_missing_path=%s\n' "$(i18n_printf_fmt landlock.helper_rules_missing_path)"
+    printf 'create_ruleset_failed=%s\n' "$(i18n_printf_fmt landlock.helper_create_ruleset_failed)"
+    printf 'no_new_privs_failed=%s\n' "$(i18n_printf_fmt landlock.helper_no_new_privs_failed)"
+    printf 'restrict_self_failed=%s\n' "$(i18n_printf_fmt landlock.helper_restrict_self_failed)"
+    printf 'exec_failed=%s\n' "$(i18n_printf_fmt landlock.helper_exec_failed)"
+  } >"$file" || {
+    rm -f "$file"
+    i18n_err landlock.failed_write_landlock_messages
+    return 5
+  }
+  printf '%s' "$file"
+}
+
 # 在 bwrap 的命令分隔符 `--` 之前插入 helper 的只读绑定，并把容器命令改成 helper 前缀。
 # 用法: _landlock_apply_argv ARRAY_NAME
 _landlock_apply_argv() {
@@ -168,9 +204,10 @@ _landlock_apply_argv() {
     return "$en"
   fi
 
-  local helper rules bwrap_i=-1 dd=-1 i
+  local helper rules messages bwrap_i=-1 dd=-1 i
   helper="$(_landlock_ensure_helper)" || return $?
   rules="$(_landlock_write_rules)" || return $?
+  messages="$(_landlock_write_messages)" || return $?
 
   for (( i = 0; i < ${#_ll_cmd[@]}; i++ )); do
     if [[ "${_ll_cmd[$i]}" == */bwrap || "${_ll_cmd[$i]}" == "bwrap" || "${_ll_cmd[$i]}" == "${CAPBOX_BWRAP:-}" ]]; then
@@ -202,14 +239,16 @@ _landlock_apply_argv() {
   # oneshot 的 /run 是 tmpfs。daemon/service 会先把 guest-run 绑到 /run，再走到这里。
   local guest_helper=/run/capbox-landlock
   local guest_rules=/run/capbox-landlock.rules
+  local guest_messages=/run/capbox-landlock.msg
   local -a head=("${_ll_cmd[@]:0:dd}")
   local -a tail=("${_ll_cmd[@]:dd+1}")
   _ll_cmd=(
     "${head[@]}"
     --ro-bind "$helper" "$guest_helper"
     --ro-bind "$rules" "$guest_rules"
+    --ro-bind "$messages" "$guest_messages"
     --
-    "$guest_helper" --rules "$guest_rules" --
+    "$guest_helper" --rules "$guest_rules" --messages "$guest_messages" --
     "${tail[@]}"
   )
   log_debug "Landlock 前缀已加上 helper=$helper"

@@ -1290,3 +1290,335 @@ class LeftoverSweepTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RemainingUserVisibleI18nTests(unittest.TestCase):
+    """Guest bootstrap, landlock helper, supervisor/seccomp, and empty-list strings."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-')
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = Path(self.tmp.name) / 'ws'
+        self.ws.mkdir()
+
+    def run_cli(self, *args, env=None):
+        merged = base_env()
+        if env:
+            merged.update(env)
+        return subprocess.run(
+            [str(CLI), '--root', str(self.ws), *args],
+            env=merged, capture_output=True, text=True, timeout=30)
+
+    def test_catalog_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['bootstrap.complete'], '引导完成')
+        self.assertEqual(en['bootstrap.complete'], 'bootstrap complete')
+        self.assertEqual(zh['bootstrap.warn_hint'], '提示:')
+        self.assertEqual(en['bootstrap.warn_hint'], 'hint:')
+        self.assertEqual(zh['bootstrap.banner'], '发行版: {distro}；uid={uid}；版本: {version}')
+        self.assertEqual(en['bootstrap.banner'], 'distro: {distro}; uid={uid}; version: {version}')
+        self.assertEqual(zh['bootstrap.cannot_create_dir'], '无法创建目录 {d}')
+        self.assertNotIn('无法创建目录', en['bootstrap.cannot_create_dir'])
+        self.assertIn('capbox pkg install ca-certificates', zh['bootstrap.install_ca_certs'])
+        self.assertIn('capbox pkg install ca-certificates', en['bootstrap.install_ca_certs'])
+        self.assertEqual(zh['landlock.helper_rules_empty'], 'capbox-landlock: 规则为空')
+        self.assertEqual(en['landlock.helper_rules_empty'], 'capbox-landlock: rules are empty')
+        self.assertEqual(zh['landlock.helper_kernel_unsupported'],
+                         'capbox-landlock: 内核不支持 Landlock')
+        self.assertIn('does not support Landlock', en['landlock.helper_kernel_unsupported'])
+        self.assertNotIn('内核不支持', en['landlock.helper_kernel_unsupported'])
+        self.assertIn('--rules', zh['landlock.helper_rules_missing_path'])
+        self.assertIn('--rules', en['landlock.helper_rules_missing_path'])
+        self.assertIn('ro|rw', zh['landlock.helper_rule_format'])
+        self.assertIn('ro|rw', en['landlock.helper_rule_format'])
+        self.assertEqual(zh['supervisor.missing_child_argv'], 'supervisor: 缺少子进程 argv')
+        self.assertEqual(en['supervisor.missing_child_argv'], 'supervisor: missing child argv')
+        self.assertEqual(zh['supervisor.ready'], 'ready: 就绪')
+        self.assertEqual(en['supervisor.ready'], 'ready: ready')
+        self.assertIn('SIGKILL', zh['supervisor.stop_timeout_sigkill'])
+        self.assertIn('SIGKILL', en['supervisor.stop_timeout_sigkill'])
+        self.assertIn('{seconds}', zh['supervisor.stop_timeout_sigkill'])
+        self.assertIn('{seconds}', en['supervisor.stop_timeout_sigkill'])
+        self.assertEqual(zh['seccomp.compat_needs_extra_restriction'],
+                         'compat 需要显式附加限制')
+        self.assertIn('compat requires', en['seccomp.compat_needs_extra_restriction'])
+        self.assertIn('compat', zh['seccomp.compat_needs_extra_restriction'])
+        self.assertEqual(zh['seccomp.lib_not_found'], '未找到 libseccomp（请安装 libseccomp）')
+        self.assertIn('libseccomp', en['seccomp.lib_not_found'])
+        self.assertNotIn('未找到', en['seccomp.lib_not_found'])
+        self.assertEqual(zh['fs.no_snapshots'], '(无快照)')
+        self.assertEqual(en['fs.no_snapshots'], '(no snapshots)')
+        self.assertEqual(zh['image.no_exported_images'], '(无导出镜像)')
+        self.assertEqual(en['image.no_exported_images'], '(no exported images)')
+        self.assertEqual(zh['image.no_package_lock'], '(无 package.lock；先 image lock save)')
+        self.assertIn('package.lock', en['image.no_package_lock'])
+        self.assertIn('image lock save', en['image.no_package_lock'])
+        self.assertNotIn('无 package.lock', en['image.no_package_lock'])
+        self.assertEqual(zh['svc.no_service_dir'], '(无服务定义目录 {d})')
+        self.assertEqual(en['svc.no_service_dir'], '(no service definition directory {d})')
+        self.assertEqual(zh['svc.no_service_defs'], '(尚无 *.env 服务定义)')
+        self.assertIn('*.env', en['svc.no_service_defs'])
+        self.assertNotIn('尚无', en['svc.no_service_defs'])
+
+    def test_hardcoded_literals_are_gone_and_log_debug_left_untouched(self):
+        needles = {
+            'lib/fsguard.sh': ('(无快照)',),
+            'lib/image.sh': ('(无导出镜像)', '(无 package.lock；先 image lock save)'),
+            'lib/service.sh': ('(无服务定义目录', '(尚无 *.env 服务定义)'),
+            'lib/service-supervisor.py': (
+                'ready: 就绪',
+                'supervisor: 缺少子进程 argv',
+                '超过最大重启次数',
+            ),
+            'lib/seccomp-gen.py': (
+                '未找到 libseccomp（请安装 libseccomp）',
+                'compat 需要显式附加限制',
+                'help="BPF 输出路径"',
+            ),
+            'lib/guest/capbox-landlock.c': (
+                '拒绝规则路径',
+                '内核不支持 Landlock',
+                '规则为空',
+            ),
+        }
+        for rel, items in needles.items():
+            text = (REPO / rel).read_text()
+            for needle in items:
+                self.assertNotIn(needle, text, f'{rel} still hardcodes {needle!r}')
+        bootstrap = (REPO / 'lib/guest/bootstrap.sh').read_text()
+        for line in bootstrap.splitlines():
+            if line.lstrip().startswith('#'):
+                continue
+            self.assertNotIn('i18n_', line,
+                             f'bootstrap.sh must not call i18n on a non-comment line: {line}')
+            self.assertNotRegex(line, r'[\u4e00-\u9fff]',
+                                f'bootstrap.sh still has Chinese in a non-comment line: {line}')
+        self.assertIn('CAPBOX_BOOTSTRAP_COMPLETE', bootstrap)
+        landlock = (REPO / 'lib/landlock.sh').read_text()
+        self.assertIn('log_debug "Landlock 前缀已加上 helper=$helper"', landlock)
+        self.assertIn('_landlock_write_messages', landlock)
+        self.assertIn('--messages', landlock)
+        rootfs = (REPO / 'lib/rootfs.sh').read_text()
+        self.assertIn('log_debug "无 bootstrap.sh，跳过首次引导"', rootfs)
+        self.assertIn('_bootstrap_guest_command', rootfs)
+        self.assertIn("$(_shq", (REPO / 'lib/rootfs.sh').read_text())
+
+    def test_host_assembled_bootstrap_command_follows_lang(self):
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                'CAPBOX_VERSION=0.4.2; '
+                f'source "{I18N_SH}"; '
+                '_shq() { local s="${1-}"; s="${s//\'/\'\\\\\'\'}"; printf "\'%s\'" "$s"; }; '
+                f'source "{REPO}/lib/rootfs.sh"; '
+                '_bootstrap_guest_command /workspace/.capbox/lib/guest/bootstrap.sh'
+            )
+            return run_bash(script)
+
+        zh = run('zh')
+        self.assertEqual(zh.returncode, 0, zh.stderr + zh.stdout)
+        self.assertIn("CAPBOX_BOOTSTRAP_COMPLETE='引导完成'", zh.stdout)
+        self.assertIn("CAPBOX_BOOTSTRAP_WARN_PREFIX='提示:'", zh.stdout)
+        self.assertIn('发行版: %s', zh.stdout)
+        self.assertNotIn('i18n_', zh.stdout)
+        self.assertIn("sh '/workspace/.capbox/lib/guest/bootstrap.sh'", zh.stdout)
+        self.assertNotIn('bootstrap complete', zh.stdout)
+
+        en = run('en')
+        self.assertEqual(en.returncode, 0, en.stderr + en.stdout)
+        self.assertIn("CAPBOX_BOOTSTRAP_COMPLETE='bootstrap complete'", en.stdout)
+        self.assertIn("CAPBOX_BOOTSTRAP_WARN_PREFIX='hint:'", en.stdout)
+        self.assertIn('distro: %s', en.stdout)
+        self.assertNotIn('i18n_', en.stdout)
+        self.assertNotIn('引导完成', en.stdout)
+        self.assertNotIn('发行版:', en.stdout)
+
+    def test_bootstrap_injected_messages_render_in_posix_sh(self):
+        def run(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                'CAPBOX_VERSION=0.4.2; '
+                f'source "{I18N_SH}"; '
+                '_shq() { local s="${1-}"; s="${s//\'/\'\\\\\'\'}"; printf "\'%s\'" "$s"; }; '
+                f'source "{REPO}/lib/rootfs.sh"; '
+                'cmd="$(_bootstrap_guest_command /tmp/does-not-run.sh)"; '
+                'assign="${cmd% sh *}"; '
+                'eval "$assign"; '
+                'printf "%s\\n" "$CAPBOX_BOOTSTRAP_COMPLETE"; '
+                'printf "$CAPBOX_BOOTSTRAP_BANNER\\n" alpine 0 0.4.2'
+            )
+            return run_bash(script)
+
+        zh = run('zh')
+        self.assertEqual(zh.returncode, 0, zh.stderr + zh.stdout)
+        self.assertIn('引导完成', zh.stdout)
+        self.assertIn('发行版: alpine；uid=0；版本: 0.4.2', zh.stdout)
+        self.assertNotIn('bootstrap complete', zh.stdout)
+
+        en = run('en')
+        self.assertEqual(en.returncode, 0, en.stderr + en.stdout)
+        self.assertIn('bootstrap complete', en.stdout)
+        self.assertIn('distro: alpine; uid=0; version: 0.4.2', en.stdout)
+        self.assertNotIn('引导完成', en.stdout)
+        self.assertNotIn('发行版:', en.stdout)
+
+    def test_empty_list_cli_follows_lang(self):
+        zh = self.run_cli('snapshot', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('snapshot', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无快照)', zh.stdout)
+        self.assertIn('(no snapshots)', en.stdout)
+        self.assertNotIn('无快照', en.stdout)
+        self.assertNotIn('no snapshots', zh.stdout)
+
+        zh = self.run_cli('image', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('image', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无导出镜像)', zh.stdout)
+        self.assertIn('(no exported images)', en.stdout)
+        self.assertNotIn('无导出镜像', en.stdout)
+
+        zh = self.run_cli('image', 'lock', 'show', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('image', 'lock', 'show', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无 package.lock；先 image lock save)', zh.stdout)
+        self.assertIn('package.lock', en.stdout)
+        self.assertIn('image lock save', en.stdout)
+        self.assertNotIn('无 package.lock', en.stdout)
+
+        zh = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无服务定义目录', zh.stdout)
+        self.assertIn('(no service definition directory', en.stdout)
+        self.assertNotIn('无服务定义目录', en.stdout)
+        # Path stays as-is in both languages.
+        self.assertIn(str(self.ws), zh.stdout)
+        self.assertIn(str(self.ws), en.stdout)
+
+        services = self.ws / '.capbox' / 'services'
+        services.mkdir(parents=True, exist_ok=True)
+        zh = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(尚无 *.env 服务定义)', zh.stdout)
+        self.assertIn('(no *.env service definitions yet)', en.stdout)
+        self.assertIn('*.env', zh.stdout)
+        self.assertIn('*.env', en.stdout)
+        self.assertNotIn('尚无', en.stdout)
+
+    def test_supervisor_and_seccomp_follow_lang(self):
+        log = Path(self.tmp.name) / 'svc.log'
+        pid = Path(self.tmp.name) / 'svc.pid'
+        tool = REPO / 'lib/service-supervisor.py'
+        zh = subprocess.run(
+            [sys.executable, str(tool), '--name', 'demo', '--log', str(log), '--pidfile', str(pid)],
+            env={**base_env(), 'CAPBOX_LANG': 'zh'},
+            capture_output=True, text=True, timeout=10)
+        en = subprocess.run(
+            [sys.executable, str(tool), '--name', 'demo', '--log', str(log), '--pidfile', str(pid)],
+            env={**base_env(), 'CAPBOX_LANG': 'en'},
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('supervisor: 缺少子进程 argv', zh.stderr)
+        self.assertIn('supervisor: missing child argv', en.stderr)
+        self.assertNotIn('缺少子进程', en.stderr)
+        self.assertNotIn('missing child argv', zh.stderr)
+
+        gen = REPO / 'lib/seccomp-gen.py'
+        zh = subprocess.run(
+            [sys.executable, str(gen), '--profile', 'compat', '--out', str(Path(self.tmp.name) / 'x.bpf')],
+            env={**base_env(), 'CAPBOX_LANG': 'zh'},
+            capture_output=True, text=True, timeout=10)
+        en = subprocess.run(
+            [sys.executable, str(gen), '--profile', 'compat', '--out', str(Path(self.tmp.name) / 'x.bpf')],
+            env={**base_env(), 'CAPBOX_LANG': 'en'},
+            capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(zh.returncode, 0)
+        self.assertNotEqual(en.returncode, 0)
+        self.assertIn('compat 需要显式附加限制', zh.stderr)
+        self.assertIn('compat requires an explicit extra restriction', en.stderr)
+        self.assertNotIn('需要显式附加限制', en.stderr)
+
+        zh_help = subprocess.run(
+            [sys.executable, str(gen), '--help'],
+            env={**base_env(), 'CAPBOX_LANG': 'zh'},
+            capture_output=True, text=True, timeout=10)
+        en_help = subprocess.run(
+            [sys.executable, str(gen), '--help'],
+            env={**base_env(), 'CAPBOX_LANG': 'en'},
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh_help.returncode, 0, zh_help.stderr)
+        self.assertEqual(en_help.returncode, 0, en_help.stderr)
+        self.assertIn('BPF 输出路径', zh_help.stdout)
+        self.assertIn('BPF output path', en_help.stdout)
+        self.assertNotIn('BPF 输出路径', en_help.stdout)
+
+    def test_landlock_messages_file_and_helper_follow_lang(self):
+        def write_msgs(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/landlock.sh"; '
+                f'd="{self.tmp.name}/ll-{lang}"; mkdir -p "$d"; '
+                '_landlock_private_dir() { printf "%s" "' f'{self.tmp.name}/ll-{lang}' '"; }; '
+                'printf "%s\\n" "$(_landlock_write_messages)"'
+            )
+            return run_bash(script)
+
+        zh = write_msgs('zh')
+        en = write_msgs('en')
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        zh_path = Path(zh.stdout.strip())
+        en_path = Path(en.stdout.strip())
+        zh_text = zh_path.read_text()
+        en_text = en_path.read_text()
+        self.assertIn('rules_empty=capbox-landlock: 规则为空', zh_text)
+        self.assertIn('rules_empty=capbox-landlock: rules are empty', en_text)
+        self.assertNotIn('规则为空', en_text)
+        self.assertIn('reject_path=capbox-landlock: 拒绝规则路径 %s', zh_text)
+        self.assertIn('reject_path=capbox-landlock: rejected rule path %s', en_text)
+
+        src = REPO / 'lib/guest/capbox-landlock.c'
+        helper = Path(self.tmp.name) / 'capbox-landlock'
+        compile_err = None
+        for cc in ('gcc', 'cc'):
+            if shutil.which(cc):
+                built = subprocess.run(
+                    [cc, '-static', '-O2', '-o', str(helper), str(src)],
+                    capture_output=True, text=True, timeout=60)
+                if built.returncode == 0:
+                    compile_err = None
+                    break
+                compile_err = built.stderr
+        if not helper.exists():
+            if compile_err:
+                self.skipTest('landlock helper did not compile: ' + compile_err[:400])
+            else:
+                self.skipTest('no gcc/cc to build the landlock helper')
+
+        empty_rules = Path(self.tmp.name) / 'empty.rules'
+        empty_rules.write_text('')
+        zh_run = subprocess.run(
+            [str(helper), '--rules', str(empty_rules), '--messages', str(zh_path), '--', '/bin/true'],
+            capture_output=True, text=True, timeout=10)
+        en_run = subprocess.run(
+            [str(helper), '--rules', str(empty_rules), '--messages', str(en_path), '--', '/bin/true'],
+            capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(zh_run.returncode, 0)
+        self.assertNotEqual(en_run.returncode, 0)
+        self.assertIn('capbox-landlock: 规则为空', zh_run.stderr)
+        self.assertIn('capbox-landlock: rules are empty', en_run.stderr)
+        self.assertNotIn('规则为空', en_run.stderr)
+        fallback = subprocess.run(
+            [str(helper), '--rules', str(empty_rules), '--', '/bin/true'],
+            capture_output=True, text=True, timeout=10)
+        self.assertIn('capbox-landlock: rules are empty', fallback.stderr)
+        self.assertNotIn('规则为空', fallback.stderr)

@@ -20,6 +20,12 @@ import ctypes.util
 import errno
 import os
 import sys
+from pathlib import Path
+
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
 
 # 我们关心的 x86_64 / aarch64 系统调用号。尽量通过 libseccomp 解析。
 _FALLBACK_NR = {
@@ -133,7 +139,7 @@ def _arch() -> str:
 def _load_lib():
     path = ctypes.util.find_library("seccomp")
     if not path:
-        raise SystemExit("未找到 libseccomp（请安装 libseccomp）")
+        raise SystemExit(i18n.t("seccomp.lib_not_found"))
     return ctypes.CDLL(path)
 
 
@@ -154,9 +160,9 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
     if profile == "strict":
         names += STRICT_EXTRA
     elif profile not in ("untrusted", "compat"):
-        raise SystemExit(f"未知 seccomp 配置: {profile}")
+        raise SystemExit(i18n.t("seccomp.unknown_profile", profile=profile))
     if profile == "compat" and not deny_exec_memfd:
-        raise SystemExit("compat 需要显式附加限制")
+        raise SystemExit(i18n.t("seccomp.compat_needs_extra_restriction"))
 
     lib = _load_lib()
     lib.seccomp_init.restype = ctypes.c_void_p
@@ -167,7 +173,7 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
 
     ctx = lib.seccomp_init(SCMP_ACT_ALLOW)
     if not ctx:
-        raise SystemExit("seccomp_init 失败")
+        raise SystemExit(i18n.t("seccomp.init_failed"))
 
     added = 0
     missing = []
@@ -204,28 +210,28 @@ def generate(profile: str, out_path: str, deny_exec_memfd: bool = False) -> int:
         os.close(fd)
     lib.seccomp_release(ctx)
     if rc != 0:
-        raise SystemExit(f"seccomp_export_bpf 失败: {rc}")
+        raise SystemExit(i18n.t("seccomp.export_failed", rc=rc))
 
     size = os.path.getsize(out_path)
     if size < 8:
-        raise SystemExit(f"BPF 过小 ({size})；libseccomp 导出失败")
+        raise SystemExit(i18n.t("seccomp.bpf_too_small", size=size))
     if missing:
         try:
             os.remove(out_path)
         except OSError:
             pass
         raise SystemExit(
-            f"seccomp-gen 配置={profile} 未解析系统调用: {','.join(missing)}"
+            i18n.t("seccomp.unresolved_syscalls", profile=profile, missing=",".join(missing))
         )
-    sys.stderr.write(f"seccomp-gen 配置={profile} arch={arch} rules={added} bytes={size}\n")
+    sys.stderr.write(i18n.t("seccomp.generated", profile=profile, arch=arch, rules=added, bytes=size) + "\n")
     return 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = i18n.I18nArgumentParser(description=i18n.t("seccomp.tool_description"))
     ap.add_argument("--profile", choices=("compat", "untrusted", "strict"), required=True)
     ap.add_argument("--deny-exec-memfd", action="store_true")
-    ap.add_argument("--out", required=True, help="BPF 输出路径")
+    ap.add_argument("--out", required=True, help=i18n.t("seccomp.help_out"))
     args = ap.parse_args()
     return generate(args.profile, args.out, args.deny_exec_memfd)
 

@@ -135,7 +135,7 @@ cmd_service() {
       local d f base any=0
       d="$(_service_dir)"
       if [[ ! -d "$d" ]]; then
-        printf '(无服务定义目录 %s)\n' "$d"
+        printf '%s\n' "$(i18n_fmt svc.no_service_dir d="$d")"
         return 0
       fi
       for f in "$d"/*.env; do
@@ -145,7 +145,7 @@ cmd_service() {
         if _service_is_running "$base"; then printf '%s\trunning\n' "$base"
         else printf '%s\tstopped\n' "$base"; fi
       done
-      (( any == 1 )) || printf '(尚无 *.env 服务定义)\n'
+      (( any == 1 )) || printf '%s\n' "$(i18n_get svc.no_service_defs)"
       return 0
       ;;
     start) _service_start "$@" ;;

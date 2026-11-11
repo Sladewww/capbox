@@ -1503,3 +1503,72 @@ audit.html.total_foot=报告内 {count} 条记录中的匹配结果
 audit.html.p95_foot=基于 {count} 条 exec 耗时记录
 audit.html.p95_foot_empty=没有可用的 exec 耗时记录
 audit.html.filtered_label={filtered} / {total} 条
+# Guest bootstrap (host interpolates; guest never calls i18n_*)
+bootstrap.warn_hint=提示:
+bootstrap.unknown_distro=未知
+bootstrap.banner=发行版: {distro}；uid={uid}；版本: {version}
+bootstrap.cannot_create_dir=无法创建目录 {d}
+bootstrap.cannot_write_hosts=无法写 /etc/hosts
+bootstrap.no_ca_certs=rootfs 内没有 CA 证书；https 源可能失败。capbox 已把宿主 /etc/ssl/certs 只读挂入，
+bootstrap.install_ca_certs=如需长期使用请装包：capbox pkg install ca-certificates
+bootstrap.proc_unavailable=/proc 不可用（异常）
+bootstrap.dev_not_writable=/dev 不可写（异常）
+bootstrap.capeff=CapEff={capeff}（全量 capability 时非 0000000000000000）
+bootstrap.empty_apk_repositories=/etc/apk/repositories 为空；请运行 capbox init 或设置 CAPBOX_MIRROR
+bootstrap.cannot_write_marker=无法写标记文件 {marker}
+bootstrap.complete=引导完成
+
+# Landlock helper (runs in the guest; host writes already-translated printf formats)
+landlock.unable_create_landlock_messages_file=无法创建 Landlock 消息文件
+landlock.failed_write_landlock_messages=写入 Landlock 消息失败
+landlock.helper_reject_path=capbox-landlock: 拒绝规则路径 {path}
+landlock.helper_open_failed=capbox-landlock: 打不开 {path}: {err}
+landlock.helper_no_access_bits=capbox-landlock: {path} 没有可用的访问位
+landlock.helper_add_rule_failed=capbox-landlock: 添加规则 {path} 失败: {err}
+landlock.helper_open_rules_failed=capbox-landlock: 打不开规则 {file}: {err}
+landlock.helper_fdopen_rules_failed=capbox-landlock: fdopen 规则失败: {err}
+landlock.helper_rule_line_too_long=capbox-landlock: 规则行过长
+landlock.helper_rule_format=capbox-landlock: 规则格式必须是 ro|rw 绝对路径
+landlock.helper_unknown_rule_type=capbox-landlock: 未知规则类型 {mode}
+landlock.helper_too_many_rules=capbox-landlock: 规则过多
+landlock.helper_rules_empty=capbox-landlock: 规则为空
+landlock.helper_kernel_unsupported=capbox-landlock: 内核不支持 Landlock
+landlock.helper_kernel_unsupported_lsm=capbox-landlock: 内核不支持 Landlock（需要 5.13+ 且已启用 LSM）
+landlock.helper_rules_missing_path=capbox-landlock: --rules 缺少路径
+landlock.helper_create_ruleset_failed=capbox-landlock: 创建规则集失败: {err}
+landlock.helper_no_new_privs_failed=capbox-landlock: no_new_privs 失败: {err}
+landlock.helper_restrict_self_failed=capbox-landlock: restrict_self 失败: {err}
+landlock.helper_exec_failed=capbox-landlock: exec {cmd} 失败: {err}
+
+# Service supervisor (host-side)
+supervisor.ready=ready: 就绪
+supervisor.ready_timeout=ready: 超时
+supervisor.stop_timeout_sigkill=停止超时 {seconds}s → SIGKILL
+supervisor.pass_fd_must_be_gt_stderr=--pass-fd 必须是大于 stderr 的描述符
+supervisor.missing_child_argv=supervisor: 缺少子进程 argv
+supervisor.starting=supervisor: 启动 {cmd}...
+supervisor.ready_failed_max_restarts=就绪失败后超过最大重启次数
+supervisor.health_failed=健康检查失败 {fails}/{retries}
+supervisor.health_give_up=health: 放弃 → 重启/停止
+supervisor.stopped=supervisor: 已停止
+supervisor.child_exited=子进程退出 rc={rc}
+supervisor.max_restarts=超过最大重启次数
+
+# seccomp-gen (host-side)
+seccomp.lib_not_found=未找到 libseccomp（请安装 libseccomp）
+seccomp.unknown_profile=未知 seccomp 配置: {profile}
+seccomp.compat_needs_extra_restriction=compat 需要显式附加限制
+seccomp.init_failed=seccomp_init 失败
+seccomp.export_failed=seccomp_export_bpf 失败: {rc}
+seccomp.bpf_too_small=BPF 过小 ({size})；libseccomp 导出失败
+seccomp.unresolved_syscalls=seccomp-gen 配置={profile} 未解析系统调用: {missing}
+seccomp.generated=seccomp-gen 配置={profile} arch={arch} rules={added} bytes={size}
+seccomp.help_out=BPF 输出路径
+seccomp.tool_description=为 CapBox untrusted/strict 配置生成 seccomp BPF。
+
+# Empty-list placeholders
+fs.no_snapshots=(无快照)
+image.no_exported_images=(无导出镜像)
+image.no_package_lock=(无 package.lock；先 image lock save)
+svc.no_service_dir=(无服务定义目录 {d})
+svc.no_service_defs=(尚无 *.env 服务定义)
