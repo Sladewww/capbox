@@ -44,7 +44,7 @@ fi
 : "${CAPBOX_RUN_DIR:=$CAPBOX_DIR/run}"
 : "${CAPBOX_DAEMON_DIR:=$CAPBOX_RUN_DIR/daemon}"
 : "${CAPBOX_TMP_DIR:=$CAPBOX_RUN_DIR/tmp}"
-: "${CAPBOX_VERSION:=0.4.2}"
+: "${CAPBOX_VERSION:=0.5.0}"
 : "${CAPBOX_BWRAP:=/usr/bin/bwrap}"
 : "${CAPBOX_NET:=host}"
 : "${CAPBOX_MIRROR:=cn}"
@@ -1173,7 +1173,7 @@ cmd_status() {
       "$(json_escape "${CAPBOX_MIRROR:-cn}")" \
       "$(json_escape "${CAPBOX_PROXY:-}")" \
       "$(json_escape "${CAPBOX_BWRAP:-}")" \
-      "$(json_escape "${CAPBOX_VERSION:-0.4.2}")"
+      "$(json_escape "${CAPBOX_VERSION:-0.5.0}")"
     return 0
   fi
 
@@ -1211,7 +1211,7 @@ cmd_status() {
   printf '%s\n' "$(i18n_fmt status.label_hostname value="${CAPBOX_HOSTNAME:-capbox}")"
   printf '%s\n' "$(i18n_fmt status.label_bwrap value="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)")"
   printf '%s\n' "$(i18n_fmt status.label_workspace value="$CAPBOX_WORKSPACE")"
-  printf '%s\n' "$(i18n_fmt status.label_version value="${CAPBOX_VERSION:-0.4.2}")"
+  printf '%s\n' "$(i18n_fmt status.label_version value="${CAPBOX_VERSION:-0.5.0}")"
   return 0
 }
 
