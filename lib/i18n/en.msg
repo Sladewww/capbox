@@ -1504,3 +1504,10 @@ audit.html.total_foot=Matches among the {count} records in this report
 audit.html.p95_foot=Based on {count} exec duration records
 audit.html.p95_foot_empty=No exec duration records available
 audit.html.filtered_label={filtered} / {total}
+# Empty-list placeholders and the capbox ps fallback count line
+fs.no_snapshots=(no snapshots)
+image.no_exported_images=(no exported images)
+image.no_package_lock=(no package.lock; run image lock save first)
+svc.no_service_dir=(no service definition directory {d})
+svc.no_service_defs=(no *.env service definitions yet)
+sandbox.ps_total={count} processes

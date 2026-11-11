@@ -1288,5 +1288,144 @@ class LeftoverSweepTests(unittest.TestCase):
             self.assertNotIn('i18n', data)
 
 
+class EmptyListAndProcessCountI18nTests(unittest.TestCase):
+    """Empty-list placeholders and the host-interpolated capbox ps count line."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-')
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = Path(self.tmp.name) / 'ws'
+        self.ws.mkdir()
+
+    def run_cli(self, *args, env=None):
+        merged = base_env()
+        if env:
+            merged.update(env)
+        return subprocess.run(
+            [str(CLI), '--root', str(self.ws), *args],
+            env=merged, capture_output=True, text=True, timeout=30)
+
+    def _ps_script(self, lang, extra):
+        return (
+            f'export CAPBOX_LANG={lang}; '
+            f'source "{I18N_SH}"; '
+            f'source "{REPO}/lib/common.sh"; '
+            f'source "{REPO}/lib/sandbox.sh"; '
+            + extra
+        )
+
+    def test_catalog_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['fs.no_snapshots'], '(无快照)')
+        self.assertEqual(en['fs.no_snapshots'], '(no snapshots)')
+        self.assertEqual(zh['image.no_exported_images'], '(无导出镜像)')
+        self.assertEqual(en['image.no_exported_images'], '(no exported images)')
+        self.assertEqual(zh['image.no_package_lock'], '(无 package.lock；先 image lock save)')
+        self.assertIn('package.lock', en['image.no_package_lock'])
+        self.assertIn('image lock save', en['image.no_package_lock'])
+        self.assertNotIn('无 package.lock', en['image.no_package_lock'])
+        self.assertEqual(zh['svc.no_service_dir'], '(无服务定义目录 {d})')
+        self.assertEqual(en['svc.no_service_dir'], '(no service definition directory {d})')
+        self.assertEqual(zh['svc.no_service_defs'], '(尚无 *.env 服务定义)')
+        self.assertIn('*.env', en['svc.no_service_defs'])
+        self.assertNotIn('尚无', en['svc.no_service_defs'])
+        self.assertEqual(zh['sandbox.ps_total'], '共 {count} 个进程')
+        self.assertEqual(en['sandbox.ps_total'], '{count} processes')
+
+    def test_hardcoded_literals_are_gone(self):
+        needles = {
+            'lib/fsguard.sh': ('(无快照)',),
+            'lib/image.sh': ('(无导出镜像)', '(无 package.lock；先 image lock save)'),
+            'lib/service.sh': ('(无服务定义目录', '(尚无 *.env 服务定义)'),
+            'lib/sandbox.sh': ('共 $i 个进程', '共 "$i" 个进程'),
+        }
+        for rel, items in needles.items():
+            text = (REPO / rel).read_text()
+            for needle in items:
+                self.assertNotIn(needle, text, f'{rel} still hardcodes {needle!r}')
+        sandbox = (REPO / 'lib/sandbox.sh').read_text()
+        self.assertIn('i18n_get sandbox.ps_total', sandbox)
+        self.assertIn('$(_shq "$total_fmt")', sandbox)
+        start = sandbox.index("printf '%s' 'i=0; for d in /proc/[0-9]*;")
+        body = sandbox[start:sandbox.index('cmd_ps()', start)]
+        self.assertNotIn('i18n_', body)
+
+    def test_empty_list_cli_follows_lang(self):
+        zh = self.run_cli('snapshot', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('snapshot', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无快照)', zh.stdout)
+        self.assertIn('(no snapshots)', en.stdout)
+        self.assertNotIn('无快照', en.stdout)
+        self.assertNotIn('no snapshots', zh.stdout)
+
+        zh = self.run_cli('image', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('image', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无导出镜像)', zh.stdout)
+        self.assertIn('(no exported images)', en.stdout)
+        self.assertNotIn('无导出镜像', en.stdout)
+
+        zh = self.run_cli('image', 'lock', 'show', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('image', 'lock', 'show', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无 package.lock；先 image lock save)', zh.stdout)
+        self.assertIn('package.lock', en.stdout)
+        self.assertIn('image lock save', en.stdout)
+        self.assertNotIn('无 package.lock', en.stdout)
+
+        zh = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无服务定义目录', zh.stdout)
+        self.assertIn('(no service definition directory', en.stdout)
+        self.assertNotIn('无服务定义目录', en.stdout)
+        self.assertIn(str(self.ws), zh.stdout)
+        self.assertIn(str(self.ws), en.stdout)
+
+        services = self.ws / '.capbox' / 'services'
+        services.mkdir(parents=True, exist_ok=True)
+        zh = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('service', 'list', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(尚无 *.env 服务定义)', zh.stdout)
+        self.assertIn('(no *.env service definitions yet)', en.stdout)
+        self.assertIn('*.env', zh.stdout)
+        self.assertIn('*.env', en.stdout)
+        self.assertNotIn('尚无', en.stdout)
+
+    def test_ps_fallback_command_is_host_interpolated(self):
+        zh = run_bash(self._ps_script('zh', '_sandbox_ps_proc_fallback_cmd'))
+        en = run_bash(self._ps_script('en', '_sandbox_ps_proc_fallback_cmd'))
+        self.assertEqual(zh.returncode, 0, zh.stderr + zh.stdout)
+        self.assertEqual(en.returncode, 0, en.stderr + en.stdout)
+        self.assertIn("printf '共 %s 个进程' \"$i\"; echo", zh.stdout)
+        self.assertIn("printf '%s processes' \"$i\"; echo", en.stdout)
+        self.assertNotIn('i18n_', zh.stdout)
+        self.assertNotIn('i18n_', en.stdout)
+        self.assertNotIn('共 %s 个进程', en.stdout)
+        self.assertNotIn('%s processes', zh.stdout)
+
+        eval_foot = (
+            'cmd="$(_sandbox_ps_proc_fallback_cmd)"; '
+            'foot="${cmd#*; printf }"; '
+            'i=7; eval "printf $foot"'
+        )
+        zh_f = run_bash(self._ps_script('zh', eval_foot))
+        en_f = run_bash(self._ps_script('en', eval_foot))
+        self.assertEqual(zh_f.returncode, 0, zh_f.stderr + zh_f.stdout)
+        self.assertEqual(en_f.returncode, 0, en_f.stderr + en_f.stdout)
+        self.assertIn('共 7 个进程', zh_f.stdout)
+        self.assertIn('7 processes', en_f.stdout)
+        self.assertNotIn('共 7 个进程', en_f.stdout)
+        self.assertNotIn('个进程', en_f.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

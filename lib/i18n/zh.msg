@@ -1503,3 +1503,10 @@ audit.html.total_foot=报告内 {count} 条记录中的匹配结果
 audit.html.p95_foot=基于 {count} 条 exec 耗时记录
 audit.html.p95_foot_empty=没有可用的 exec 耗时记录
 audit.html.filtered_label={filtered} / {total} 条
+# Empty-list placeholders and the capbox ps fallback count line
+fs.no_snapshots=(无快照)
+image.no_exported_images=(无导出镜像)
+image.no_package_lock=(无 package.lock；先 image lock save)
+svc.no_service_dir=(无服务定义目录 {d})
+svc.no_service_defs=(尚无 *.env 服务定义)
+sandbox.ps_total=共 {count} 个进程

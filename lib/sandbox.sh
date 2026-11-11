@@ -526,6 +526,17 @@ cmd_ls() {
   return $?
 }
 
+# 在宿主上查好已翻译的进程计数字符串，再拼进 guest 命令；guest 内不得调用 i18n_*。
+_sandbox_ps_proc_fallback_cmd() {
+  local total_fmt
+  total_fmt="$(i18n_get sandbox.ps_total)"
+  total_fmt="${total_fmt//%/%%}"
+  total_fmt="${total_fmt//\{count\}/%s}"
+  printf '%s' 'i=0; for d in /proc/[0-9]*; do p=${d#/proc/}; c=$(cat "$d/comm" 2>/dev/null); echo "$p $c"; i=$((i+1)); done; printf '
+  printf '%s' "$(_shq "$total_fmt")"
+  printf '%s' ' "$i"; echo'
+}
+
 cmd_ps() {
   [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]] || i18n_die 2 sandbox.usage_capbox_ps
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -539,7 +550,7 @@ cmd_ps() {
   if (( rc != 0 )); then
     # 最坏情况：直接列 /proc
     i18n_warn sandbox.ps_unavailable_falling_back_reading_proc
-    exec_in_guest 'i=0; for d in /proc/[0-9]*; do p=${d#/proc/}; c=$(cat "$d/comm" 2>/dev/null); echo "$p $c"; i=$((i+1)); done; echo "共 $i 个进程"' /workspace 60
+    exec_in_guest "$(_sandbox_ps_proc_fallback_cmd)" /workspace 60
     return $?
   fi
   return 0

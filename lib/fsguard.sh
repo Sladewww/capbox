@@ -229,7 +229,7 @@ cmd_snapshot() {
       local d
       d="$(_fsguard_snap_dir)"
       if [[ ! -d "$d" ]] || [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
-        printf '(无快照)\n'
+        printf '%s\n' "$(i18n_get fs.no_snapshots)"
         return 0
       fi
       ls -lh -- "$d"

@@ -166,7 +166,7 @@ cmd_image() {
       local d
       d="$(_image_dir)"
       if [[ ! -d "$d" ]] || [[ -z "$(ls -A "$d" 2>/dev/null | grep -v '\.meta$' || true)" ]]; then
-        printf '(无导出镜像)\n'
+        printf '%s\n' "$(i18n_get image.no_exported_images)"
         return 0
       fi
       ls -lh -- "$d"/*.tar.* 2>/dev/null | grep -v '.sha256' || true
@@ -288,7 +288,7 @@ cmd_image() {
           return $?
           ;;
         show|"")
-          [[ -f "$(_image_lock_path)" ]] || { printf '(无 package.lock；先 image lock save)\n'; return 0; }
+          [[ -f "$(_image_lock_path)" ]] || { printf '%s\n' "$(i18n_get image.no_package_lock)"; return 0; }
           cat -- "$(_image_lock_path)"
           ;;
         *) i18n_die 2 image.image_lock_save_show_verify_restore ;;
