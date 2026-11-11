@@ -1621,6 +1621,210 @@ class LandlockHelperI18nTests(unittest.TestCase):
             self.assertIn(f'SET={lang}', result.stdout)
 
 
+class SupervisorSeccompI18nTests(unittest.TestCase):
+    """CLI help and SystemExit follow CAPBOX_LANG; supervisor _log stays literal."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-supervisor-')
+        self.addCleanup(self.tmp.cleanup)
+
+    def run_tool(self, tool, args, lang):
+        return subprocess.run(
+            [sys.executable, str(REPO / tool), *args],
+            env={**base_env(), 'CAPBOX_LANG': lang},
+            capture_output=True, text=True, timeout=15)
+
+    def test_catalog_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['supervisor.pass_fd_must_be_gt_stderr'],
+                         '--pass-fd 必须是大于 stderr 的描述符')
+        self.assertEqual(en['supervisor.pass_fd_must_be_gt_stderr'],
+                         '--pass-fd must be a file descriptor greater than stderr')
+        self.assertNotIn('必须是大于', en['supervisor.pass_fd_must_be_gt_stderr'])
+        self.assertEqual(zh['seccomp.lib_not_found'],
+                         '未找到 libseccomp（请安装 libseccomp）')
+        self.assertIn('libseccomp', en['seccomp.lib_not_found'])
+        self.assertNotIn('未找到', en['seccomp.lib_not_found'])
+        self.assertEqual(zh['seccomp.compat_needs_extra_restriction'],
+                         'compat 需要显式附加限制')
+        self.assertEqual(en['seccomp.compat_needs_extra_restriction'],
+                         'compat requires an explicit extra restriction')
+        self.assertEqual(zh['seccomp.unknown_profile'], '未知 seccomp 配置: {profile}')
+        self.assertEqual(en['seccomp.unknown_profile'], 'unknown seccomp profile: {profile}')
+        self.assertEqual(zh['seccomp.init_failed'], 'seccomp_init 失败')
+        self.assertEqual(en['seccomp.init_failed'], 'seccomp_init failed')
+        self.assertEqual(zh['seccomp.export_failed'], 'seccomp_export_bpf 失败: {rc}')
+        self.assertEqual(en['seccomp.export_failed'], 'seccomp_export_bpf failed: {rc}')
+        self.assertEqual(zh['seccomp.bpf_too_small'],
+                         'BPF 过小 ({size})；libseccomp 导出失败')
+        self.assertEqual(en['seccomp.bpf_too_small'],
+                         'BPF too small ({size}); libseccomp export failed')
+        self.assertEqual(zh['seccomp.unresolved_syscalls'],
+                         'seccomp-gen 配置={profile} 未解析系统调用: {missing}')
+        self.assertEqual(en['seccomp.unresolved_syscalls'],
+                         'seccomp-gen profile={profile} unresolved syscalls: {missing}')
+        self.assertEqual(zh['seccomp.help_out'], 'BPF 输出路径')
+        self.assertEqual(en['seccomp.help_out'], 'BPF output path')
+        self.assertTrue(zh['seccomp.tool_description'].startswith(
+            '为 CapBox untrusted/strict 配置生成 seccomp BPF。'))
+        self.assertTrue(en['seccomp.tool_description'].startswith(
+            'Generate a seccomp BPF for a CapBox untrusted/strict profile.'))
+        self.assertNotIn('为 CapBox', en['seccomp.tool_description'])
+        for catalog in (zh, en):
+            self.assertNotIn('supervisor.ready', catalog)
+            self.assertNotIn('supervisor.missing_child_argv', catalog)
+            self.assertNotIn('supervisor.starting', catalog)
+            self.assertNotIn('supervisor.max_restarts', catalog)
+
+    def test_seccomp_generated_placeholders_match_call_and_render(self):
+        """Catalog placeholders are {rules}/{bytes}, matching the call kwargs."""
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(
+            zh['seccomp.generated'],
+            'seccomp-gen 配置={profile} arch={arch} rules={rules} bytes={bytes}')
+        self.assertEqual(
+            en['seccomp.generated'],
+            'seccomp-gen profile={profile} arch={arch} rules={rules} bytes={bytes}')
+        for catalog in (zh, en):
+            self.assertIn('{rules}', catalog['seccomp.generated'])
+            self.assertIn('{bytes}', catalog['seccomp.generated'])
+            self.assertNotIn('{added}', catalog['seccomp.generated'])
+            self.assertNotIn('{size}', catalog['seccomp.generated'])
+        self.assertEqual(
+            i18n.fmt(zh, 'seccomp.generated',
+                     profile='untrusted', arch='x86_64', rules=18, bytes=256),
+            'seccomp-gen 配置=untrusted arch=x86_64 rules=18 bytes=256')
+        self.assertEqual(
+            i18n.fmt(en, 'seccomp.generated',
+                     profile='untrusted', arch='x86_64', rules=18, bytes=256),
+            'seccomp-gen profile=untrusted arch=x86_64 rules=18 bytes=256')
+        src = (REPO / 'lib/seccomp-gen.py').read_text()
+        self.assertIn(
+            'i18n.t("seccomp.generated", profile=profile, arch=arch, rules=added, bytes=size)',
+            src)
+        self.assertNotIn('rules={added}', src)
+        self.assertNotIn('bytes={size}', src)
+
+        out_zh = Path(self.tmp.name) / 'zh.bpf'
+        out_en = Path(self.tmp.name) / 'en.bpf'
+        zh_run = self.run_tool('lib/seccomp-gen.py',
+                               ['--profile', 'untrusted', '--out', str(out_zh)], 'zh')
+        en_run = self.run_tool('lib/seccomp-gen.py',
+                               ['--profile', 'untrusted', '--out', str(out_en)], 'en')
+        self.assertEqual(zh_run.returncode, 0, zh_run.stderr)
+        self.assertEqual(en_run.returncode, 0, en_run.stderr)
+        zh_line = zh_run.stderr.strip().splitlines()[-1]
+        en_line = en_run.stderr.strip().splitlines()[-1]
+        zh_match = re.fullmatch(
+            r'seccomp-gen 配置=untrusted arch=(\S+) rules=(\d+) bytes=(\d+)', zh_line)
+        en_match = re.fullmatch(
+            r'seccomp-gen profile=untrusted arch=(\S+) rules=(\d+) bytes=(\d+)', en_line)
+        self.assertIsNotNone(zh_match, zh_run.stderr)
+        self.assertIsNotNone(en_match, en_run.stderr)
+        self.assertEqual(zh_match.group(1), en_match.group(1))
+        self.assertEqual(zh_match.group(2), en_match.group(2))
+        self.assertEqual(zh_match.group(3), en_match.group(3))
+        self.assertNotIn('{added}', zh_run.stderr + en_run.stderr)
+        self.assertNotIn('{size}', zh_run.stderr + en_run.stderr)
+        self.assertNotIn('{rules}', zh_run.stderr + en_run.stderr)
+        self.assertNotIn('{bytes}', zh_run.stderr + en_run.stderr)
+        self.assertNotIn('配置=', en_run.stderr)
+
+    def test_hardcoded_cli_literals_are_gone_and_log_left_untouched(self):
+        supervisor = (REPO / 'lib/service-supervisor.py').read_text()
+        seccomp = (REPO / 'lib/seccomp-gen.py').read_text()
+        for needle in (
+            '未找到 libseccomp（请安装 libseccomp）',
+            'compat 需要显式附加限制',
+            '未知 seccomp 配置:',
+            'help="BPF 输出路径"',
+            'seccomp-gen 配置={profile} arch={arch} rules={added}',
+        ):
+            self.assertNotIn(needle, seccomp, f'seccomp-gen.py still hardcodes {needle!r}')
+        self.assertNotIn('ap.error("--pass-fd 必须是大于 stderr 的描述符")', supervisor)
+        self.assertIn('i18n.t("supervisor.pass_fd_must_be_gt_stderr")', supervisor)
+        # _log 按 log_debug 处理：本刀不进目录，也不改写成英文。
+        for needle in (
+            '_log(log, "ready: 就绪")',
+            '_log(log, "ready: 超时")',
+            '_log(log, f"停止超时 {stop_timeout}s → SIGKILL")',
+            '_log(args.log, "supervisor: 缺少子进程 argv")',
+            '_log(args.log, "就绪失败后超过最大重启次数")',
+            '_log(args.log, f"健康检查失败 {fails}/{args.health_retries}")',
+            '_log(args.log, "health: 放弃 → 重启/停止")',
+            '_log(args.log, "supervisor: 已停止")',
+            '_log(args.log, f"子进程退出 rc={rc}")',
+            '_log(args.log, "超过最大重启次数")',
+        ):
+            self.assertIn(needle, supervisor, f'_log literal was changed: {needle!r}')
+        self.assertEqual(supervisor.count('i18n.t('), 1)
+
+    def test_supervisor_cli_and_seccomp_errors_follow_lang(self):
+        log = Path(self.tmp.name) / 'svc.log'
+        pid = Path(self.tmp.name) / 'svc.pid'
+        common = ['--name', 'demo', '--log', str(log), '--pidfile', str(pid),
+                  '--pass-fd', '1']
+        zh = self.run_tool('lib/service-supervisor.py', common, 'zh')
+        en = self.run_tool('lib/service-supervisor.py', common, 'en')
+        self.assertNotEqual(zh.returncode, 0, zh.stderr)
+        self.assertNotEqual(en.returncode, 0, en.stderr)
+        self.assertIn('--pass-fd 必须是大于 stderr 的描述符', zh.stderr)
+        self.assertIn('--pass-fd must be a file descriptor greater than stderr', en.stderr)
+        self.assertIn('错误:', zh.stderr)
+        self.assertIn('error:', en.stderr)
+        self.assertNotIn('必须是大于', en.stderr)
+        self.assertNotIn('must be a file descriptor', zh.stderr)
+
+        zh_help = self.run_tool('lib/service-supervisor.py', ['--help'], 'zh')
+        en_help = self.run_tool('lib/service-supervisor.py', ['--help'], 'en')
+        self.assertEqual(zh_help.returncode, 0, zh_help.stderr)
+        self.assertEqual(en_help.returncode, 0, en_help.stderr)
+        self.assertIn('用法:', zh_help.stdout)
+        self.assertIn('usage:', en_help.stdout)
+        self.assertNotIn('usage:', zh_help.stdout)
+        self.assertNotIn('用法:', en_help.stdout)
+
+        # 缺少子进程走 _log，两种语言都仍是中文原文。
+        zh_miss = self.run_tool(
+            'lib/service-supervisor.py',
+            ['--name', 'demo', '--log', str(log), '--pidfile', str(pid)], 'zh')
+        en_miss = self.run_tool(
+            'lib/service-supervisor.py',
+            ['--name', 'demo', '--log', str(log), '--pidfile', str(pid)], 'en')
+        self.assertEqual(zh_miss.returncode, 2, zh_miss.stderr)
+        self.assertEqual(en_miss.returncode, 2, en_miss.stderr)
+        self.assertIn('supervisor: 缺少子进程 argv', zh_miss.stderr)
+        self.assertIn('supervisor: 缺少子进程 argv', en_miss.stderr)
+        self.assertNotIn('missing child argv', en_miss.stderr)
+
+        zh_err = self.run_tool(
+            'lib/seccomp-gen.py',
+            ['--profile', 'compat', '--out', str(Path(self.tmp.name) / 'x.bpf')], 'zh')
+        en_err = self.run_tool(
+            'lib/seccomp-gen.py',
+            ['--profile', 'compat', '--out', str(Path(self.tmp.name) / 'x.bpf')], 'en')
+        self.assertNotEqual(zh_err.returncode, 0)
+        self.assertNotEqual(en_err.returncode, 0)
+        self.assertIn('compat 需要显式附加限制', zh_err.stderr)
+        self.assertIn('compat requires an explicit extra restriction', en_err.stderr)
+        self.assertNotIn('需要显式附加限制', en_err.stderr)
+
+        zh_help = self.run_tool('lib/seccomp-gen.py', ['--help'], 'zh')
+        en_help = self.run_tool('lib/seccomp-gen.py', ['--help'], 'en')
+        self.assertEqual(zh_help.returncode, 0, zh_help.stderr)
+        self.assertEqual(en_help.returncode, 0, en_help.stderr)
+        self.assertIn('用法:', zh_help.stdout)
+        self.assertIn('BPF 输出路径', zh_help.stdout)
+        self.assertIn('为 CapBox untrusted/strict 配置生成 seccomp BPF。', zh_help.stdout)
+        self.assertIn('usage:', en_help.stdout)
+        self.assertIn('BPF output path', en_help.stdout)
+        self.assertIn('Generate a seccomp BPF for a CapBox untrusted/strict profile.',
+                      en_help.stdout)
+        self.assertNotIn('BPF 输出路径', en_help.stdout)
+        self.assertNotIn('用法:', en_help.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

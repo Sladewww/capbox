@@ -15,7 +15,13 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import List, Optional
+
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
 
 
 def _log(path: str, msg: str) -> None:
@@ -113,7 +119,7 @@ def terminate_tree(proc: subprocess.Popen, stop_timeout: float, log: str) -> Non
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = i18n.I18nArgumentParser()
     ap.add_argument("--name", required=True)
     ap.add_argument("--log", required=True)
     ap.add_argument("--pidfile", required=True)
@@ -143,7 +149,7 @@ def main() -> int:
     status("starting")
     for fd in args.pass_fd:
         if fd < 3:
-            ap.error("--pass-fd 必须是大于 stderr 的描述符")
+            ap.error(i18n.t("supervisor.pass_fd_must_be_gt_stderr"))
         os.fstat(fd)  # 报告监督器运行前先失败关闭。
     child: List[str] = list(args.child)
     if child and child[0] == "--":

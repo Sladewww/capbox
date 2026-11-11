@@ -1511,3 +1511,29 @@ image.no_package_lock=(no package.lock; run image lock save first)
 svc.no_service_dir=(no service definition directory {d})
 svc.no_service_defs=(no *.env service definitions yet)
 sandbox.ps_total={count} processes
+# Service supervisor and seccomp-gen (CLI help and SystemExit only)
+supervisor.pass_fd_must_be_gt_stderr=--pass-fd must be a file descriptor greater than stderr
+seccomp.lib_not_found=libseccomp not found (please install libseccomp)
+seccomp.unknown_profile=unknown seccomp profile: {profile}
+seccomp.compat_needs_extra_restriction=compat requires an explicit extra restriction
+seccomp.init_failed=seccomp_init failed
+seccomp.export_failed=seccomp_export_bpf failed: {rc}
+seccomp.bpf_too_small=BPF too small ({size}); libseccomp export failed
+seccomp.unresolved_syscalls=seccomp-gen profile={profile} unresolved syscalls: {missing}
+seccomp.generated=seccomp-gen profile={profile} arch={arch} rules={rules} bytes={bytes}
+seccomp.help_out=BPF output path
+seccomp.tool_description<<
+Generate a seccomp BPF for a CapBox untrusted/strict profile.
+
+Uses libseccomp via ctypes (does not depend on the python3-seccomp package).
+Writes raw BPF to --out (or as binary to stdout). Exit code 0 on success.
+
+Profiles:
+  untrusted — deny mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/
+              unshare/setns/io_uring
+  strict    — untrusted + ptrace + perf_event_open + process_vm_{read,write}v
+
+clone3 is intentionally not denied: glibc uses it to create threads. Namespace
+creation is intercepted via unshare/setns (and bwrap --disable-userns when
+idmap is off).
+>>

@@ -1510,3 +1510,28 @@ image.no_package_lock=(无 package.lock；先 image lock save)
 svc.no_service_dir=(无服务定义目录 {d})
 svc.no_service_defs=(尚无 *.env 服务定义)
 sandbox.ps_total=共 {count} 个进程
+# Service supervisor and seccomp-gen (CLI help and SystemExit only)
+supervisor.pass_fd_must_be_gt_stderr=--pass-fd 必须是大于 stderr 的描述符
+seccomp.lib_not_found=未找到 libseccomp（请安装 libseccomp）
+seccomp.unknown_profile=未知 seccomp 配置: {profile}
+seccomp.compat_needs_extra_restriction=compat 需要显式附加限制
+seccomp.init_failed=seccomp_init 失败
+seccomp.export_failed=seccomp_export_bpf 失败: {rc}
+seccomp.bpf_too_small=BPF 过小 ({size})；libseccomp 导出失败
+seccomp.unresolved_syscalls=seccomp-gen 配置={profile} 未解析系统调用: {missing}
+seccomp.generated=seccomp-gen 配置={profile} arch={arch} rules={rules} bytes={bytes}
+seccomp.help_out=BPF 输出路径
+seccomp.tool_description<<
+为 CapBox untrusted/strict 配置生成 seccomp BPF。
+
+通过 ctypes 使用 libseccomp（不依赖 python3-seccomp 包）。
+将原始 BPF 写入 --out（或以二进制写到 stdout）。成功时退出码 0。
+
+配置：
+  untrusted — 拒绝 mount/pivot/module/kexec/bpf/userfaultfd/open_by_handle_at/
+              unshare/setns/io_uring
+  strict    — untrusted + ptrace + perf_event_open + process_vm_{read,write}v
+
+有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
+unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
+>>
