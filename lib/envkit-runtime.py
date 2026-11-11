@@ -20,8 +20,13 @@ import tempfile
 import time
 import uuid
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 if sys.version_info < (3, 10):
-    print('[capbox] 此功能需要宿主 Python 3.10+', file=sys.stderr)
+    print(i18n.t('envkit.requires_python_3_10'), file=sys.stderr)
     sys.exit(5)
 
 SCHEMA = 'capbox.envkit.v1'
@@ -33,20 +38,20 @@ def mcp_defaults():
 
 def build_mcp_parser(parent=None):
     defaults=mcp_defaults()
-    mcp=argparse.ArgumentParser(prog='capbox mcp', parents=[] if parent is None else [parent], add_help=True)
+    mcp=i18n.I18nArgumentParser(prog='capbox mcp', parents=[] if parent is None else [parent], add_help=True)
     # main() 与测试共用；选项与默认值集中在此。
     mcp.add_argument('action', choices=['serve'])
     mcp.add_argument('--profile', choices=list(defaults.ALLOWED_PROFILES),
                      default=defaults.DEFAULT_PROFILE,
-                     help='安全配置档（默认: %(default)s)')
+                     help=i18n.t('mcp.help_profile'))
     mcp.add_argument('--net', choices=list(defaults.ALLOWED_NET),
                      default=defaults.DEFAULT_NET,
-                     help='网络模式（默认: %(default)s；拒绝 open）')
+                     help=i18n.t('mcp.help_net'))
     mcp.add_argument('--workspace-mode', choices=list(defaults.ALLOWED_WORKSPACE_MODES),
                      default=defaults.DEFAULT_WORKSPACE_MODE,
-                     help='任务工作区（默认: %(default)s)')
+                     help=i18n.t('mcp.help_workspace_mode'))
     mcp.add_argument('--max-timeout', type=int, default=defaults.DEFAULT_MAX_TIMEOUT,
-                     help='任务超时上限秒数（默认: %(default)s)')
+                     help=i18n.t('mcp.help_max_timeout'))
     return mcp
 
 BUNDLE_SCHEMA = 'capbox.bundle.v1'
@@ -96,7 +101,7 @@ def cli(ctx, *args, env=None, timeout=60):
 
 def success(proc, message):
     if proc.returncode:
-        raise Failure(message + '（退出码 %d）' % proc.returncode)
+        raise Failure(message + i18n.t('envkit.exit_code_suffix', code=proc.returncode))
     return proc.stdout
 
 
@@ -169,7 +174,7 @@ def readiness(ctx, probe):
                   'status':seccomp})
     items.append({'id':'python-safe-extract','required':True,
                   'status':'available' if hasattr(tarfile,'data_filter') and hasattr(os.path,'ALLOW_MISSING') else 'unsupported',
-                  'detail':'环境包恢复需要带安全补丁的 tarfile data filter 与 realpath ALLOW_MISSING'})
+                  'detail':i18n.t('envkit.detail_safe_extract')})
     if probe and shutil.which('gcc'):
         with tempfile.TemporaryDirectory(prefix='capbox-setup-') as temporary:
             p=subprocess.run(['gcc','-static','-x','c','-o',str(Path(temporary)/'probe'),'-'],
@@ -178,7 +183,7 @@ def readiness(ctx, probe):
                           'status':'available' if p.returncode==0 else 'unavailable'})
     else:
         items.append({'id':'gcc-static','required':landlock,'status':'not_probed',
-                      'detail':'setup check --probe 会探测宿主静态工具链'})
+                      'detail':i18n.t('setup.detail_probe_static_toolchain')})
     supported = platform.system()=='Linux' and platform.machine() in ('x86_64','aarch64')
     ready = supported and all(i['status']=='available' for i in items if i['required'])
     sysctls={}
@@ -214,26 +219,26 @@ def install_plan(ctx, report, source):
                      for action in ('check','apply')]
         followup += [[str(Path(source)/'bin/capbox'),'--root',ctx['workspace'],'upgrade','rollback']]
     return {'kind':'installation_plan','executed':False,'package_commands':commands,'followup_commands':followup,
-            'notes':['发行版包装的 bubblewrap 可能低于 0.12.0；请重跑 setup check。',
-                     '未改动宿主软件包、sysctl、AppArmor 或项目运行时。',
-                     'upgrade apply 前请停掉 services、daemon、tasks 及其他写入者。',
-                     '不会自动下载或执行远程安装脚本。']}
+            'notes':[i18n.t('setup.note_distro_bwrap_may_be_old'),
+                     i18n.t('setup.note_host_unchanged'),
+                     i18n.t('setup.note_stop_writers_before_upgrade'),
+                     i18n.t('setup.note_no_remote_install_scripts')]}
 
 
 def real_directory(path):
     path=path.absolute()
     for part in (path,*path.parents):
         if part.is_symlink():
-            raise Failure('路径不能含符号链接')
+            raise Failure(i18n.t('envkit.path_must_not_contain_symlink'))
     if not path.is_dir():
-        raise Failure('目录不存在')
+        raise Failure(i18n.t('envkit.directory_does_not_exist'))
     return path.resolve()
 
 
 def unique(pairs):
     result={}
     for k,v in pairs:
-        if k in result: raise Failure('JSON 包含重复键')
+        if k in result: raise Failure(i18n.t('envkit.json_duplicate_key'))
         result[k]=v
     return result
 
@@ -243,9 +248,9 @@ def read_file(path, limit):
     with os.fdopen(fd,'rb') as f:
         st=os.fstat(f.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_size>limit:
-            raise Failure('制品必须是大小受限的普通文件')
+            raise Failure(i18n.t('envkit.artifact_must_be_size_limited_regular_file'))
         data=f.read(limit+1)
-        if len(data)>limit: raise Failure('制品超过大小限制')
+        if len(data)>limit: raise Failure(i18n.t('envkit.artifact_exceeds_size_limit'))
         return data
 
 
@@ -254,7 +259,7 @@ def digest(path):
     result=hashlib.sha256()
     with os.fdopen(fd,'rb') as f:
         st=os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size>MAX_ARCHIVE: raise Failure('归档大小或类型不支持')
+        if not stat.S_ISREG(st.st_mode) or st.st_size>MAX_ARCHIVE: raise Failure(i18n.t('envkit.archive_size_or_type_unsupported'))
         while True:
             data=f.read(1024**2)
             if not data: break
@@ -266,7 +271,7 @@ def publish_directory(source,dest):
     # 原子且不覆盖的发布，也避免并发 init/pack 互相踩踏。
     libc=ctypes.CDLL(None,use_errno=True)
     try:rename=libc.renameat2
-    except AttributeError as exc:raise Failure('需要支持 renameat2 的 Linux C 库') from exc
+    except AttributeError as exc:raise Failure(i18n.t('envkit.needs_renameat2_libc')) from exc
     rename.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]
     rename.restype=ctypes.c_int
     if rename(-100,os.fsencode(source),-100,os.fsencode(dest),1):
@@ -278,13 +283,13 @@ def copy_artifact(source,dest):
     fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as incoming, dest.open('xb') as outgoing:
         st=os.fstat(incoming.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size>MAX_ARCHIVE:raise Failure('制品类型或大小不支持')
+        if not stat.S_ISREG(st.st_mode) or st.st_size>MAX_ARCHIVE:raise Failure(i18n.t('envkit.artifact_type_or_size_unsupported'))
         remaining=MAX_ARCHIVE
         while True:
             data=incoming.read(min(1024**2,remaining+1))
             if not data:break
             remaining-=len(data)
-            if remaining<0:raise Failure('制品大小在读取时超出限制')
+            if remaining<0:raise Failure(i18n.t('envkit.artifact_grew_past_limit'))
             outgoing.write(data)
 
 
@@ -298,7 +303,7 @@ def validate_launch_directories(root):
         for component in name.split('/'):
             part=part/component
             if part.is_symlink() or (part.exists() and not part.is_dir()):
-                raise Failure('rootfs 启动目录不能是链接或普通文件: '+name)
+                raise Failure(i18n.t('envkit.rootfs_startup_dir_invalid', name=name))
 
 
 def load_tool(ctx,name):
@@ -311,7 +316,7 @@ def portable_config(ctx):
     result={k:v for k,v in ctx['config'].items() if k in PORTABLE}
     if ctx['sources']['ROOTFS_RO']=='default': result.pop('ROOTFS_RO',None)
     if any(item.split(':',1)[0].startswith('/') for item in result.get('FS_BINDS','').split(',') if item):
-        raise Failure('可携带环境包不支持绝对宿主 FS_BINDS；请改为工作区相对路径')
+        raise Failure(i18n.t('bundle.portable_pack_rejects_absolute_fs_binds'))
     return result
 
 
@@ -327,36 +332,36 @@ def preflight_tar(path,distro):
             parts=PurePosixPath(member.name).parts
             if (not parts or parts[0]!=distro or member.name.startswith('/') or '..' in parts
                     or not (member.isfile() or member.isdir() or member.issym() or member.islnk())):
-                raise Failure('归档包含越界路径、错误根目录或特殊文件')
-            if count>200000 or total>MAX_EXPANDED: raise Failure('归档展开后超过 8GiB / 200000 成员限制')
-    if not count: raise Failure('归档为空')
+                raise Failure(i18n.t('bundle.archive_has_escape_or_special'))
+            if count>200000 or total>MAX_EXPANDED: raise Failure(i18n.t('bundle.archive_exceeds_expansion_limit'))
+    if not count: raise Failure(i18n.t('bundle.archive_empty'))
     return total
 
 
 def verify_bundle(ctx,source,expected=None):
     root=real_directory(Path(source))
     if root.is_relative_to(Path(ctx['workspace'])):
-        raise Failure('环境包必须位于目标工作区外')
+        raise Failure(i18n.t('bundle.pack_must_be_outside_workspace'))
     manifest_bytes=read_file(root/'manifest.json',1024**2)
     if expected is not None and (not re.fullmatch('[0-9a-f]{64}',expected) or hashlib.sha256(manifest_bytes).hexdigest()!=expected):
-        raise Failure('环境包 manifest SHA256 不匹配')
+        raise Failure(i18n.t('bundle.manifest_sha256_mismatch'))
     manifest=json.loads(manifest_bytes,object_pairs_hook=unique)
     if not isinstance(manifest,dict) or set(manifest)!={'schema','distro','architecture','runtime_version','config','files'}:
-        raise Failure('环境包清单字段无效')
+        raise Failure(i18n.t('bundle.manifest_fields_invalid'))
     if manifest['schema']!=BUNDLE_SCHEMA or manifest['distro']!=ctx['config']['DISTRO'] or manifest['architecture']!=platform.machine():
-        raise Failure('环境包 schema、发行版或架构与目标不一致')
+        raise Failure(i18n.t('bundle.schema_distro_or_arch_mismatch'))
     config=manifest['config']
     if not isinstance(config,dict) or set(config)-PORTABLE or not all(isinstance(v,str) for v in config.values()):
-        raise Failure('环境包配置字段无效')
-    if not isinstance(manifest['files'],dict) or set(manifest['files'])!=set(FILES): raise Failure('制品清单不完整')
+        raise Failure(i18n.t('bundle.config_fields_invalid'))
+    if not isinstance(manifest['files'],dict) or set(manifest['files'])!=set(FILES): raise Failure(i18n.t('bundle.artifact_manifest_incomplete'))
     for name,sha in manifest['files'].items():
         if not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{64}',sha) or digest(root/name)!=sha:
-            raise Failure('环境包校验失败: '+name)
+            raise Failure(i18n.t('bundle.verification_failed', name=name))
     read_file(root/'package.lock',4*1024**2)
-    if config.get('DISTRO')!=manifest['distro']:raise Failure('配方发行版与归档不一致')
+    if config.get('DISTRO')!=manifest['distro']:raise Failure(i18n.t('bundle.recipe_distro_mismatch'))
     packages=load_tool(ctx,'package-lock').load(root/'package.lock',manifest['distro'],manifest['architecture'])
-    if read_file(root/'recipe.env',1024**2).decode()!=recipe_text(config): raise Failure('配方与清单配置不一致')
-    success(cli(ctx,'recipe','check',root/'recipe.env'),'环境包配方无效')
+    if read_file(root/'recipe.env',1024**2).decode()!=recipe_text(config): raise Failure(i18n.t('bundle.recipe_config_mismatch'))
+    success(cli(ctx,'recipe','check',root/'recipe.env'),i18n.t('bundle.recipe_invalid'))
     preflight_tar(root/'rootfs.tar.gz',manifest['distro'])
     return root,manifest,packages
 
@@ -365,25 +370,25 @@ def pack(ctx,args):
     source=real_directory(Path(ctx['rootfs']))
     upper=Path(ctx['state'])/'run/overlay/active/upper'
     if upper.is_symlink() or (upper.exists() and any(upper.iterdir())):
-        raise Failure('环境包首版不支持已有非空 overlay upper')
+        raise Failure(i18n.t('bundle.existing_overlay_upper_unsupported'))
     dest=Path(args.path).absolute();parent=real_directory(dest.parent)
     if dest.exists() or dest.is_symlink() or dest.resolve().is_relative_to(Path(ctx['workspace'])):
-        raise Failure('输出必须是工作区外尚不存在的目录')
+        raise Failure(i18n.t('bundle.output_must_be_new_dir_outside_workspace'))
     config=portable_config(ctx)
     if args.recipe:
-        recipe=json.loads(success(cli(ctx,'recipe','export',Path(args.recipe).absolute()),'配方校验失败'))['values']
-        if set(recipe)-PORTABLE-{'INIT','PACKAGES'}: raise Failure('配方含不便携或可能含凭据的宿主设置')
+        recipe=json.loads(success(cli(ctx,'recipe','export',Path(args.recipe).absolute()),i18n.t('bundle.recipe_check_failed')))['values']
+        if set(recipe)-PORTABLE-{'INIT','PACKAGES'}: raise Failure(i18n.t('bundle.recipe_has_nonportable_or_secret_settings'))
         for k,v in recipe.items():
-            if k in PORTABLE and config.get(k)!=v: raise Failure('配方与当前环境配置不一致: '+k)
+            if k in PORTABLE and config.get(k)!=v: raise Failure(i18n.t('bundle.recipe_differs_from_current', key=k))
     private=Path(tempfile.mkdtemp(prefix='.capbox-bundle-',dir=parent))
     try:
-        lock=Path(success(cli(ctx,'image','lock','save'),'无法保存包锁').decode().strip())
+        lock=Path(success(cli(ctx,'image','lock','save'),i18n.t('bundle.unable_to_save_package_lock')).decode().strip())
         shutil.copyfile(lock,private/'package.lock')
         if args.recipe:
             success(cli(ctx,'recipe','check','--locked',private/'package.lock',Path(args.recipe).absolute()),
-                    '配方需要的软件包不在当前锁中')
+                    i18n.t('bundle.recipe_packages_missing_from_lock'))
         (private/'recipe.env').write_text(recipe_text(config))
-        success(cli(ctx,'recipe','check',private/'recipe.env'),'快照配置校验失败')
+        success(cli(ctx,'recipe','check',private/'recipe.env'),i18n.t('bundle.snapshot_config_check_failed'))
         subprocess.run(['tar','--numeric-owner','-czf',str(private/'rootfs.tar.gz'),'-C',str(source.parent),source.name],
                        check=True,capture_output=True,timeout=300)
         preflight_tar(private/'rootfs.tar.gz',ctx['config']['DISTRO'])
@@ -403,7 +408,7 @@ def restore(ctx,args):
     # 暂存全部输入并校验这份不可变副本，而非 guest 可写路径。
     parent=real_directory(Path(ctx['state'])/'os')
     target=parent/ctx['config']['DISTRO']
-    if target.exists() or target.is_symlink():raise Failure('restore 只接受不存在的 rootfs，不覆盖已有环境')
+    if target.exists() or target.is_symlink():raise Failure(i18n.t('bundle.restore_refuses_existing_rootfs'))
     source,manifest,_packages=verify_bundle(ctx,args.path,args.manifest_sha256)
     pinned=hashlib.sha256((json.dumps(manifest,sort_keys=True)).encode()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='capbox-bundle-') as temporary:
@@ -411,7 +416,7 @@ def restore(ctx,args):
         for name in (*FILES,'manifest.json'):copy_artifact(source/name,bundle/name)
         _root,staged_manifest,_packages=verify_bundle(ctx,bundle,args.manifest_sha256)
         if hashlib.sha256(json.dumps(staged_manifest,sort_keys=True).encode()).hexdigest()!=pinned:
-            raise Failure('复制期间环境包清单发生变化')
+            raise Failure(i18n.t('bundle.manifest_changed_during_copy'))
         manifest=staged_manifest
         # 用现有带过滤的镜像导入器解包，落在目标文件系统上。
         stage=Path(tempfile.mkdtemp(prefix='.bundle-',dir=parent))
@@ -420,23 +425,23 @@ def restore(ctx,args):
             command='source "$1/common.sh"; source "$1/image.sh"; _image_extract_archive "$2" "$3"'
             p=subprocess.run(['bash','-c',command,'capbox-bundle',ctx['lib'],str(bundle/'rootfs.tar.gz'),str(stage)],
                              env=environment(ctx),capture_output=True,timeout=300)
-            success(p,'安全解包失败')
+            success(p,i18n.t('bundle.safe_extract_failed'))
             if not (stage/manifest['distro']).is_dir() or (stage/manifest['distro']).is_symlink():
-                raise Failure('归档缺少真实 rootfs 目录')
+                raise Failure(i18n.t('bundle.archive_missing_real_rootfs_dir'))
             validate_launch_directories(stage/manifest['distro'])
             publish_directory(stage/manifest['distro'],target);promoted=True
             verify_env=environment(ctx)
             verify_env.update(CAPBOX_SECURITY_PROFILE='untrusted',CAPBOX_NET='none',CAPBOX_IDMAP='off')
-            success(cli(ctx,'image','lock','verify',bundle/'package.lock',env=verify_env,timeout=120),'恢复后包清单不匹配')
+            success(cli(ctx,'image','lock','verify',bundle/'package.lock',env=verify_env,timeout=120),i18n.t('bundle.packages_mismatch_after_restore'))
             # 钉住的纯数据锁便于后续漂移检查。
             state=real_directory(Path(ctx['state'])/'state')
             lock=state/'package.lock'
-            if lock.is_symlink():raise Failure('目标包锁不能是符号链接')
+            if lock.is_symlink():raise Failure(i18n.t('bundle.target_package_lock_must_not_be_symlink'))
             staged=state/('.bundle-lock-'+uuid.uuid4().hex)
             staged.write_bytes(read_file(bundle/'package.lock',4*1024**2));staged.chmod(0o600)
             os.replace(staged,lock)
             json_output({'kind':'bundle_restored','rootfs':str(target),'config_applied':False,
-                         'notes':'目标策略保持不变。显式应用配置前请审阅 recipe.env。'})
+                         'notes':i18n.t('bundle.restored_notes')})
         except BaseException:
             if promoted:shutil.rmtree(target)
             raise
@@ -445,7 +450,7 @@ def restore(ctx,args):
 
 
 def main():
-    p=argparse.ArgumentParser(prog='capbox',description='宿主安装计划、离线环境包与 MCP')
+    p=i18n.I18nArgumentParser(prog='capbox',description=i18n.t('envkit.parser_description'))
     families=p.add_subparsers(dest='family',required=True)
     setup=families.add_parser('setup');actions=setup.add_subparsers(dest='action',required=True)
     for action in ('check','plan'):
@@ -460,14 +465,14 @@ def main():
     mcp=families.add_parser('mcp')
     mcp.add_argument('action',choices=['serve'])
     mcp.add_argument('--profile',choices=list(defaults.ALLOWED_PROFILES),default=defaults.DEFAULT_PROFILE,
-                     help='安全配置档（默认: %(default)s)')
+                     help=i18n.t('mcp.help_profile'))
     mcp.add_argument('--net',choices=list(defaults.ALLOWED_NET),default=defaults.DEFAULT_NET,
-                     help='网络模式（默认: %(default)s；拒绝 open）')
+                     help=i18n.t('mcp.help_net'))
     mcp.add_argument('--workspace-mode',choices=list(defaults.ALLOWED_WORKSPACE_MODES),
                      default=defaults.DEFAULT_WORKSPACE_MODE,
-                     help='任务工作区（默认: %(default)s)')
+                     help=i18n.t('mcp.help_workspace_mode'))
     mcp.add_argument('--max-timeout',type=int,default=defaults.DEFAULT_MAX_TIMEOUT,
-                     help='任务超时上限秒数（默认: %(default)s)')
+                     help=i18n.t('mcp.help_max_timeout'))
     args=p.parse_args();ctx=context()
     if args.family=='mcp':
         mcp_ctx=dict(ctx,config=dict(ctx['config'],PROXY=''))
@@ -497,4 +502,4 @@ if __name__=='__main__':
     except Failure as exc:
         print('[capbox] '+str(exc),file=sys.stderr);sys.exit(exc.code)
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError,tarfile.TarError) as exc:
-        print('[capbox] 环境工具操作失败: '+type(exc).__name__+': '+str(exc),file=sys.stderr);sys.exit(1)
+        print(i18n.t('envkit.operation_failed', type=type(exc).__name__, exc=exc),file=sys.stderr);sys.exit(1)

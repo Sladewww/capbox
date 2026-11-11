@@ -18,8 +18,13 @@ import subprocess
 import sys
 import uuid
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 if sys.version_info < (3, 10):
-    print('[capbox] 此功能需要宿主 Python 3.10 或更新版本', file=sys.stderr)
+    print(i18n.t('upgrade.requires_python_3_10'), file=sys.stderr)
     sys.exit(5)
 
 
@@ -30,9 +35,9 @@ def real_directory(path: Path) -> Path:
     # 先拒绝链接（含父路径组件），再解析。
     for part in (path, *path.parents):
         if part.is_symlink():
-            raise ValueError(f'拒绝符号链接目录: {part}')
+            raise ValueError(i18n.t('upgrade.refuse_symlink_dir', path=part))
     if not path.is_dir():
-        raise ValueError(f'目录不存在: {path}')
+        raise ValueError(i18n.t('upgrade.directory_does_not_exist', path=path))
     return path.resolve()
 
 
@@ -44,11 +49,11 @@ def inventory(root: Path) -> dict[str, str]:
             for name in dirs + files:
                 path = Path(folder) / name
                 if path.is_symlink():
-                    raise ValueError(f'运行文件不能是符号链接: {path}')
+                    raise ValueError(i18n.t('upgrade.runtime_file_must_not_be_symlink', path=path))
             for name in files:
                 path = Path(folder) / name
                 if not path.is_file():
-                    raise ValueError(f'运行目录只接受普通文件: {path}')
+                    raise ValueError(i18n.t('upgrade.runtime_dir_regular_files_only', path=path))
                 # Python 字节码是本地缓存，不属于运行时包。
                 if '__pycache__' in path.parts or path.suffix == '.pyc':
                     continue
@@ -56,7 +61,7 @@ def inventory(root: Path) -> dict[str, str]:
                 result[str(path.relative_to(root))] = (
                     hashlib.sha256(path.read_bytes()).hexdigest() + f':{mode:o}')
     if 'bin/capbox' not in result or 'lib/common.sh' not in result:
-        raise ValueError('模板缺少 bin/capbox 或 lib/common.sh')
+        raise ValueError(i18n.t('upgrade.template_missing_bin_or_lib'))
     return result
 
 
@@ -104,14 +109,14 @@ def copy_runtime(source: Path, dest: Path) -> None:
         shutil.copytree(source / part, dest / part,
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     if inventory(source) != inventory(dest):
-        raise ValueError('复制后的运行文件哈希不一致')
+        raise ValueError(i18n.t('upgrade.copied_runtime_hash_mismatch'))
     sync_tree(dest)
     sync_directory(dest.parent)
 
 
 def smoke(root: Path, workspace: Path) -> None:
     if not os.access(root / 'bin/capbox', os.X_OK):
-        raise ValueError('bin/capbox 缺少可执行权限')
+        raise ValueError(i18n.t('upgrade.bin_capbox_not_executable'))
     for path in [root / 'bin/capbox', *sorted((root / 'lib').rglob('*.sh'))]:
         subprocess.run(['bash', '-n', str(path)], check=True, capture_output=True)
     # 从自身目录调用，避免其他项目的 lib 遮蔽暂存区。
@@ -120,7 +125,7 @@ def smoke(root: Path, workspace: Path) -> None:
         result = subprocess.run([str(root / 'bin/capbox'), '--root', str(root), *args], cwd=root, env=env,
                                 text=True, capture_output=True, timeout=30, check=True)
         if args == ('version',) and result.stdout.strip() != f'CapBox {version(root)}':
-            raise ValueError('运行时版本与模板元数据不一致')
+            raise ValueError(i18n.t('upgrade.runtime_version_metadata_mismatch'))
 
 
 def report(data: dict, as_json: bool) -> None:
@@ -145,33 +150,33 @@ def main() -> None:
     workspace = real_directory(args.workspace.absolute())
     private = real_directory(args.private.absolute())
     if private.is_relative_to(workspace):
-        raise ValueError('备份目录不能位于工作区')
+        raise ValueError(i18n.t('upgrade.backup_dir_must_not_be_in_workspace'))
     if private.stat().st_uid != os.getuid() or stat.S_IMODE(private.stat().st_mode) != 0o700:
-        raise ValueError('宿主备份目录所有者或权限不安全')
+        raise ValueError(i18n.t('upgrade.host_backup_owner_or_mode_unsafe'))
     data_root = args.data_root.absolute()
     if data_root.resolve().is_relative_to(workspace):
-        raise ValueError('持久备份不能位于工作区')
+        raise ValueError(i18n.t('upgrade.persistent_backup_must_not_be_in_workspace'))
     for part in (data_root, *data_root.parents):
         if part.is_symlink():
-            raise ValueError('持久备份路径不能含符号链接')
+            raise ValueError(i18n.t('upgrade.persistent_backup_path_must_not_contain_symlink'))
     data_root.mkdir(parents=True, mode=0o700, exist_ok=True)
     if data_root.stat().st_uid != os.getuid() or stat.S_IMODE(data_root.stat().st_mode) != 0o700:
-        raise ValueError('持久备份目录所有者或权限不安全')
+        raise ValueError(i18n.t('upgrade.persistent_backup_owner_or_mode_unsafe'))
     project_data = data_root / hashlib.sha256(str(target).encode()).hexdigest()[:32]
     if project_data.is_symlink():
-        raise ValueError('项目备份目录不能是符号链接')
+        raise ValueError(i18n.t('upgrade.project_backup_must_not_be_symlink'))
     project_data.mkdir(mode=0o700, exist_ok=True)
     if project_data.stat().st_uid != os.getuid() or stat.S_IMODE(project_data.stat().st_mode) != 0o700:
-        raise ValueError('项目备份目录所有者或权限不安全')
+        raise ValueError(i18n.t('upgrade.project_backup_owner_or_mode_unsafe'))
     backups = project_data / 'upgrades'
     if backups.is_symlink():
-        raise ValueError('备份目录不能是符号链接')
+        raise ValueError(i18n.t('upgrade.backup_dir_must_not_be_symlink'))
     backups.mkdir(mode=0o700, exist_ok=True)
     if backups.stat().st_uid != os.getuid() or stat.S_IMODE(backups.stat().st_mode) != 0o700:
-        raise ValueError('备份目录所有者或权限不安全')
+        raise ValueError(i18n.t('upgrade.backup_dir_owner_or_mode_unsafe'))
     journal = backups / 'transaction.json'
     if journal.is_symlink():
-        raise ValueError('事务记录不能是符号链接')
+        raise ValueError(i18n.t('upgrade.transaction_must_not_be_symlink'))
     record = json.loads(journal.read_text()) if journal.exists() else None
     if record is not None:
         fields = {'id', 'phase', 'old_inventory', 'new_inventory', 'old_version', 'new_version'}
@@ -180,12 +185,12 @@ def main() -> None:
                 or record['phase'] not in ('prepared', 'promoting', 'complete', 'rolled_back')
                 or not isinstance(record['old_inventory'], dict)
                 or not isinstance(record['new_inventory'], dict)):
-            raise ValueError('升级事务记录格式无效，拒绝修改运行文件')
+            raise ValueError(i18n.t('upgrade.transaction_format_invalid'))
     marker = target / '.upgrade-in-progress'
 
     def begin_maintenance():
         if marker.is_symlink() or (marker.exists() and not marker.is_file()):
-            raise ValueError('升级维护标记不安全')
+            raise ValueError(i18n.t('upgrade.maintenance_marker_unsafe'))
         marker.touch(mode=0o600, exist_ok=True)
         with marker.open('rb') as f:
             os.fsync(f.fileno())
@@ -195,17 +200,17 @@ def main() -> None:
     def recover() -> None:
         nonlocal record
         if not record:
-            raise ValueError('没有可回滚的升级记录')
+            raise ValueError(i18n.t('upgrade.no_rollback_record'))
         backup = backups / record['id']
         real_directory(backup)
         if inventory(backup) != record['old_inventory']:
-            raise ValueError('备份完整性校验失败，拒绝回滚')
+            raise ValueError(i18n.t('upgrade.backup_integrity_failed'))
         begin_maintenance()
         # 恢复是幂等的，中断后可重复执行。
         for part in PARTS:
             pending = target / f'.upgrade-recover-{part}'
             if pending.is_symlink():
-                raise ValueError('回滚暂存路径不能是符号链接')
+                raise ValueError(i18n.t('upgrade.rollback_staging_must_not_be_symlink'))
             if pending.exists():
                 shutil.rmtree(pending)
             shutil.copytree(backup / part, pending)
@@ -213,13 +218,13 @@ def main() -> None:
             sync_directory(target)
             existing = target / part
             if existing.is_symlink():
-                raise ValueError('运行目录不能是符号链接')
+                raise ValueError(i18n.t('upgrade.runtime_dir_must_not_be_symlink'))
             if existing.exists():
                 shutil.rmtree(existing)
             os.replace(pending, existing)
             sync_directory(target)
         if inventory(target) != record['old_inventory']:
-            raise ValueError('回滚后的运行文件校验失败')
+            raise ValueError(i18n.t('upgrade.rollback_verification_failed'))
         record['phase'] = 'rolled_back'
         write_json(journal, record)
         marker.unlink(missing_ok=True)
@@ -230,10 +235,10 @@ def main() -> None:
         report({'status': 'rolled_back', 'version': version(target)}, args.json)
         return
     if record and record['phase'] not in ('complete', 'rolled_back'):
-        raise ValueError('存在未完成升级，请先运行 upgrade rollback')
+        raise ValueError(i18n.t('upgrade.post_upgrade_unfinished_rollback_first'))
     source = real_directory(args.source.absolute())
     if source.is_relative_to(workspace):
-        raise ValueError('升级来源必须位于工作区外，避免执行 guest 可修改的模板')
+        raise ValueError(i18n.t('upgrade.source_must_be_outside_workspace'))
     old, new = inventory(target), inventory(source)
     differences = sorted(k for k in old.keys() | new.keys() if old.get(k) != new.get(k))
     data = {'status': 'up_to_date' if not differences else 'update_available',
@@ -266,7 +271,7 @@ def main() -> None:
                 sync_directory(stage)
                 sync_directory(target)
             if inventory(target) != new:
-                raise ValueError('升级后的文件校验失败')
+                raise ValueError(i18n.t('upgrade.post_upgrade_verification_failed'))
             smoke(target, workspace)
             record['phase'] = 'complete'
             write_json(journal, record)
@@ -286,7 +291,7 @@ if __name__ == '__main__':
     try:
         main()
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as exc:
-        print(f'[capbox] 升级失败: {exc}', file=sys.stderr)
+        print(i18n.t('upgrade.failed', exc=exc), file=sys.stderr)
         if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
             print(exc.stderr[-2000:], file=sys.stderr)
         sys.exit(1)

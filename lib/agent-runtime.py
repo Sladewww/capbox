@@ -26,6 +26,11 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 SCHEMA = 'capbox.agent.v1'
 FINISHED = {'succeeded', 'failed', 'cancelled', 'timed_out'}
 TERMINAL = FINISHED | {'lost'}
@@ -55,9 +60,9 @@ def private_dir(path, create=False):
             pass
     st = path.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
-        raise AgentError('宿主任务目录必须由当前用户拥有、权限 0700 且不是符号链接')
+        raise AgentError(i18n.t('task.host_task_dir_unsafe'))
     if path.resolve() != path:
-        raise AgentError('宿主任务目录不能经过符号链接')
+        raise AgentError(i18n.t('task.host_task_dir_must_not_follow_symlink'))
     return path
 
 
@@ -65,7 +70,7 @@ def read_json(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as f:
         if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            raise AgentError('任务记录必须是普通文件')
+            raise AgentError(i18n.t('task.record_must_be_regular_file'))
         return json.load(f)
 
 
@@ -128,11 +133,11 @@ def effective(ctx, args):
     values['LANDLOCK'] = {'value': cfg.get('LANDLOCK') or ('on' if profile == 'strict' else 'off'),
                           'source': sources.get('LANDLOCK', 'default') if cfg.get('LANDLOCK') else 'profile'}
     return {'kind': 'policy', 'values': values,
-            'scope': '新的 oneshot 启动；不是已有 daemon',
-            'limits': '按请求设置，由 exec 启动器在启动时校验',
-            'notes': ['NET=none 时 pkg install/update 会临时使用网络',
-                      'IDMAP auto/on 可能放宽嵌套 userns 限制；见 doctor',
-                      '只读 rootfs 可能带 overlay；/workspace 默认可写']}
+            'scope': i18n.t('policy.scope_new_oneshot'),
+            'limits': i18n.t('policy.limits_checked_at_exec'),
+            'notes': [i18n.t('policy.note_net_none_pkg'),
+                      i18n.t('policy.note_idmap_auto_on'),
+                      i18n.t('policy.note_readonly_rootfs_overlay')]}
 
 
 def net_module(ctx):
@@ -145,11 +150,11 @@ def net_module(ctx):
 def network_check(ctx, args):
     target = urlsplit(args.target)
     if target.scheme not in ('http', 'https') or not target.hostname or target.username or target.password:
-        raise AgentError('只接受不含凭据的 http:// 或 https:// URL', 2)
+        raise AgentError(i18n.t('policy.url_must_be_http_without_credentials'), 2)
     try:
         host, port = target.hostname, target.port or (443 if target.scheme == 'https' else 80)
     except ValueError as exc:
-        raise AgentError('URL 端口无效', 2) from exc
+        raise AgentError(i18n.t('policy.url_port_invalid'), 2) from exc
     policy = effective(ctx, args)
     mode = policy['values']['NET']['value']
     result = {'kind': 'network_decision', 'host': host, 'port': port, 'mode': mode,
@@ -176,7 +181,7 @@ def network_check(ctx, args):
                 except socket.gaierror:
                     result.update(decision='deny', reason='dns_resolution_failed')
     result['policy_source'] = policy['values']['NET']['source']
-    result['notes'] = '仅策略预览。DNS 可能变化；代理在连接时会再校验。未建立 TCP 连接。'
+    result['notes'] = i18n.t('policy.preview_notes')
     return result
 
 
@@ -196,7 +201,7 @@ def clean_environment(ctx):
 def safe_relative(name):
     path = PurePosixPath(name)
     if not name or path.is_absolute() or any(p in ('', '.', '..') for p in name.split('/')):
-        raise AgentError('工作副本文件路径无效')
+        raise AgentError(i18n.t('task.work_copy_path_invalid'))
     return path
 
 
@@ -219,14 +224,14 @@ def read_regular(root, name):
         with os.fdopen(fd, 'rb') as f:
             before = os.fstat(f.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-                raise AgentError('只支持普通、非硬链接文件: ' + name)
+                raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
             if before.st_size > MAX_COPY:
-                raise AgentError('文件超过工作副本大小限制: ' + name)
+                raise AgentError(i18n.t('task.file_exceeds_work_copy_limit', name=name))
             data = f.read(MAX_COPY + 1)
             after = os.fstat(f.fileno())
             signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
             if len(data) > MAX_COPY or signature(before) != signature(after):
-                raise AgentError('读取期间文件变化，请停止写入后重试: ' + name)
+                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
             return data, before
     finally:
         os.close(directory)
@@ -246,10 +251,10 @@ def regular_files(root):
             if stat.S_ISDIR(st.st_mode):
                 continue
             if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                raise AgentError('隔离副本只支持普通文件，不接受符号链接、硬链接或特殊文件: ' + rel)
+                raise AgentError(i18n.t('task.isolate_only_regular_files', rel=rel))
             total += st.st_size
             if total > MAX_COPY or len(result) >= MAX_FILES:
-                raise AgentError('工作副本超过 100MiB / 10000 文件的首版限制')
+                raise AgentError(i18n.t('task.work_copy_exceeds_first_edition_limit'))
             data, st = read_regular(root, rel)
             result[rel] = {'sha256': hashlib.sha256(data).hexdigest(),
                            'executable': bool(st.st_mode & 0o111)}
@@ -268,7 +273,7 @@ def git(ctx, args, *, work=None, index=None, data=None):
         cmd += ['-C', str(work)]
     proc = subprocess.run(cmd + args, input=data, env=env, capture_output=True, timeout=30)
     if proc.returncode:
-        raise AgentError('Git 工作副本操作失败（请确认项目是仓库根目录）')
+        raise AgentError(i18n.t('task.git_work_copy_failed'))
     return proc.stdout
 
 
@@ -293,7 +298,7 @@ def list_isolate_names(ctx, source):
             names.append(item.decode('utf-8', 'strict'))
         return sorted(set(names)), 'git'
     if not source.is_dir() or source.is_symlink():
-        raise AgentError('--isolate 既不是可读的 Git 仓库根目录，也无法遍历工作区目录', 2)
+        raise AgentError(i18n.t('task.isolate_not_git_or_traversable'), 2)
     names = []
     for directory, dirs, files in os.walk(source, followlinks=False):
         relative = Path(directory).relative_to(source)
@@ -322,7 +327,7 @@ def is_overlay_whiteout(path):
 def merge_overlay_upper(upper, dest_rootfs):
     """把 overlay upper 应用到独立 rootfs 副本（copy-up + whiteout）。"""
     if upper.is_symlink() or not upper.is_dir():
-        raise AgentError('--isolate 拒绝不安全的 overlay upper（符号链接或非目录）')
+        raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
     for directory, dirs, files in os.walk(upper, followlinks=False, topdown=True):
         rel_dir = Path(directory).relative_to(upper)
         # 部分 overlay 实现使用的不透明目录标记。
@@ -339,7 +344,7 @@ def merge_overlay_upper(upper, dest_rootfs):
             src = Path(directory) / name
             rel = (rel_dir / name).as_posix() if str(rel_dir) != '.' else name
             if src.is_symlink():
-                raise AgentError('--isolate overlay upper 含符号链接，已拒绝: ' + rel)
+                raise AgentError(i18n.t('task.isolate_overlay_upper_symlink', rel=rel))
             if name == '.wh..wh..opq':
                 continue
             if name.startswith('.wh.'):
@@ -363,7 +368,7 @@ def merge_overlay_upper(upper, dest_rootfs):
                 dst.mkdir(parents=True, exist_ok=True)
                 continue
             if not stat.S_ISREG(st.st_mode):
-                raise AgentError('--isolate overlay upper 含不支持的特殊文件: ' + rel)
+                raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=rel))
             dst.parent.mkdir(parents=True, exist_ok=True)
             if dst.exists() or dst.is_symlink():
                 if dst.is_dir() and not dst.is_symlink():
@@ -376,16 +381,16 @@ def merge_overlay_upper(upper, dest_rootfs):
 def isolate(ctx, job):
     source = Path(ctx['workspace']).resolve()
     if not source.is_dir() or source.is_symlink():
-        raise AgentError('--isolate 需要可读的工作区目录', 2)
+        raise AgentError(i18n.t('task.isolate_needs_readable_workspace'), 2)
     upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
     if upper.exists() and upper.is_symlink():
-        raise AgentError('--isolate 拒绝符号链接形式的 overlay upper')
+        raise AgentError(i18n.t('task.isolate_rejects_symlink_overlay_upper'))
     try:
         names, mode = list_isolate_names(ctx, source)
     except AgentError:
         raise
     except OSError as exc:
-        raise AgentError('--isolate 无法枚举工作区文件') from exc
+        raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace')) from exc
     view = job / 'workspace'
     view.mkdir(mode=0o755)  # 外层 job 仍为 0700；映射后的非 root 用户可读该视图
     baseline, skipped, total = {}, [], 0
@@ -400,10 +405,10 @@ def isolate(ctx, job):
         try:
             data, st = read_regular(source, name)
         except OSError as exc:
-            raise AgentError('源工作区包含符号链接或路径不可安全读取: ' + name) from exc
+            raise AgentError(i18n.t('task.source_workspace_symlink_or_unreadable', name=name)) from exc
         total += st.st_size
         if total > MAX_COPY or len(baseline) >= MAX_FILES:
-            raise AgentError('工作副本超过 100MiB / 10000 文件限制')
+            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
         dst = view / relative
         dst.parent.mkdir(parents=True, exist_ok=True)
         with dst.open('xb') as outgoing:
@@ -436,11 +441,11 @@ def isolate(ctx, job):
 
 def job_path(root, name):
     if not re.fullmatch(r'[0-9a-f]{32}', name):
-        raise AgentError('无效 task ID', 2)
+        raise AgentError(i18n.t('task.invalid_task_id'), 2)
     try:
         return private_dir(root / name)
     except FileNotFoundError as exc:
-        raise AgentError('找不到 task ID', 2) from exc
+        raise AgentError(i18n.t('task.task_id_not_found'), 2) from exc
 
 
 def state_of(job):
@@ -457,10 +462,9 @@ def public_state(job):
                                 if (job / (s + '.log')).exists() else 0
                                 for s in ('stdout', 'stderr')})
     if result.get('status') == 'timed_out':
-        result['hint'] = ('任务执行超时（timed_out / exit 124）。'
-                          '查看 task logs，缩小命令，或提高 --timeout（MCP 受 --max-timeout 上限约束）。')
+        result['hint'] = i18n.t('task.hint_timed_out')
     elif result.get('status') == 'cancelled':
-        result['hint'] = '任务已取消。可用 task logs 查看部分输出；需要时可重新 task start。'
+        result['hint'] = i18n.t('task.hint_cancelled')
     return result
 
 
@@ -472,13 +476,13 @@ def return_code(state):
 def start_task(ctx, root, args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
-        raise AgentError('task start 缺少命令（用 -- 分隔）', 2)
+        raise AgentError(i18n.t('task.start_missing_command'), 2)
     if not Path(ctx['rootfs']).is_dir():
-        raise AgentError('rootfs 不存在，请先 init', 4)
+        raise AgentError(i18n.t('task.rootfs_missing_run_init'), 4)
     active = [d for d in root.iterdir() if d.is_dir() and not d.is_symlink()
               and re.fullmatch('[0-9a-f]{32}', d.name) and state_of(d)['status'] not in TERMINAL]
     if len(active) >= 8:
-        raise AgentError('当前项目已有 8 个活动任务，请等待或取消后重试')
+        raise AgentError(i18n.t('task.too_many_active_tasks'))
     task_id = uuid.uuid4().hex
     job = private_dir(root / task_id, create=True)
     state = {'task_id': task_id, 'status': 'preparing', 'created_at': time.time(),
@@ -527,9 +531,9 @@ def start_task(ctx, root, args):
                 emit(public_state(job))
                 return 0
             if worker.poll() is not None:
-                raise AgentError('任务监督器未启动；请查看私有 controller.log')
+                raise AgentError(i18n.t('task.supervisor_did_not_start'))
             time.sleep(0.02)
-        raise AgentError('任务监督器启动超时')
+        raise AgentError(i18n.t('task.supervisor_start_timed_out'))
     except BaseException:
         if launched is not None and launched.poll() is None:
             launched.kill()
@@ -552,7 +556,7 @@ def worker(root, task_id):
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     state = read_json(job / 'state.json')
     if state['status'] != 'preparing':
-        raise AgentError('任务已经提交给监督器')
+        raise AgentError(i18n.t('task.already_submitted_to_supervisor'))
     plan = read_json(job / 'plan.json')
     state.update(status='running', worker=identity(os.getpid()), started_at=time.time())
     write_json(job / 'state.json', state)
@@ -639,8 +643,7 @@ def log_chunk(job, stream, offset, limit):
                 return {'task_id': job.name, 'stream': stream, 'offset': offset,
                         'next_offset': offset, 'data_base64': '',
                         'size': size, 'eof': True, 'cursor_past_eof': True,
-                        'hint': '日志游标超出文件末尾（offset=%d, size=%d）；请用上一次的 next_offset，或从 0 重读'
-                                % (offset, size)}
+                        'hint': i18n.t('task.hint_log_cursor_past_eof', offset=offset, size=size)}
             f.seek(offset)
             data = f.read(limit)
     next_offset = offset + len(data)
@@ -654,7 +657,7 @@ def log_chunk(job, stream, offset, limit):
 def diff_task(ctx, job, as_json):
     state = state_of(job)
     if not state['isolated'] or state['status'] not in FINISHED:
-        raise AgentError('diff 只支持已结束且非 lost 的隔离任务', 2)
+        raise AgentError(i18n.t('task.diff_only_finished_isolated'), 2)
     plan = read_json(job / 'plan.json')
     view, index = job / 'workspace', job / 'review.git'
     current = regular_files(view)
@@ -667,7 +670,7 @@ def diff_task(ctx, job, as_json):
     patch = git(ctx, ['diff', '--binary', '--no-ext-diff', '--no-textconv', '--', '.',
                       ':(exclude).capbox', ':(exclude).git'], work=view, index=index)
     if len(patch) > 16 * 1024 * 1024:
-        raise AgentError('diff 超过 16MiB 限制，请缩小任务改动')
+        raise AgentError(i18n.t('task.diff_exceeds_16mib'))
     origin = Path(plan['origin'])
     conflicts = []
     for name in set(baseline) | set(new):
@@ -683,35 +686,35 @@ def diff_task(ctx, job, as_json):
     result = {'kind': 'workspace_diff', 'task_id': job.name, 'changed_files': sorted(
         name for name in set(current) | set(baseline) if current.get(name) != baseline.get(name)),
         'origin_changed': conflicts, 'patch_base64': base64.b64encode(patch).decode(),
-        'notes': '仅导出；应用前请审阅补丁与源基线。CapBox 从不自动应用 isolate diff —— 审阅后只在宿主上应用。'}
+        'notes': i18n.t('task.diff_export_notes')}
     if as_json:
         emit(result)
     else:
         sys.stdout.buffer.write(patch)
         if conflicts:
-            print('宿主基线已有变化，请先解决冲突: ' + ', '.join(conflicts), file=sys.stderr)
+            print(i18n.t('task.host_baseline_changed', conflicts=', '.join(conflicts)), file=sys.stderr)
     return 0
 
 
 def nonnegative(value):
     number = int(value)
     if number < 0:
-        raise argparse.ArgumentTypeError('必须是非负整数')
+        raise argparse.ArgumentTypeError(i18n.t('task.must_be_nonnegative_integer'))
     return number
 
 
 def parser():
-    p = argparse.ArgumentParser(prog='capbox', description='本地 Agent 任务与策略诊断')
+    p = i18n.I18nArgumentParser(prog='capbox', description=i18n.t('task.parser_description'))
     families = p.add_subparsers(dest='family', required=True)
-    task = families.add_parser('task', help='可恢复任务；所有状态/结果为版本化 JSON')
+    task = families.add_parser('task', help=i18n.t('task.help_family'))
     commands = task.add_subparsers(dest='action', required=True)
-    start = commands.add_parser('start', help='启动独立监督的 exec 任务')
-    start.add_argument('--json', action='store_true', help='结果默认即为版本化 JSON')
+    start = commands.add_parser('start', help=i18n.t('task.help_start'))
+    start.add_argument('--json', action='store_true', help=i18n.t('task.help_start_json'))
     start.add_argument('--timeout', type=nonnegative, default=600)
     start.add_argument('--cwd', default='/workspace')
     start.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
     start.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
-    start.add_argument('--isolate', action='store_true', help='复制工作区文件与独立 rootfs（Git 脏树/非 Git/overlay 合并）；diff 后导出')
+    start.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
     start.add_argument('command', nargs=argparse.REMAINDER)
     listing = commands.add_parser('list')
@@ -719,9 +722,9 @@ def parser():
     for action in ('status', 'wait', 'attach', 'cancel', 'logs', 'diff', 'rm'):
         cmd = commands.add_parser(action)
         cmd.add_argument('task_id')
-        cmd.add_argument('--json', action='store_true', help='输出 JSON（attach 为 JSONL；logs/diff 的二进制用 base64）')
+        cmd.add_argument('--json', action='store_true', help=i18n.t('task.help_json'))
         if action in ('wait', 'attach'):
-            cmd.add_argument('--timeout', type=nonnegative, default=0, help='客户端等待上限；到期返回124，不取消任务')
+            cmd.add_argument('--timeout', type=nonnegative, default=0, help=i18n.t('task.help_wait_timeout'))
         if action == 'attach':
             cmd.add_argument('--stdout-offset', type=nonnegative, default=0)
             cmd.add_argument('--stderr-offset', type=nonnegative, default=0)
@@ -729,7 +732,7 @@ def parser():
             cmd.add_argument('--stream', choices=['stdout', 'stderr'], default='stdout')
             cmd.add_argument('--offset', type=nonnegative, default=0)
             cmd.add_argument('--limit', type=nonnegative, default=65536)
-    policy = families.add_parser('policy', help='解释新 oneshot 的请求策略；不改变配置')
+    policy = families.add_parser('policy', help=i18n.t('policy.help_family'))
     policies = policy.add_subparsers(dest='action', required=True)
     for action in ('show', 'check'):
         cmd = policies.add_parser(action)
@@ -738,7 +741,7 @@ def parser():
         cmd.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
         if action == 'check':
             cmd.add_argument('target')
-            cmd.add_argument('--resolve', action='store_true', help='显式执行 DNS 查询，仍不会连接目标 TCP 端口')
+            cmd.add_argument('--resolve', action='store_true', help=i18n.t('policy.help_resolve'))
     return p
 
 
@@ -755,7 +758,7 @@ def main(argv=None):
     root = private_dir(private_dir(Path(os.environ['CAPBOX_AGENT_PRIVATE'])) / 'tasks', create=True)
     if args.action == 'start':
         if args.max_output_bytes > 64 * 1024 * 1024:
-            raise AgentError('每路日志上限不能超过 64MiB', 2)
+            raise AgentError(i18n.t('task.log_limit_exceeds_64mib'), 2)
         return start_task(ctx, root, args)
     if args.action == 'list':
         jobs = [public_state(job_path(root, d.name)) for d in sorted(root.iterdir())
@@ -772,7 +775,7 @@ def main(argv=None):
         emit(public_state(job))
     elif args.action == 'logs':
         if args.limit > 1024 * 1024:
-            raise AgentError('单次日志读取上限为 1MiB', 2)
+            raise AgentError(i18n.t('task.single_log_read_limit_1mib'), 2)
         chunk = log_chunk(job, args.stream, args.offset, args.limit)
         if args.json:
             emit(chunk)
@@ -803,7 +806,7 @@ def main(argv=None):
             if deadline and time.monotonic() >= deadline:
                 if args.json or args.action == 'wait':
                     emit({'kind': 'wait_timeout', 'task_id': job.name, 'status': state['status'],
-                          'hint': '客户端等待超时（未取消任务）。继续 status/logs/wait，或显式 cancel。'})
+                          'hint': i18n.t('task.hint_client_wait_timeout')})
                 return 124
             time.sleep(0.05)
     elif args.action == 'diff':
@@ -811,9 +814,9 @@ def main(argv=None):
     elif args.action == 'rm':
         state = state_of(job)
         if state['status'] not in TERMINAL:
-            raise AgentError('不能删除运行中的任务；请先 cancel/wait')
+            raise AgentError(i18n.t('task.cannot_remove_running'))
         if state['status'] == 'lost':
-            raise AgentError('lost 任务需人工确认外层会话已结束，首版不自动清理')
+            raise AgentError(i18n.t('task.lost_requires_manual_confirm'))
         shutil.rmtree(job)
         emit({'kind': 'removed', 'task_id': args.task_id})
     return 0
@@ -828,5 +831,5 @@ if __name__ == '__main__':
         print('[capbox] ' + str(exc), file=sys.stderr)
         sys.exit(exc.code)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        print('[capbox] 任务操作失败: ' + type(exc).__name__ + ': ' + str(exc), file=sys.stderr)
+        print(i18n.t('task.operation_failed', type=type(exc).__name__, exc=exc), file=sys.stderr)
         sys.exit(1)

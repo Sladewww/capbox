@@ -555,7 +555,7 @@ def wait_child():
             except Exception:
                 pass
         time.sleep(0.05)
-    raise SystemExit("publish: 子 netns 尚未就绪")
+    raise SystemExit(os.environ.get("CAPBOX_PUBLISH_NETNS_MSG", "publish: child netns is not ready"))
 
 child=wait_child()
 
@@ -630,6 +630,7 @@ PYF
     pidf="$pd/pid-${_pub_host_port}"
     child_pid_file="$(_service_run_dir "$name")/sandbox.pid"
     rm -f "$ready"
+    CAPBOX_PUBLISH_NETNS_MSG="$(i18n_get net.publish_child_netns_not_ready)" \
     nohup python3 "$pyf" "$_pub_host_port" "$_pub_guest_addr" "$_pub_guest_port" "$child_pid_file" "$ready" "$(_net_proxy_py)" \
       >>"$pd/forward.log" 2>&1 &
     echo $! >"$pidf"

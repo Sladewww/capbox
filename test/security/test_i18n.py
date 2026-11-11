@@ -594,5 +594,140 @@ class LeftoverResourcesRuntimeErrorTests(unittest.TestCase):
         self.assertNotIn('卸载失败', en.stderr)
 
 
+
+class PythonArgparseI18nTests(unittest.TestCase):
+    """Python / argparse prompts follow CAPBOX_LANG; English must not embed the Chinese copy."""
+
+    def test_representative_python_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['argparse.usage'], '用法: ')
+        self.assertEqual(en['argparse.usage'], 'usage: ')
+        self.assertEqual(zh['argparse.show_help'], '显示此帮助并退出')
+        self.assertEqual(en['argparse.show_help'], 'show this help message and exit')
+        self.assertEqual(zh['upgrade.failed'], '[capbox] 升级失败: {exc}')
+        self.assertEqual(en['upgrade.failed'], '[capbox] upgrade failed: {exc}')
+        self.assertEqual(zh['audit.report_generated'], '已生成审计报告: {path}（{count} 条事件）')
+        self.assertEqual(en['audit.report_generated'], 'generated audit report: {path} ({count} events)')
+        self.assertEqual(zh['audit.report_description'],
+                         '导出可搜索、筛选的离线 HTML 审计报告，不启动服务')
+        self.assertIn('searchable', en['audit.report_description'])
+        self.assertEqual(zh['task.help_start'], '启动独立监督的 exec 任务')
+        self.assertIn('supervised', en['task.help_start'])
+        self.assertEqual(zh['mcp.help_profile'], '安全配置档（默认: %(default)s）')
+        self.assertIn('security profile', en['mcp.help_profile'])
+        self.assertEqual(zh['mcp.instructions'].startswith('固定工作区与策略'), True)
+        self.assertIn('cannot raise the policy', en['mcp.instructions'])
+        self.assertEqual(zh['cred.hint_empty_store'].startswith('未绑定凭据：宿主密钥库为空'), True)
+        self.assertIn('host secret store is empty', en['cred.hint_empty_store'])
+        self.assertNotIn('未绑定凭据', en['cred.hint_empty_net_allow'])
+        self.assertNotIn('未绑定凭据', en['cred.hint_empty_store'])
+        self.assertNotIn('未绑定凭据', en['cred.hint_domains_not_in_net_allow'])
+        self.assertEqual(zh['net.publish_child_netns_not_ready'], 'publish: 子 netns 尚未就绪')
+        self.assertEqual(en['net.publish_child_netns_not_ready'], 'publish: child netns is not ready')
+
+    def test_python_resolve_lang_matches_locked_rules(self):
+        self.assertEqual(i18n.resolve_lang({'CAPBOX_LANG': 'zh_CN'}), 'zh')
+        self.assertEqual(i18n.resolve_lang({'CAPBOX_LANG': 'zh.UTF-8'}), 'zh')
+        self.assertEqual(i18n.resolve_lang({'CAPBOX_LANG': 'en_US.UTF-8'}), 'en')
+        self.assertEqual(i18n.resolve_lang({'LC_ALL': 'C'}), 'en')
+        self.assertEqual(i18n.resolve_lang({'LANG': 'zh_CN.UTF-8'}), 'zh')
+        self.assertEqual(i18n.resolve_lang({'LANG': 'zh_TW'}), 'en')
+        self.assertEqual(i18n.resolve_lang({'CAPBOX_UI_LANG': 'zh', 'LC_ALL': 'C'}), 'zh')
+        with self.assertRaises(SystemExit) as cm:
+            i18n.resolve_lang({'CAPBOX_LANG': 'zh_TW'})
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_python_fmt_and_t_follow_lang(self):
+        zh_cat = i18n.load_catalog('zh')
+        self.assertEqual(i18n.fmt(zh_cat, 'audit.report_generated', path='x', count=3),
+                         '已生成审计报告: x（3 条事件）')
+        previous = os.environ.get('CAPBOX_LANG')
+        previous_ui = os.environ.get('CAPBOX_UI_LANG')
+        try:
+            os.environ.pop('CAPBOX_UI_LANG', None)
+            os.environ['CAPBOX_LANG'] = 'zh'
+            self.assertIn('已生成审计报告', i18n.t('audit.report_generated', path='x', count=3))
+            os.environ['CAPBOX_LANG'] = 'en'
+            text = i18n.t('audit.report_generated', path='x', count=3)
+            self.assertIn('generated audit report', text)
+            self.assertNotIn('已生成审计报告', text)
+            hint = i18n.t('cred.hint_empty_store')
+            self.assertIn('host secret store is empty', hint)
+            self.assertNotIn('未绑定凭据', hint)
+        finally:
+            if previous is None:
+                os.environ.pop('CAPBOX_LANG', None)
+            else:
+                os.environ['CAPBOX_LANG'] = previous
+            if previous_ui is None:
+                os.environ.pop('CAPBOX_UI_LANG', None)
+            else:
+                os.environ['CAPBOX_UI_LANG'] = previous_ui
+
+    def test_publish_literal_is_gone_from_net_sh(self):
+        text = (REPO / 'lib/net.sh').read_text()
+        self.assertNotIn('子 netns 尚未就绪', text)
+        self.assertIn('CAPBOX_PUBLISH_NETNS_MSG="$(i18n_get net.publish_child_netns_not_ready)"', text)
+        self.assertIn('CAPBOX_PUBLISH_NETNS_MSG', text)
+
+
+class PythonCliHelpTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-')
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = Path(self.tmp.name) / 'ws'
+        self.ws.mkdir()
+
+    def run_cli(self, *args, env=None, config=None):
+        merged = base_env()
+        if env:
+            merged.update(env)
+        if config is not None:
+            cap = self.ws / '.capbox'
+            cap.mkdir(parents=True, exist_ok=True)
+            (cap / 'config.env').write_text(config)
+        return subprocess.run(
+            [str(CLI), '--root', str(self.ws), *args],
+            env=merged, capture_output=True, text=True, timeout=30)
+
+    def test_audit_report_help_follows_lang(self):
+        zh = self.run_cli('audit', 'report', '--help', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('用法:', zh.stdout)
+        self.assertIn('导出可搜索', zh.stdout)
+        self.assertIn('显示此帮助并退出', zh.stdout)
+        self.assertNotIn('usage:', zh.stdout)
+        self.assertNotIn('show this help message and exit', zh.stdout)
+
+        en = self.run_cli('audit', 'report', '--help', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('usage:', en.stdout)
+        self.assertIn('searchable', en.stdout)
+        self.assertIn('show this help message and exit', en.stdout)
+        self.assertNotIn('用法:', en.stdout)
+        self.assertNotIn('导出可搜索', en.stdout)
+
+    def test_task_and_mcp_help_follow_lang(self):
+        zh = self.run_cli('task', '--help', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('用法:', zh.stdout)
+        self.assertIn('启动独立监督的 exec 任务', zh.stdout)
+        en = self.run_cli('task', '--help', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('usage:', en.stdout)
+        self.assertIn('supervised', en.stdout)
+        self.assertNotIn('启动独立监督', en.stdout)
+        self.assertNotIn('用法:', en.stdout)
+
+        zh = self.run_cli('mcp', '--help', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('安全配置档', zh.stdout)
+        en = self.run_cli('mcp', '--help', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('security profile', en.stdout)
+        self.assertNotIn('安全配置档', en.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
