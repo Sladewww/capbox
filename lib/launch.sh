@@ -62,7 +62,9 @@ build_bwrap_args() {
   fi
 
   # CA 证书：rootfs 内没有就借用宿主的（坑 7）
-  if _rootfs_lacks_ca && [[ -d /etc/ssl/certs ]]; then
+  # RHEL/CentOS 系 /etc/ssl/certs 常是指向 /etc/pki/tls/certs 的符号链接，
+  # bwrap 不允许挂载到符号链接目标；这类镜像自带 ca-bundle.crt，跳过宿主 CA bind。
+  if _rootfs_lacks_ca && [[ -d /etc/ssl/certs ]] && [[ ! -L "$CAPBOX_ROOTFS/etc/ssl/certs" ]]; then
     mkdir -p "$CAPBOX_ROOTFS/etc/ssl/certs" 2>/dev/null || true
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
@@ -114,6 +116,15 @@ build_bwrap_args() {
   a+=(--setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
   a+=(--setenv TERM "${TERM:-xterm-256color}")
   a+=(--setenv LANG "${LANG:-C.UTF-8}")
+  # docker/OCI 镜像的 Env 只在 image docker run 设置 CAPBOX_OCI_ENV_FILE 时注入。
+  # 值来自 meta.json，经 --setenv 进入 guest，不 export 到宿主 shell。
+  if [[ -n "${CAPBOX_OCI_ENV_FILE:-}" ]]; then
+    if ! declare -F _oci_append_image_env >/dev/null 2>&1; then
+      i18n_err oci.env_module_missing
+      return 1
+    fi
+    _oci_append_image_env a "$CAPBOX_OCI_ENV_FILE" || return $?
+  fi
 
   # 宿主凭证代理：此处只有占位符（真实密钥留在宿主 inject map）。
   if declare -F _credentials_append_bwrap_args >/dev/null 2>&1; then

@@ -37,6 +37,10 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 
 实现位置：`lib/launch.sh` 的 `build_bwrap_args`；daemon 的 `_daemon_bwrap_args` 也委托同一实现。`doctor` 含一项 live 探针：若哨兵变量仍能进入 guest，则 **FAIL**。
 
+`image docker run` 会在 `--clearenv` 之后追加镜像自己的 `Env`，且只通过 `bwrap --setenv`。这些值不 `export` 到宿主 shell。`exec --image` 不套用镜像 `Env`。镜像里的 `Entrypoint` / `Cmd` 只作为 guest argv，不在宿主执行。不可信镜像仍应使用 `untrusted` 或 `strict`；`compat` 不会因为来源是 Docker 镜像而自动收紧。
+
+`image docker pull` 在宿主上执行 `skopeo` 或 `crane`，不读取 `docker.sock`，也不解析 `~/.docker`。引用先被收成 `docker://` 仓库名，再按解析出的 `sha256` 复制；复制结果的摘要对不上就拒绝导入。registry 主机必须落在 `CAPBOX_OCI_REGISTRIES`（默认只有五个公共仓库，`*` 才放开）。凭据和 TLS 策略沿用这两个工具自己的配置。拉取使用宿主网络，不受 guest 的 `CAPBOX_NET` 约束。
+
 > 同类根因先例：调用方省略 bwrap `--clearenv` 导致沙箱继承宿主密钥（例如公开记录的 mini-swe-agent 环境继承问题）。这不是 bwrap 本身的缺陷，而是参数构造责任。
 
 ## bubblewrap 最低版本

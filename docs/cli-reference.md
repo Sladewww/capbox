@@ -55,7 +55,8 @@ CapBox —— 工作区内持久化的 root Linux 容器
   config get|set|list               读取 / 修改 config.env
   recipe check|apply|show [FILE]          应用/查看声明式 KEY=value 配方（不 source）
   snapshot create|list|restore|rm   rootfs 快照 / 回滚
-  image export|import|lock|cache    镜像与离线缓存；lock save|verify|restore
+  image export|import|docker|lock|cache
+                                    rootfs 归档、包锁，以及本地 Docker/OCI 镜像
   secret set|ls|rm|import           宿主凭据（真实 key 不进沙箱；见 docs/credentials.md）
   audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
@@ -157,16 +158,56 @@ CapBox —— 工作区内持久化的 root Linux 容器
 ## capbox image --help
 
 ```text
-用法: capbox image <export|import|list|verify|lock|cache> ...
+用法: capbox image <export|import|list|verify|lock|cache|docker> ...
 
   export NAME              导出当前 rootfs → .capbox/images/NAME.tar.zst|gz + .sha256
   import NAME [--force]    导入到旁路目录 os/<distro>.imported-NAME；--force 才替换当前 rootfs
-  list                     列出已导出镜像
+  list                     列出已导出的 rootfs 归档
   verify NAME              校验 SHA256
   lock save|show|verify|restore [FILE]  保存/查看/验证/按精确版本恢复包锁
   cache save|restore|path  离线包缓存（apk/apt 缓存目录打包）
+  docker ...               导入、拉取或运行 Docker/OCI 镜像
+                           （不连接 Docker daemon）。详见 capbox image docker --help
 
 导入默认不破坏现有 rootfs；--force 会先 snapshot-bak 再替换。
+Docker/OCI 导入落在 .capbox/images/docker/<name>/，不替换 Alpine/Ubuntu rootfs。
+```
+
+## capbox image docker --help
+
+```text
+用法: capbox image docker <inspect|import|pull|list|show|rm|run> ...
+
+  inspect ARCHIVE [--platform OS/ARCH] [--index N] [--tag REF]
+                           打印镜像配置 JSON。不展开，也不执行。
+  import ARCHIVE [--name NAME] [--platform OS/ARCH] [--index N] [--tag REF] [--force]
+                           按层展开到 .capbox/images/docker/<name>/rootfs
+  pull REF [--name NAME] [--platform OS/ARCH] [--force]
+                           用宿主的 skopeo（没有则用 crane）拷到临时 OCI layout，再导入。
+                           先把标签解析成摘要再复制。不连接 Docker daemon，也不读 docker.sock。
+                           CAPBOX_OCI_REGISTRIES 是逗号分隔的 registry 白名单
+                           （默认 docker.io,ghcr.io,quay.io,public.ecr.aws,registry.k8s.io；* 表示全部放行）。
+  list                     列出已导入的 Docker/OCI 镜像
+  show NAME                打印 meta.json
+  rm NAME                  删除一个已导入镜像
+  run NAME|ARCHIVE [选项] [--] [CMD...]
+                           参数是已导入名字就直接启动；是文件则已有同名镜像时复用，否则先导入。显式 --force 才重新导入
+
+run 选项:
+  --name NAME              文件导入后的名字（默认取标签，否则 img-<摘要>）
+  --force                  文件路径已有同名镜像时仍重新导入
+  --cwd DIR                覆盖 WorkingDir
+  --user USER              覆盖 User（名字、uid 或 uid:gid）
+  --timeout N              一次性超时秒数
+  --net MODE               仅本次：none|restricted|open
+  --profile P              仅本次：compat|untrusted|strict
+  --entrypoint PROG        替换 Entrypoint（一个 argv）
+  --clear-entrypoint       丢掉镜像 Entrypoint
+
+Entrypoint、Cmd、User、WorkingDir、Env 都是数据。Env 只经 bwrap --setenv 进入 guest，
+不 export 到宿主 shell。-- 后面的参数替换 Cmd，保留 Entrypoint。
+exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
+非 Linux 镜像拒绝。层里的设备节点跳过。文件属主是执行导入的用户。
 ```
 
 ## capbox service --help

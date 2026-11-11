@@ -58,7 +58,8 @@ Info and configuration
   config get|set|list               Read or change config.env
   recipe check|apply|show [FILE]          Apply or show a declarative KEY=value recipe (never sourced)
   snapshot create|list|restore|rm   rootfs snapshot / rollback
-  image export|import|lock|cache    Images and offline cache; lock save|verify|restore
+  image export|import|docker|lock|cache
+                                    Rootfs archives, package locks, and local Docker/OCI images
   secret set|ls|rm|import           Host credentials (real keys never enter the sandbox; see docs/credentials.md)
   audit report|tail|path|clear      Offline HTML report and JSONL audit log
   metrics [--json]                  Real resource / cgroup / disk status (no fabricated numbers)
@@ -160,16 +161,54 @@ Usage: capbox recipe apply [--locked LOCKFILE] [FILE]
 >>
 
 help.image<<
-Usage: capbox image <export|import|list|verify|lock|cache> ...
+Usage: capbox image <export|import|list|verify|lock|cache|docker> ...
 
   export NAME              Export the current rootfs → .capbox/images/NAME.tar.zst|gz + .sha256
   import NAME [--force]    Import into a side directory os/<distro>.imported-NAME; only --force replaces the current rootfs
-  list                     List exported images
+  list                     List exported rootfs archives
   verify NAME              Verify SHA256
   lock save|show|verify|restore [FILE]  Save, show, verify, or restore a package lock at exact versions
   cache save|restore|path  Offline package cache (pack the apk/apt cache directory)
+  docker ...               Import, pull, or run a local Docker/OCI image
+                           (no Docker daemon). See: capbox image docker --help
 
 Import does not destroy an existing rootfs by default; --force takes a snapshot-bak first, then replaces.
+A Docker/OCI import is stored under .capbox/images/docker/<name>/ and does not replace the Alpine/Ubuntu rootfs.
+>>
+
+help.image.docker<<
+Usage: capbox image docker <inspect|import|pull|list|show|rm|run> ...
+
+  inspect ARCHIVE [--platform OS/ARCH] [--index N] [--tag REF]
+                           Print image config as JSON. Does not extract or execute it.
+  import ARCHIVE [--name NAME] [--platform OS/ARCH] [--index N] [--tag REF] [--force]
+                           Flatten layers into .capbox/images/docker/<name>/rootfs
+  pull REF [--name NAME] [--platform OS/ARCH] [--force]
+                           Copy with host skopeo (else crane) into a temporary OCI layout, then import.
+                           A tag is resolved to a digest before the copy. No Docker daemon and no docker.sock.
+                           CAPBOX_OCI_REGISTRIES is a comma-separated registry allowlist
+                           (default: docker.io,ghcr.io,quay.io,public.ecr.aws,registry.k8s.io; * allows every host).
+  list                     List imported Docker/OCI images
+  show NAME                Print meta.json
+  rm NAME                  Delete one imported image
+  run NAME|ARCHIVE [options] [--] [CMD...]
+                           Start a stored name, or a file: reuse an existing image unless --force
+
+run options:
+  --name NAME              Store a file under this name (default: tag, else img-<digest>)
+  --force                  Re-import a file even when the image already exists
+  --cwd DIR                Override WorkingDir
+  --user USER              Override User (name, uid, or uid:gid)
+  --timeout N              One-shot timeout in seconds
+  --net MODE               none|restricted|open for this run only
+  --profile P              compat|untrusted|strict for this run only
+  --entrypoint PROG        Replace Entrypoint (one argv element)
+  --clear-entrypoint       Drop the image Entrypoint
+
+Entrypoint, Cmd, User, WorkingDir and Env are data. Env is passed with bwrap --setenv
+and is not exported into the host shell. User command arguments replace Cmd and keep Entrypoint.
+exec --image NAME switches only that command's rootfs and does not apply OCI config.
+Non-Linux images are rejected. Device nodes in layers are skipped. File owners become the importing user.
 >>
 
 help.service<<
@@ -273,7 +312,8 @@ Usage: capbox logs [-f] [-n N]
 
 help.exec<<
 Usage: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE]
-                  [--uid N] [--gid N] [--user NAME] [--profile compat|untrusted|strict] [--] CMD...
+                  [--uid N] [--gid N] [--user NAME] [--profile compat|untrusted|strict]
+                  [--image NAME] [--] CMD...
 
   --daemon     Run inside the persistent container (start capbox up first)
   --timeout N  One-shot timeout in seconds, 0=unlimited, default CAPBOX_EXEC_TIMEOUT
@@ -285,6 +325,7 @@ Usage: capbox exec [--daemon] [--timeout N] [--cwd DIR] [--root] [--net MODE]
   --gid N      Initial gid in the container
   --user NAME  Resolve uid:gid from guest /etc/passwd (alternative to a numeric uid)
   --profile P  Override CAPBOX_SECURITY_PROFILE (this oneshot only)
+  --image NAME Use an imported Docker/OCI rootfs for this command only (needs /bin/sh; not with --daemon)
 
 stdout contains only the command output from inside the container, so it can be piped.
 The exit code is the command's exit code; 124 on timeout; 3 if a daemon is required but not running.
@@ -629,6 +670,45 @@ image.refusing_write_cache_rootfs=Refusing to write cache into rootfs
 image.restored_offline_package_cache_rootfs=Restored the offline package cache into rootfs
 image.image_cache_save_restore_path=image cache: save|restore|path
 image.image_unknown_subcommand=image: unknown subcommand {sub}
+oci.not_an_image=not a docker save archive, OCI layout, or OCI archive: {path}
+oci.unsupported_os=refusing non-Linux image: {os}
+oci.platform_missing=no image matches platform {platform}; available: {available}
+oci.bad_platform=invalid platform (want os/arch or os/arch/variant): {platform}
+oci.bad_index=image index out of range: {index}
+oci.tag_missing=archive has no tag {tag}
+oci.unsafe_path=refusing unsafe layer path: {path}
+oci.digest_mismatch=layer digest mismatch: {digest}
+oci.too_large=image exceeds limit ({limit})
+oci.zstd_required=unpacking zstd needs the zstd command
+oci.no_layers=image has no layers
+oci.foreign_layer=refusing foreign or non-distributable layer: {media}
+oci.bad_argv=image Entrypoint/Cmd is not a string array: {path}
+oci.env_key=refusing image environment entry: {key}
+oci.exists=docker image already exists: {name} (pass --force to replace)
+oci.missing=docker image is not imported: {name}
+oci.no_argv=image has no Entrypoint/Cmd; pass a command after --
+oci.user_unresolved=cannot resolve image user from /etc/passwd: {user}
+oci.env_file_unusable=image env file is missing or is a symlink
+oci.env_file_outside=image env file is outside images/docker
+oci.env_module_missing=image env helper is not loaded
+oci.import_ok=imported docker image {name} → {path}
+oci.import_needs_archive=usage: image docker import ARCHIVE [--name NAME]
+oci.unknown_option=image docker: unknown option {arg}
+oci.unknown=image docker: unknown subcommand {sub}
+oci.stage_failed=unable to stage docker image import
+oci.removed=removed docker image {name}
+oci.none=(no docker images)
+oci.busy_symlink=refusing to follow symlink: {path}
+oci.run_needs_target=usage: image docker run NAME|ARCHIVE [--] CMD...
+oci.exec_image_daemon=exec --image cannot be combined with --daemon
+oci.not_rootfs=image rootfs has no usable /bin/sh (exec --image needs one): {path}
+oci.pull_needs_ref=usage: image docker pull REF [--name NAME] [--platform OS/ARCH] [--force]
+oci.pull_tool_missing=image pull needs skopeo or crane on PATH; CapBox does not speak to a registry itself
+oci.pull_bad_ref=refusing image reference: {ref}
+oci.registry_denied=registry is not in CAPBOX_OCI_REGISTRIES: {registry}
+oci.pull_failed=image pull failed via {tool}
+oci.pull_digest_mismatch=pulled digest does not match the pinned digest: {digest}
+doctor.docker_images=imported docker images: {n}
 landlock.capbox_landlock_must_off_got=CAPBOX_LANDLOCK must be on or off (got: {v})
 landlock.missing_lib_guest_capbox_landlock_c=Missing lib/guest/capbox-landlock.c
 landlock.landlock_helper_symlink=Landlock helper is a symlink: {bin}
