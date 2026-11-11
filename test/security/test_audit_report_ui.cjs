@@ -27,6 +27,7 @@ const repo = path.resolve(__dirname, '../..');
   const source = path.join(logs, 'audit.jsonl');
   await fs.writeFile(source, events.map(e=>JSON.stringify(e)+'\n').join('')+'{broken fixture}\n');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('CAPBOX_')&&!key.startsWith('_CAPBOX_')));
+  env.CAPBOX_LANG='zh';
   execFileSync(path.join(repo,'bin/capbox'),['--root',workspace,'audit','report','--output',report,'--force'],{env,encoding:'utf8'});
   const html = await fs.readFile(report,'utf8');
   assert(!html.includes('browser-fixture-secret'));

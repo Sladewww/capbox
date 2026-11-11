@@ -205,7 +205,7 @@ cmd_audit() {
       local n="${1:-50}"
       [[ "$n" =~ ^[0-9]+$ ]] || i18n_die 2 audit.audit_tail_n_must_non_negative_integer
       local f="$(_audit_path)"
-      [[ -f "$f" ]] || { printf '(无审计日志)\n'; return 0; }
+      [[ -f "$f" ]] || { printf '%s\n' "$(i18n_get audit.no_log)"; return 0; }
       tail -n "$n" -- "$f"
       return 0
       ;;

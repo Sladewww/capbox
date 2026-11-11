@@ -35,7 +35,7 @@ cmd_mcp() {
     if (( rc == 0 )); then
       audit_command mcp "$rc" "$t0" "cmd=mcp $*"
     else
-      audit_command mcp "$rc" "$t0" "cmd=mcp $*" "detail=mcp 失败，退出码 $rc"
+      audit_command mcp "$rc" "$t0" "cmd=mcp $*" "detail=$(i18n_fmt audit.detail_cmd_failed cmd=mcp rc="$rc")"
     fi
   fi
   return "$rc"

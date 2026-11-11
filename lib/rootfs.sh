@@ -602,7 +602,7 @@ cmd_init() {
     if (( rc == 0 )); then
       audit_command init "$rc" "$t0" "cmd=$_init_cmd"
     else
-      audit_command init "$rc" "$t0" "cmd=$_init_cmd" "detail=init 失败，退出码 $rc"
+      audit_command init "$rc" "$t0" "cmd=$_init_cmd" "detail=$(i18n_fmt audit.detail_cmd_failed cmd=init rc="$rc")"
     fi
   fi
   return "$rc"

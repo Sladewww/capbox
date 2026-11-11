@@ -6,8 +6,13 @@ from pathlib import Path
 import re
 import sys
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 if sys.version_info < (3, 10):
-    print('[capbox] 此功能需要宿主 Python 3.10 或更新版本', file=sys.stderr)
+    print(i18n.t('pkglock.requires_python_3_10'), file=sys.stderr)
     sys.exit(5)
 
 
@@ -23,24 +28,24 @@ def installed(text, distro):
         if distro == 'alpine':
             match = re.fullmatch(r'(.+)-([0-9][^-]*-r[0-9]+)', line)
             if not match:
-                raise ValueError('无法解析 apk 已安装包清单')
+                raise ValueError(i18n.t('pkglock.cannot_parse_apk'))
             name, version = match.groups()
         else:
             fields = line.split('\t')
             if len(fields) != 3:
-                raise ValueError('无法解析 dpkg 已安装包清单')
+                raise ValueError(i18n.t('pkglock.cannot_parse_dpkg'))
             status, name, version = fields
             if status.strip() == 'rc':
                 continue
             if status != 'ii ':
-                raise ValueError(f'包 {name} 尚未完成配置')
+                raise ValueError(i18n.t('pkglock.package_not_configured', name=name))
         if not NAME.fullmatch(name) or not VERSION.fullmatch(version):
-            raise ValueError('包清单中存在无效名称或版本')
+            raise ValueError(i18n.t('pkglock.invalid_name_or_version'))
         if name in result:
-            raise ValueError(f'重复包名: {name}')
+            raise ValueError(i18n.t('pkglock.duplicate_package', name=name))
         result[name] = version
     if not result:
-        raise ValueError('包清单为空，拒绝生成或验证锁文件')
+        raise ValueError(i18n.t('pkglock.empty_inventory'))
     return result
 
 
@@ -48,7 +53,7 @@ def unique_pairs(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f'包锁包含重复键: {key}')
+            raise ValueError(i18n.t('pkglock.duplicate_key', field=key))
         result[key] = value
     return result
 
@@ -57,25 +62,25 @@ def load(path, distro, architecture):
     try:
         obj = json.loads(path.read_text(), object_pairs_hook=unique_pairs)
     except (ValueError, OSError) as exc:
-        raise ValueError('不是有效的严格包锁；旧版清单请重新 image lock save') from exc
+        raise ValueError(i18n.t('pkglock.not_strict_lock')) from exc
     if not isinstance(obj, dict) or set(obj) != {'schema', 'distro', 'architecture', 'packages'}:
-        raise ValueError('包锁字段不完整或包含未知字段')
+        raise ValueError(i18n.t('pkglock.fields_incomplete'))
     if type(obj['schema']) is not int or obj['schema'] != 1:
-        raise ValueError('不支持的包锁 schema')
+        raise ValueError(i18n.t('pkglock.unsupported_schema'))
     if obj['distro'] != distro or obj['architecture'] != architecture:
-        raise ValueError('包锁发行版或架构与目标环境不一致')
+        raise ValueError(i18n.t('pkglock.distro_or_arch_mismatch'))
     packages = obj['packages']
     if not isinstance(packages, dict) or not packages or len(packages) > 20000:
-        raise ValueError('包锁 packages 必须是非空包版本映射')
+        raise ValueError(i18n.t('pkglock.packages_must_be_nonempty_map'))
     for name, version in packages.items():
         if (not isinstance(name, str) or not isinstance(version, str)
                 or not NAME.fullmatch(name) or not VERSION.fullmatch(version)):
-            raise ValueError('包锁包含无效包名或版本')
+            raise ValueError(i18n.t('pkglock.invalid_package_name_or_version'))
     return packages
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = i18n.I18nArgumentParser()
     parser.add_argument('action', choices=['save', 'validate', 'arguments', 'verify'])
     parser.add_argument('--distro', choices=['alpine', 'ubuntu'], required=True)
     parser.add_argument('--architecture', choices=['x86_64', 'aarch64'], required=True)
@@ -91,7 +96,7 @@ def main():
     for requested in args.require:
         name, separator, version = requested.partition('=')
         if name not in packages or (separator and packages[name] != version):
-            raise ValueError(f'包锁不能满足配方中的包要求: {requested}')
+            raise ValueError(i18n.t('pkglock.cannot_satisfy_recipe', requested=requested))
     if args.action == 'arguments':
         for name, version in sorted(packages.items()):
             sys.stdout.buffer.write(f'{name}={version}'.encode() + b'\0')
@@ -102,13 +107,13 @@ def main():
             extra = sorted(actual.keys() - packages.keys())
             mismatch = sorted(n for n in packages.keys() & actual.keys()
                               if packages[n] != actual[n])
-            raise ValueError(f'环境与包锁不一致：缺失 {missing}，额外 {extra}，版本差异 {mismatch}')
-        print('包锁验证通过')
+            raise ValueError(i18n.t('pkglock.env_mismatch', missing=missing, extra=extra, mismatch=mismatch))
+        print(i18n.t('pkglock.verify_ok'))
 
 
 if __name__ == '__main__':
     try:
         main()
     except (ValueError, OSError) as exc:
-        print(f'[capbox] 包锁失败: {exc}', file=sys.stderr)
+        print(i18n.t('pkglock.failed', exc=exc), file=sys.stderr)
         sys.exit(2)

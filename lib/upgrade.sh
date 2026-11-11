@@ -73,7 +73,7 @@ cmd_upgrade() {
     if (( rc == 0 )); then
       audit_command upgrade "$rc" "$t0" "cmd=$_up_cmd"
     else
-      audit_command upgrade "$rc" "$t0" "cmd=$_up_cmd" "detail=upgrade $action 失败，退出码 $rc"
+      audit_command upgrade "$rc" "$t0" "cmd=$_up_cmd" "detail=$(i18n_fmt audit.detail_upgrade_failed action="$action" rc="$rc")"
     fi
   fi
   return "$rc"

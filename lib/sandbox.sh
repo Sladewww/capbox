@@ -648,7 +648,7 @@ cmd_pkg() {
     if (( rc == 0 )); then
       audit_command pkg "$rc" "$t0" "cmd=$_pkg_cmd"
     else
-      audit_command pkg "$rc" "$t0" "cmd=$_pkg_cmd" "detail=pkg $sub 返回 $rc"
+      audit_command pkg "$rc" "$t0" "cmd=$_pkg_cmd" "detail=$(i18n_fmt audit.detail_pkg_returned sub="$sub" rc="$rc")"
     fi
   fi
   return "$rc"

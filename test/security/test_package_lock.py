@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Strict package locks reject ambiguous or incompatible environments."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,10 +17,14 @@ class PackageLockTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.lock = Path(self.tmp.name) / 'package.lock'
 
-    def run_tool(self, action, text='', distro='alpine', architecture='x86_64'):
+    def run_tool(self, action, text='', distro='alpine', architecture='x86_64', env=None):
+        merged = os.environ.copy()
+        merged['CAPBOX_LANG'] = 'zh'
+        if env:
+            merged.update(env)
         return subprocess.run([sys.executable, str(TOOL), action, '--distro', distro,
                                '--architecture', architecture, str(self.lock)],
-                              input=text, text=True, capture_output=True, timeout=10)
+                              input=text, text=True, capture_output=True, timeout=10, env=merged)
 
     def save(self, inventory='busybox-1.37.0-r30\nca-certificates-bundle-20260601-r0\n'):
         result = self.run_tool('save', inventory)

@@ -211,7 +211,7 @@ cmd_recipe() {
         if (( rc == 0 )); then
           audit_command recipe "$rc" "$t0" "cmd=recipe $*"
         else
-          audit_command recipe "$rc" "$t0" "cmd=recipe $*" "detail=recipe 失败，退出码 $rc"
+          audit_command recipe "$rc" "$t0" "cmd=recipe $*" "detail=$(i18n_fmt audit.detail_cmd_failed cmd=recipe rc="$rc")"
         fi
       fi
       return "$rc"

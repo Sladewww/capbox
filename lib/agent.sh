@@ -34,7 +34,7 @@ cmd_task() {
     if (( rc == 0 )); then
       audit_command task "$rc" "$t0" "cmd=task $*"
     else
-      audit_command task "$rc" "$t0" "cmd=task $*" "detail=task 失败，退出码 $rc"
+      audit_command task "$rc" "$t0" "cmd=task $*" "detail=$(i18n_fmt audit.detail_cmd_failed cmd=task rc="$rc")"
     fi
   fi
   return "$rc"

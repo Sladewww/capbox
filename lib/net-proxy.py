@@ -21,6 +21,11 @@ import tempfile
 import time
 
 BUF = 65536
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 BRIDGE_PORT_DEFAULT = 18787
 PLACEHOLDER_RE = re.compile(rb"capbox-sec-[0-9a-f]{32}")
 
@@ -188,14 +193,14 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
     except ValueError:
         literal = False
     if not host_allowed(host, allow, port):
-        raise OSError(f"已拦截 {host}:{port}")
+        raise OSError(i18n.t('proxy.blocked', host=host, port=port))
     if literal:
         return socket.create_connection((host, port), timeout=20)
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise OSError(str(exc)) from exc
-    last = "无可用地址"
+    last = i18n.t('proxy.no_usable_address')
     for _fam, _type, _proto, _canon, sockaddr in infos:
         ip_s = sockaddr[0].split("%", 1)[0]
         try:
@@ -203,7 +208,7 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
         except ValueError:
             continue
         if _ip_forbidden(ip) and not host_allowed(ip_s, allow, port):
-            last = f"已拦截解析结果 {ip_s}"
+            last = i18n.t('proxy.blocked_resolved', ip=ip_s)
             continue
         try:
             return socket.create_connection((ip_s, sockaddr[1]), timeout=20)
@@ -277,10 +282,10 @@ def load_inject_map(path: Optional[str]) -> Dict[str, Any]:
     with os.fdopen(fd, encoding="utf-8") as fh:
         st = os.fstat(fh.fileno())
         if not stat_is_reg(st.st_mode) or (st.st_mode & 0o077):
-            raise OSError("注入映射必须是权限 0600 的普通文件")
+            raise OSError(i18n.t('proxy.inject_map_must_be_0600'))
         data = json.load(fh)
     if not isinstance(data, dict):
-        raise OSError("注入映射无效")
+        raise OSError(i18n.t('proxy.inject_map_invalid'))
     data.setdefault("entries", [])
     return data
 
@@ -312,14 +317,14 @@ def _resolve_entry_value(entry: Dict[str, Any], cache: Dict[str, Tuple[str, floa
             env={k: os.environ[k] for k in ("PATH", "HOME", "LANG", "XDG_RUNTIME_DIR") if k in os.environ},
         )
         if proc.returncode != 0 or not proc.stdout.strip():
-            raise OSError(f"凭据命令失败: {name}")
+            raise OSError(i18n.t('proxy.credential_command_failed', name=name))
         value = proc.stdout.strip()
         if refresh > 0:
             cache[name] = (value, now)
         return value
     value = entry.get("value")
     if not value:
-        raise OSError(f"凭据缺少 value: {name}")
+        raise OSError(i18n.t('proxy.credential_missing_value', name=name))
     return str(value)
 
 
@@ -356,10 +361,10 @@ def rewrite_headers_for_credentials(
                 continue
             domains = entry.get("domains") or []
             if not any(_domain_match(host, d) for d in domains):
-                msg = (
-                    "凭据未绑定到该主机: 占位符用于未授权主机 %s（secret=%s）。"
-                    "把该 host 加入密钥 domains 与 CAPBOX_NET_ALLOW，或改用已绑定域名。"
-                    % (host, entry.get("name"))
+                msg = i18n.t(
+                    'proxy.cred_unbound',
+                    host=host,
+                    name=entry.get("name"),
                 )
                 if log:
                     print(f"capbox-net CRED_DENY {msg}", file=sys.stderr)
@@ -612,7 +617,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
 def cmd_proxy(args: argparse.Namespace) -> int:
     allow = parse_allowlist(args.allow)
     if not allow:
-        print("capbox-net: 白名单为空", file=sys.stderr)
+        print(i18n.t('proxy.empty_allowlist'), file=sys.stderr)
         return 2
     inject = load_inject_map(getattr(args, "inject_map", None))
     cache: Dict[str, Tuple[str, float]] = {}
@@ -688,7 +693,7 @@ def cmd_check_allow(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="capbox-net")
+    p = i18n.I18nArgumentParser(prog="capbox-net")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_enter = sub.add_parser("enter-net")
@@ -698,7 +703,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     def enter(args: argparse.Namespace) -> int:
         cmd = args.command[1:] if args.command[:1] == ["--"] else args.command
         if args.child <= 0 or not cmd:
-            p.error("enter-net needs a positive child PID and a command")
+            p.error(i18n.t('proxy.enter_net_needs_pid_and_command'))
         enter_network_namespace(args.child, cmd)
         return 1
 
@@ -709,7 +714,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_proxy.add_argument("--allow", required=True)
     p_proxy.add_argument("--ready")
     p_proxy.add_argument("--log", action="store_true")
-    p_proxy.add_argument("--inject-map", help="仅宿主凭据注入映射（0600 JSON）")
+    p_proxy.add_argument("--inject-map", help=i18n.t("proxy.help_inject_map"))
     p_proxy.set_defaults(func=cmd_proxy)
 
     p_br = sub.add_parser("bridge")
