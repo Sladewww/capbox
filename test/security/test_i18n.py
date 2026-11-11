@@ -2,8 +2,10 @@
 """Language resolution, catalog completeness, and prefix/--help smoke tests."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -998,6 +1000,292 @@ class TableOutputI18nTests(unittest.TestCase):
         self.assertIn('distros.footer', common)
 
 
+
+
+class LeftoverSweepTests(unittest.TestCase):
+    """Leftover credentials, package-lock, net-proxy, audit HTML, and audit-detail strings."""
+
+    def test_catalog_strings_locked_in_zh_and_en(self):
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['cred.error_prefix'], '[capbox] 错误: {message}')
+        self.assertEqual(en['cred.error_prefix'], '[capbox] error: {message}')
+        self.assertEqual(zh['cred.secret_not_found'].startswith('找不到密钥:'), True)
+        self.assertIn('secret not found', en['cred.secret_not_found'])
+        self.assertNotIn('找不到密钥', en['cred.secret_not_found'])
+        self.assertEqual(zh['pkglock.not_strict_lock'],
+                         '不是有效的严格包锁；旧版清单请重新 image lock save')
+        self.assertIn('image lock save', en['pkglock.not_strict_lock'])
+        self.assertNotIn('不是有效的严格包锁', en['pkglock.not_strict_lock'])
+        self.assertEqual(zh['pkglock.verify_ok'], '包锁验证通过')
+        self.assertEqual(en['pkglock.verify_ok'], 'package lock verification passed')
+        self.assertEqual(zh['proxy.cred_unbound'].startswith('凭据未绑定到该主机'), True)
+        self.assertIn('not bound to this host', en['proxy.cred_unbound'])
+        self.assertNotIn('凭据未绑定', en['proxy.cred_unbound'])
+        self.assertIn('secret={name}', zh['proxy.cred_unbound'])
+        self.assertIn('secret={name}', en['proxy.cred_unbound'])
+        self.assertIn('CAPBOX_NET_ALLOW', zh['proxy.cred_unbound'])
+        self.assertIn('CAPBOX_NET_ALLOW', en['proxy.cred_unbound'])
+        self.assertEqual(zh['audit.no_log'], '(无审计日志)')
+        self.assertEqual(en['audit.no_log'], '(no audit log)')
+        self.assertEqual(zh['audit.detail_cmd_failed'], '{cmd} 失败，退出码 {rc}')
+        self.assertEqual(en['audit.detail_cmd_failed'], '{cmd} failed, exit code {rc}')
+        self.assertEqual(zh['audit.detail_upgrade_failed'], 'upgrade {action} 失败，退出码 {rc}')
+        self.assertEqual(en['audit.detail_upgrade_failed'], 'upgrade {action} failed, exit code {rc}')
+        self.assertEqual(zh['audit.detail_pkg_returned'], 'pkg {sub} 返回 {rc}')
+        self.assertEqual(en['audit.detail_pkg_returned'], 'pkg {sub} returned {rc}')
+        self.assertEqual(zh['audit.html.warn_bad_records'], '跳过 {count} 条损坏、过长或未写完的记录')
+        self.assertIn('Skipped {count}', en['audit.html.warn_bad_records'])
+        self.assertIn('status=fail', zh['audit.html.stat_failed_foot'])
+        self.assertIn('status=fail', en['audit.html.stat_failed_foot'])
+        self.assertIn('start/stop/skip', zh['audit.html.fact_counts'])
+        self.assertIn('start/stop/skip', en['audit.html.fact_counts'])
+
+    def test_hardcoded_leftover_literals_are_gone(self):
+        needles = {
+            'lib/credentials-runtime.py': (
+                '[capbox] 错误:',
+                '缺少宿主私有目录上下文（CAPBOX_CRED_PRIVATE）',
+                '存储服务或自定义密钥（真实值仅在宿主）',
+            ),
+            'lib/package-lock.py': (
+                '包锁验证通过',
+                '[capbox] 包锁失败:',
+                '不是有效的严格包锁',
+            ),
+            'lib/net-proxy.py': (
+                'capbox-net: 白名单为空',
+                '凭据未绑定到该主机',
+                'enter-net needs a positive child PID and a command',
+            ),
+            'lib/audit.sh': ('(无审计日志)',),
+            'lib/upgrade.sh': ('失败，退出码 $rc',),
+            'lib/rootfs.sh': ('detail=init 失败，退出码',),
+            'lib/agent.sh': ('detail=task 失败，退出码',),
+            'lib/envkit.sh': ('detail=mcp 失败，退出码',),
+            'lib/recipe.sh': ('detail=recipe 失败，退出码',),
+            'lib/sandbox.sh': ('detail=pkg $sub 返回 $rc',),
+            'lib/audit-report.html': (
+                'CapBox · 审计报告',
+                '生成时尚无审计文件',
+                '跳过 ',
+            ),
+        }
+        for rel, items in needles.items():
+            text = (REPO / rel).read_text()
+            for needle in items:
+                self.assertNotIn(needle, text, f'{rel} still hardcodes {needle!r}')
+        self.assertIn('i18n_fmt audit.detail_pkg_returned', (REPO / 'lib/sandbox.sh').read_text())
+        self.assertIn('i18n_fmt audit.detail_upgrade_failed', (REPO / 'lib/upgrade.sh').read_text())
+        self.assertIn('i18n_get audit.no_log', (REPO / 'lib/audit.sh').read_text())
+        for rel, key in (
+            ('lib/rootfs.sh', 'cmd=init'),
+            ('lib/agent.sh', 'cmd=task'),
+            ('lib/envkit.sh', 'cmd=mcp'),
+            ('lib/recipe.sh', 'cmd=recipe'),
+        ):
+            self.assertIn('i18n_fmt audit.detail_cmd_failed ' + key, (REPO / rel).read_text())
+
+    def test_package_lock_errors_follow_lang(self):
+        lock = Path(tempfile.mkdtemp(prefix='capbox-lock-')) / 'package.lock'
+        lock.write_text('# CapBox package.lock\nbusybox-1.0-r0\n')
+        tool = REPO / 'lib/package-lock.py'
+        cmd = [sys.executable, str(tool), 'validate', '--distro', 'alpine',
+               '--architecture', 'x86_64', str(lock)]
+        zh = subprocess.run(cmd, env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                            capture_output=True, text=True, timeout=10)
+        en = subprocess.run(cmd, env={**base_env(), 'CAPBOX_LANG': 'en'},
+                            capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('重新 image lock save', zh.stderr)
+        self.assertIn('[capbox] 包锁失败:', zh.stderr)
+        self.assertIn('image lock save', en.stderr)
+        self.assertIn('[capbox] package lock failed:', en.stderr)
+        self.assertNotIn('包锁失败', en.stderr)
+        self.assertNotIn('不是有效的严格包锁', en.stderr)
+
+    def test_credentials_errors_and_help_follow_lang(self):
+        tool = REPO / 'lib/credentials-runtime.py'
+        zh = subprocess.run([sys.executable, str(tool), 'set'],
+                            env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                            capture_output=True, text=True, timeout=10)
+        en = subprocess.run([sys.executable, str(tool), 'set'],
+                            env={**base_env(), 'CAPBOX_LANG': 'en'},
+                            capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(zh.returncode, 0)
+        self.assertNotEqual(en.returncode, 0)
+        self.assertIn('[capbox] 错误:', zh.stderr)
+        self.assertIn('未知服务', zh.stderr)
+        self.assertIn('[capbox] error:', en.stderr)
+        self.assertIn('unknown service', en.stderr)
+        self.assertNotIn('未知服务', en.stderr)
+        self.assertNotIn('[capbox] 错误:', en.stderr)
+
+        zh_help = subprocess.run([sys.executable, str(tool), 'set', '--help'],
+                                 env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                                 capture_output=True, text=True, timeout=10)
+        en_help = subprocess.run([sys.executable, str(tool), 'set', '--help'],
+                                 env={**base_env(), 'CAPBOX_LANG': 'en'},
+                                 capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh_help.returncode, 0, zh_help.stderr)
+        self.assertEqual(en_help.returncode, 0, en_help.stderr)
+        self.assertIn('用法:', zh_help.stdout)
+        self.assertIn('内置服务名', zh_help.stdout)
+        self.assertIn('usage:', en_help.stdout)
+        self.assertIn('built-in service name', en_help.stdout)
+        self.assertNotIn('用法:', en_help.stdout)
+        self.assertNotIn('内置服务名', en_help.stdout)
+
+        zh_top = subprocess.run([sys.executable, str(tool), '--help'],
+                                env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                                capture_output=True, text=True, timeout=10)
+        en_top = subprocess.run([sys.executable, str(tool), '--help'],
+                                env={**base_env(), 'CAPBOX_LANG': 'en'},
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh_top.returncode, 0, zh_top.stderr)
+        self.assertEqual(en_top.returncode, 0, en_top.stderr)
+        self.assertIn('存储服务或自定义密钥', zh_top.stdout)
+        self.assertIn('store a service or custom secret', en_top.stdout)
+        self.assertNotIn('存储服务或自定义密钥', en_top.stdout)
+
+    def test_net_proxy_operator_strings_follow_lang(self):
+        tool = REPO / 'lib/net-proxy.py'
+        zh = subprocess.run([sys.executable, str(tool), 'proxy', '--sock', '/tmp/x', '--allow', ''],
+                            env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                            capture_output=True, text=True, timeout=10)
+        en = subprocess.run([sys.executable, str(tool), 'proxy', '--sock', '/tmp/x', '--allow', ''],
+                            env={**base_env(), 'CAPBOX_LANG': 'en'},
+                            capture_output=True, text=True, timeout=10)
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('capbox-net: 白名单为空', zh.stderr)
+        self.assertIn('capbox-net: allowlist is empty', en.stderr)
+        self.assertNotIn('白名单为空', en.stderr)
+
+        zh_err = subprocess.run([sys.executable, str(tool), 'enter-net', '--child', '0'],
+                                env={**base_env(), 'CAPBOX_LANG': 'zh'},
+                                capture_output=True, text=True, timeout=10)
+        en_err = subprocess.run([sys.executable, str(tool), 'enter-net', '--child', '0'],
+                                env={**base_env(), 'CAPBOX_LANG': 'en'},
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(zh_err.returncode, 0)
+        self.assertNotEqual(en_err.returncode, 0)
+        self.assertIn('需要正数子进程 PID', zh_err.stderr)
+        self.assertIn('needs a positive child PID', en_err.stderr)
+        self.assertNotIn('需要正数子进程', en_err.stderr)
+
+    def test_audit_tail_and_details_follow_lang(self):
+        script = (
+            'source lib/i18n.sh\n'
+            '_capbox_resolve_lang_preview\n'
+            'printf "%s\\n" "$(i18n_get audit.no_log)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_cmd_failed cmd=init rc=3)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_cmd_failed cmd=task rc=4)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_cmd_failed cmd=mcp rc=5)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_cmd_failed cmd=recipe rc=6)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_upgrade_failed action=apply rc=7)"\n'
+            'printf "%s\\n" "$(i18n_fmt audit.detail_pkg_returned sub=install rc=8)"\n'
+        )
+        zh = run_bash(script, env={'CAPBOX_LANG': 'zh'})
+        en = run_bash(script, env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无审计日志)', zh.stdout)
+        self.assertIn('init 失败，退出码 3', zh.stdout)
+        self.assertIn('task 失败，退出码 4', zh.stdout)
+        self.assertIn('mcp 失败，退出码 5', zh.stdout)
+        self.assertIn('recipe 失败，退出码 6', zh.stdout)
+        self.assertIn('upgrade apply 失败，退出码 7', zh.stdout)
+        self.assertIn('pkg install 返回 8', zh.stdout)
+        self.assertIn('(no audit log)', en.stdout)
+        self.assertIn('init failed, exit code 3', en.stdout)
+        self.assertIn('task failed, exit code 4', en.stdout)
+        self.assertIn('mcp failed, exit code 5', en.stdout)
+        self.assertIn('recipe failed, exit code 6', en.stdout)
+        self.assertIn('upgrade apply failed, exit code 7', en.stdout)
+        self.assertIn('pkg install returned 8', en.stdout)
+        self.assertNotIn('失败，退出码', en.stdout)
+        self.assertNotIn('无审计日志', en.stdout)
+        self.assertNotIn('返回 8', en.stdout)
+
+    def test_audit_tail_cli_follows_lang(self):
+        tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-audit-')
+        self.addCleanup(tmp.cleanup)
+        ws = Path(tmp.name) / 'ws'
+        ws.mkdir()
+
+        def run(lang):
+            return subprocess.run(
+                [str(CLI), '--root', str(ws), 'audit', 'tail'],
+                env={**base_env(), 'CAPBOX_LANG': lang},
+                capture_output=True, text=True, timeout=30)
+
+        zh = run('zh')
+        en = run('en')
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('(无审计日志)', zh.stdout)
+        self.assertIn('(no audit log)', en.stdout)
+        self.assertNotIn('无审计日志', en.stdout)
+
+    def test_audit_html_follows_lang_and_keeps_machine_tokens(self):
+        tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-html-')
+        self.addCleanup(tmp.cleanup)
+        ws = Path(tmp.name) / 'ws'
+        ws.mkdir()
+        source = ws / '.capbox' / 'logs' / 'audit.jsonl'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        event = {'ts': '2026-11-08T00:00:00Z', 'kind': 'exec', 'status': 'fail',
+                 'exit': 7, 'ms': 12, 'cmd': 'false'}
+        source.write_text(json.dumps(event) + '\n{broken}\n')
+        out_zh = Path(tmp.name) / 'zh.html'
+        out_en = Path(tmp.name) / 'en.html'
+
+        def generate(path, lang):
+            return subprocess.run(
+                [str(CLI), '--root', str(ws), 'audit', 'report',
+                 '--output', str(path), '--force'],
+                env={**base_env(), 'CAPBOX_LANG': lang},
+                capture_output=True, text=True, timeout=30)
+
+        zh = generate(out_zh, 'zh')
+        en = generate(out_en, 'en')
+        self.assertEqual(zh.returncode, 0, zh.stderr)
+        self.assertEqual(en.returncode, 0, en.stderr)
+        self.assertIn('已生成审计报告', zh.stdout)
+        self.assertIn('generated audit report', en.stdout)
+        self.assertNotIn('已生成审计报告', en.stdout)
+        zh_html = out_zh.read_text()
+        en_html = out_en.read_text()
+        self.assertIn('lang="zh-CN"', zh_html)
+        self.assertIn('lang="en"', en_html)
+        self.assertIn('CapBox · 审计报告', zh_html)
+        self.assertIn('CapBox · Audit Report', en_html)
+        self.assertNotIn('CapBox · 审计报告', en_html)
+
+        def ui(html):
+            match = re.search(r'const I18N = (\{.*?\});\n', html)
+            self.assertIsNotNone(match)
+            return json.loads(match.group(1))
+
+        zh_ui = ui(zh_html)
+        en_ui = ui(en_html)
+        self.assertEqual(zh_ui['warn_bad_records'], '跳过 {count} 条损坏、过长或未写完的记录')
+        self.assertIn('Skipped {count}', en_ui['warn_bad_records'])
+        self.assertNotIn('跳过', en_ui['warn_bad_records'])
+        self.assertEqual(zh_ui['locale'], 'zh-CN')
+        self.assertEqual(en_ui['locale'], 'en')
+        for html in (zh_html, en_html):
+            self.assertIn('status=fail', html)
+            self.assertIn('start/stop/skip', html)
+            data = json.loads(re.search(
+                r'<script id="report-data" type="application/json">(.*?)</script>',
+                html, re.S)[1])
+            self.assertEqual(data['schema'], 'capbox.audit-report.v1')
+            self.assertEqual(data['events'][0]['kind'], 'exec')
+            self.assertEqual(data['events'][0]['status'], 'fail')
+            self.assertNotIn('i18n', data)
 
 
 if __name__ == '__main__':

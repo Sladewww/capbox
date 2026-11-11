@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="@@HTML_LANG@@">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-@@SCRIPT_HASH@@'; style-src 'sha256-@@STYLE_HASH@@'; img-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>CapBox · 审计报告</title>
+<title>@@audit.html.title@@</title>
 <style data-app>
 :root{color-scheme:light;--bg:#f5f6fa;--panel:#fff;--ink:#202637;--muted:#71798d;--line:#e8eaf1;--indigo:#5146d8;--teal:#148774;--red:#cf4262;--amber:#a86a19;--soft:#f0efff;font-family:Inter,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}button,input,select{font:inherit}button,a,input,select,summary{outline-offset:4px}button{cursor:pointer}a{color:inherit;text-decoration:none}button:disabled{cursor:default;opacity:.45}button:focus-visible,a:focus-visible{outline:3px solid #9d97f7}input,select{accent-color:var(--indigo)}
@@ -18,55 +18,57 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
 </style>
 </head>
 <body>
-<aside class="sidebar" aria-label="报告导航">
+<aside class="sidebar" aria-label="@@audit.html.nav_label@@">
   <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>CapBox</div>
   <div class="side-kicker">WORKSPACE INSIGHTS</div>
-  <nav class="nav"><a href="#overview"><span class="nav-icon" aria-hidden="true">▦</span>审计总览</a><a href="#events"><span class="nav-icon" aria-hidden="true">≡</span>事件记录</a><a href="#about"><span class="nav-icon" aria-hidden="true">ⓘ</span>数据说明</a></nav>
-  <div class="side-bottom"><strong><span class="dot"></span>离线报告 · 只读</strong>数据保存在此文件中<br>没有网络请求或后台服务</div>
+  <nav class="nav"><a href="#overview"><span class="nav-icon" aria-hidden="true">▦</span>@@audit.html.nav_overview@@</a><a href="#events"><span class="nav-icon" aria-hidden="true">≡</span>@@audit.html.nav_events@@</a><a href="#about"><span class="nav-icon" aria-hidden="true">ⓘ</span>@@audit.html.nav_about@@</a></nav>
+  <div class="side-bottom"><strong><span class="dot"></span>@@audit.html.side_kicker@@</strong>@@audit.html.side_stored@@<br>@@audit.html.side_offline@@</div>
 </aside>
 <main>
-  <div class="topline"><div class="breadcrumb">工作区<span>/</span><b id="project-name">—</b><span>/</span>审计</div><div class="local-tag">● 本地生成</div></div>
-  <header class="page-heading" id="overview"><div><h1>审计报告<small>AUDIT REPORT</small></h1><p class="subtitle" id="report-meta">正在读取本地报告数据…</p></div><div class="actions"><button class="button" id="reset" type="button">重置筛选</button><button class="button primary" id="export" type="button">↓ 导出筛选 JSON</button></div></header>
-  <noscript><p class="noscript">启用浏览器 JavaScript 后可查看此离线报告；不需要联网。原始审计记录仍保存在项目 JSONL 文件中。</p></noscript>
-  <div class="coverage-note"><span aria-hidden="true">ⓘ</span><div id="coverage-note">此报告为生成时的审计快照。</div></div>
-  <section class="cards" aria-label="筛选后的统计">
-    <article class="card"><div class="stat-label">事件总数<span class="stat-icon" aria-hidden="true">▦</span></div><div class="stat-number" id="total-count">—</div><div class="stat-foot" id="total-foot">当前筛选内的审计事件</div></article>
-    <article class="card failure"><div class="stat-label">失败事件<span class="stat-icon" aria-hidden="true">↗</span></div><div class="stat-number" id="failure-count">—</div><div class="stat-foot">status=fail 或退出码非 0</div></article>
-    <article class="card warning"><div class="stat-label">警告事件<span class="stat-icon" aria-hidden="true">△</span></div><div class="stat-number" id="warning-count">—</div><div class="stat-foot">按原始 warn 状态统计</div></article>
-    <article class="card latency"><div class="stat-label">执行耗时 P95<span class="stat-icon" aria-hidden="true">◷</span></div><div class="stat-number" id="p95">—</div><div class="stat-foot" id="p95-foot">仅统计含 ms 的 exec 记录</div></article>
+  <div class="topline"><div class="breadcrumb">@@audit.html.crumb_workspace@@<span>/</span><b id="project-name">—</b><span>/</span>@@audit.html.crumb_audit@@</div><div class="local-tag">● @@audit.html.local_tag@@</div></div>
+  <header class="page-heading" id="overview"><div><h1>@@audit.html.heading@@<small>AUDIT REPORT</small></h1><p class="subtitle" id="report-meta">@@audit.html.reading@@</p></div><div class="actions"><button class="button" id="reset" type="button">@@audit.html.reset@@</button><button class="button primary" id="export" type="button">@@audit.html.export@@</button></div></header>
+  <noscript><p class="noscript">@@audit.html.noscript@@</p></noscript>
+  <div class="coverage-note"><span aria-hidden="true">ⓘ</span><div id="coverage-note">@@audit.html.snapshot_placeholder@@</div></div>
+  <section class="cards" aria-label="@@audit.html.stats_label@@">
+    <article class="card"><div class="stat-label">@@audit.html.stat_total@@<span class="stat-icon" aria-hidden="true">▦</span></div><div class="stat-number" id="total-count">—</div><div class="stat-foot" id="total-foot">@@audit.html.stat_total_foot@@</div></article>
+    <article class="card failure"><div class="stat-label">@@audit.html.stat_failed@@<span class="stat-icon" aria-hidden="true">↗</span></div><div class="stat-number" id="failure-count">—</div><div class="stat-foot">@@audit.html.stat_failed_foot@@</div></article>
+    <article class="card warning"><div class="stat-label">@@audit.html.stat_warning@@<span class="stat-icon" aria-hidden="true">△</span></div><div class="stat-number" id="warning-count">—</div><div class="stat-foot">@@audit.html.stat_warning_foot@@</div></article>
+    <article class="card latency"><div class="stat-label">@@audit.html.stat_p95@@<span class="stat-icon" aria-hidden="true">◷</span></div><div class="stat-number" id="p95">—</div><div class="stat-foot" id="p95-foot">@@audit.html.stat_p95_foot@@</div></article>
   </section>
-  <section class="charts" aria-label="事件图表">
-    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">事件趋势</h2><p class="panel-sub">当前筛选 · UTC 时间</p></div><div class="legend"><span><i></i>所有事件</span><span><i class="fail"></i>其中失败</span></div></div><div class="chart-area" id="timeline"></div></article>
-    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">事件类型</h2><p class="panel-sub">点击类型进一步筛选 · 前 7 项</p></div></div><div class="kind-list" id="kind-chart"></div></article>
+  <section class="charts" aria-label="@@audit.html.charts_label@@">
+    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">@@audit.html.trend_title@@</h2><p class="panel-sub">@@audit.html.trend_sub@@</p></div><div class="legend"><span><i></i>@@audit.html.legend_all@@</span><span><i class="fail"></i>@@audit.html.legend_fail@@</span></div></div><div class="chart-area" id="timeline"></div></article>
+    <article class="panel"><div class="panel-head"><div><h2 class="panel-title">@@audit.html.kinds_title@@</h2><p class="panel-sub">@@audit.html.kinds_sub@@</p></div></div><div class="kind-list" id="kind-chart"></div></article>
   </section>
-  <section id="events" aria-label="事件记录">
-    <h2 class="section-title">事件记录<span id="filtered-label">—</span></h2>
+  <section id="events" aria-label="@@audit.html.events_heading@@">
+    <h2 class="section-title">@@audit.html.events_heading@@<span id="filtered-label">—</span></h2>
     <div class="panel">
       <form class="toolbar" id="filters" role="search">
-        <div class="field search-field"><label for="search">搜索事件</label><input id="search" type="search" placeholder="搜索命令、对象、详情、策略…" maxlength="256" autocomplete="off"></div>
-        <div class="field"><label for="kind">事件类型</label><select id="kind"><option value="">全部类型</option></select></div>
-        <div class="field"><label for="status">状态</label><select id="status"><option value="">全部状态</option></select></div>
-        <div class="field"><label for="from">起始日期（UTC）</label><input id="from" type="date"></div>
-        <div class="field"><label for="to">结束日期（含当天）</label><input id="to" type="date"></div>
-        <div class="field"><label for="order">排序</label><select id="order"><option value="newest">最新在前</option><option value="oldest">最早在前</option><option value="duration">耗时从高到低</option></select></div>
+        <div class="field search-field"><label for="search">@@audit.html.search_label@@</label><input id="search" type="search" placeholder="@@audit.html.search_placeholder@@" maxlength="256" autocomplete="off"></div>
+        <div class="field"><label for="kind">@@audit.html.kind_label@@</label><select id="kind"><option value="">@@audit.html.kind_all@@</option></select></div>
+        <div class="field"><label for="status">@@audit.html.status_label@@</label><select id="status"><option value="">@@audit.html.status_all@@</option></select></div>
+        <div class="field"><label for="from">@@audit.html.from_label@@</label><input id="from" type="date"></div>
+        <div class="field"><label for="to">@@audit.html.to_label@@</label><input id="to" type="date"></div>
+        <div class="field"><label for="order">@@audit.html.order_label@@</label><select id="order"><option value="newest">@@audit.html.order_newest@@</option><option value="oldest">@@audit.html.order_oldest@@</option><option value="duration">@@audit.html.order_duration@@</option></select></div>
       </form>
       <div class="view-message" id="view-message" role="status" hidden></div>
-      <div class="table-wrap"><table class="events-table"><thead><tr><th scope="col">时间 · UTC</th><th scope="col">类型</th><th scope="col">状态</th><th scope="col">命令 / 对象 / 详情</th><th scope="col">耗时</th><th scope="col"><span class="hidden">详情</span></th></tr></thead><tbody id="event-rows"></tbody></table></div>
-      <div id="empty" class="table-empty" hidden>没有匹配的事件。调整筛选条件或重新生成报告。</div>
-      <div class="pager" aria-live="polite"><span id="page-info">—</span><div class="pager-controls"><button class="button" id="previous" type="button">上一页</button><span id="page-number">1 / 1</span><button class="button" id="next" type="button">下一页</button></div></div>
+      <div class="table-wrap"><table class="events-table"><thead><tr><th scope="col">@@audit.html.col_time@@</th><th scope="col">@@audit.html.col_kind@@</th><th scope="col">@@audit.html.col_status@@</th><th scope="col">@@audit.html.col_summary@@</th><th scope="col">@@audit.html.col_duration@@</th><th scope="col"><span class="hidden">@@audit.html.col_detail@@</span></th></tr></thead><tbody id="event-rows"></tbody></table></div>
+      <div id="empty" class="table-empty" hidden>@@audit.html.empty@@</div>
+      <div class="pager" aria-live="polite"><span id="page-info">—</span><div class="pager-controls"><button class="button" id="previous" type="button">@@audit.html.prev@@</button><span id="page-number">1 / 1</span><button class="button" id="next" type="button">@@audit.html.next@@</button></div></div>
     </div>
   </section>
-  <details class="about" id="about"><summary>数据范围与审计边界</summary><ul id="coverage-details"></ul><pre id="coverage-json"></pre></details>
-  <footer class="bottom-line"><span>CapBox / Audit Explorer</span><span>命令、路径和输出可能含敏感信息，分享前请检查。</span></footer>
+  <details class="about" id="about"><summary>@@audit.html.about_summary@@</summary><ul id="coverage-details"></ul><pre id="coverage-json"></pre></details>
+  <footer class="bottom-line"><span>CapBox / Audit Explorer</span><span>@@audit.html.footer_warn@@</span></footer>
 </main>
-<dialog id="event-detail" aria-labelledby="detail-title"><div class="dialog-head"><h2 id="detail-title">事件详情</h2><button class="close-button" id="close-detail" type="button" aria-label="关闭事件详情">✕</button></div><div class="dialog-content"><dl id="detail-fields"></dl><div class="raw-label">规范化记录 · 常见凭据已做尽力脱敏</div><textarea class="raw-data" id="raw-data" readonly aria-label="规范化 JSON 记录"></textarea></div></dialog>
+<dialog id="event-detail" aria-labelledby="detail-title"><div class="dialog-head"><h2 id="detail-title">@@audit.html.detail_title@@</h2><button class="close-button" id="close-detail" type="button" aria-label="@@audit.html.close_detail@@">✕</button></div><div class="dialog-content"><dl id="detail-fields"></dl><div class="raw-label">@@audit.html.raw_label@@</div><textarea class="raw-data" id="raw-data" readonly aria-label="@@audit.html.raw_aria@@"></textarea></div></dialog>
 <script id="report-data" type="application/json">@@DATA@@</script>
 <script data-app>
 'use strict';
 (() => {
   const data = JSON.parse(document.getElementById('report-data').textContent);
+  const I18N = @@I18N@@;
+  const t = (key, vars) => String(I18N[key] ?? key).replace(/\{([A-Za-z0-9_]+)\}/g, (m, n) => (vars && Object.prototype.hasOwnProperty.call(vars, n)) ? String(vars[n]) : m);
   const $ = id => document.getElementById(id);
-  const fmt = value => new Intl.NumberFormat('zh-CN').format(value);
+  const fmt = value => new Intl.NumberFormat(I18N.locale || 'en').format(value);
   const failed = event => event.status === 'fail' || (typeof event.exit === 'number' && event.exit !== 0);
   const time = value => new Date(value).toISOString().replace('T', ' ').slice(0, 19);
   const duration = value => typeof value !== 'number' ? '—' : value >= 1000 ? (value / 1000).toFixed(2) + ' s' : fmt(Math.round(value)) + ' ms';
@@ -76,26 +78,27 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
   let filtered = data.events.slice();
   let page = 0;
   const pageSize = 50;
-  document.title = 'CapBox 审计 · ' + data.project;
+  document.title = t('title_project', {project: data.project});
   $('project-name').textContent = data.project;
-  $('report-meta').textContent = '生成于 ' + time(data.generated_at) + ' UTC  ·  来源 ' + data.source;
+  $('report-meta').textContent = t('report_meta', {time: time(data.generated_at), source: data.source});
   const c = data.coverage;
   const warnings = [];
-  if (c.source_missing) warnings.push('生成时尚无审计文件');
-  if (c.omitted_prefix_bytes) warnings.push('源文件较大，已省略前 ' + fmt(c.omitted_prefix_bytes) + ' 字节');
-  if (c.omitted_records) warnings.push('另有 ' + fmt(c.omitted_records) + ' 条较早匹配记录未保留');
+  if (c.source_missing) warnings.push(t('warn_source_missing'));
+  if (c.omitted_prefix_bytes) warnings.push(t('warn_omitted_prefix', {bytes: fmt(c.omitted_prefix_bytes)}));
+  if (c.omitted_records) warnings.push(t('warn_omitted_records', {count: fmt(c.omitted_records)}));
   const bad = c.invalid_records + c.oversized_records + c.incomplete_records;
-  if (bad) warnings.push('跳过 ' + fmt(bad) + ' 条损坏、过长或未写完的记录');
-  if (c.truncated_fields) warnings.push(fmt(c.truncated_fields) + ' 个过长字段已截断');
-  $('coverage-note').textContent = '本报告包含 ' + fmt(data.events.length) + ' 条审计事件，所有筛选与统计仅针对这些记录。' + (warnings.length ? ' ' + warnings.join('；') + '。' : ' 数据为生成时快照，不会实时更新。');
+  if (bad) warnings.push(t('warn_bad_records', {count: fmt(bad)}));
+  if (c.truncated_fields) warnings.push(t('warn_truncated', {count: fmt(c.truncated_fields)}));
+  const coverageIntro = t('coverage_intro', {count: fmt(data.events.length)});
+  $('coverage-note').textContent = warnings.length ? t('coverage_with_warnings', {intro: coverageIntro, warnings: warnings.join(I18N.warn_sep)}) : t('coverage_snapshot', {intro: coverageIntro});
   const facts = [
-    '最多扫描源文件末尾 32MiB，按文件顺序保留最后 ' + fmt(c.limit) + ' 条匹配事件；图表按事件时间排列。',
-    '事件条数不等于任务数：一次执行可能产生安全策略、资源和 exec 等多条事件。start/stop/skip 不会自动当作执行成功。',
-    '失败依据 status=fail 或非零退出码；警告依据 status=warn。耗时 P95 仅计算带有效 ms 的 exec 记录，不代表 CPU/内存采样或完整调用链。',
-    '无效 JSON、重复键、非法数值、无时区时间和未完成行会被跳过；未知字段不导出。超长文本截断，常见凭据尽力脱敏，无法识别所有秘密。',
-    '仅展示选定的 JSONL，不自动汇总轮转文件、其它项目或私有隔离任务副本。',
-    '本文件只读，不调用 CapBox、不运行审计中的命令、不请求网络；日志来自现有审计源，不具备独立签名或完整性认证。',
-    '导出 JSON 仅包含当前匹配记录；打印只包含当前表格页。类型与状态下拉展示最多 200 项，其余可用文本搜索。'
+    t('fact_scan', {limit: fmt(c.limit)}),
+    t('fact_counts'),
+    t('fact_failure'),
+    t('fact_invalid'),
+    t('fact_jsonl'),
+    t('fact_readonly'),
+    t('fact_export')
   ];
   facts.forEach(value => $('coverage-details').append(text('li', value)));
   $('coverage-json').textContent = JSON.stringify(c, null, 2);
@@ -106,7 +109,7 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
   }
   function trend(events) {
     const host = $('timeline'); host.replaceChildren();
-    if (!events.length) { host.append(text('div', '没有可展示的事件', 'empty-chart')); return; }
+    if (!events.length) { host.append(text('div', t('empty_trend'), 'empty-chart')); return; }
     const first = Math.min(...events.map(e => e.time));
     const last = Math.max(...events.map(e => e.time));
     const span = Math.max(last-first, 1000);
@@ -114,13 +117,13 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
     events.forEach(event => { const bin = bins[Math.min(23, Math.floor((event.time-first)/span*24))]; bin.total++; if (failed(event)) bin.fail++; });
     const max = Math.ceil(Math.max(...bins.map(bin => bin.total), 1) / 3) * 3;
     const ns = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 940 180'); svg.setAttribute('role','img'); svg.setAttribute('aria-label','UTC 事件趋势，24 个时间区间，紫色为所有事件，红色为其中失败');
+    const svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 940 180'); svg.setAttribute('role','img'); svg.setAttribute('aria-label', t('chart_aria'));
     function shape(tag, attrs, label) { const node = document.createElementNS(ns, tag); for (const [key,value] of Object.entries(attrs)) node.setAttribute(key,String(value)); if(label !== undefined) node.textContent=label; svg.append(node); return node; }
     for (let row=0;row<4;row++) { const y=15+row*42; shape('line',{x1:37,y1:y,x2:931,y2:y,stroke:'#eff0f6','stroke-width':1}); shape('text',{x:28,y:y+4,'text-anchor':'end'},fmt(Math.round(max*(1-row/3)))); }
     bins.forEach((bin,index) => {
       const x=45+index*36.5; const height=bin.total/max*126;
       const bar=shape('rect',{x,y:141-height,width:23,height:Math.max(height,bin.total?2:0),rx:3,fill:'#8e85e5'});
-      const label=document.createElementNS(ns,'title');label.textContent=time(first+span*index/24)+' UTC：'+fmt(bin.total)+' 条，其中失败 '+fmt(bin.fail)+' 条';bar.append(label);
+      const label=document.createElementNS(ns,'title');label.textContent=t('bar_title', {time: time(first+span*index/24), total: fmt(bin.total), fail: fmt(bin.fail)});bar.append(label);
       if(bin.fail)shape('rect',{x,y:141-bin.fail/max*126,width:23,height:bin.fail/max*126,rx:3,fill:'#d7637c'});
     });
     [0,6,12,18,24].forEach((index) => { const stamp=time(first+span*index/24);shape('text',{x:45+index*36.5,y:170,'text-anchor':index===24?'end':index===0?'start':'middle'},span>86400000?stamp.slice(5,16):stamp.slice(11,19)); });
@@ -128,16 +131,16 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
   }
   function kinds(events) {
     const host=$('kind-chart');host.replaceChildren();
-    if(!events.length){host.append(text('div','暂无类型分布','empty-chart'));return;}
+    if(!events.length){host.append(text('div',t('empty_kinds'),'empty-chart'));return;}
     counts(events,'kind').slice(0,7).forEach(([kind,count]) => {
-      const row=text('button','', 'kind-row');row.type='button';row.title='筛选类型：'+kind;row.append(text('span',kind));
-      const bar=document.createElement('progress');bar.max=events.length;bar.value=count;bar.setAttribute('aria-label',kind+' 占比');row.append(bar,text('strong',fmt(count)));
+      const row=text('button','', 'kind-row');row.type='button';row.title=t('filter_kind', {kind});row.append(text('span',kind));
+      const bar=document.createElement('progress');bar.max=events.length;bar.value=count;bar.setAttribute('aria-label',t('kind_share', {kind}));row.append(bar,text('strong',fmt(count)));
       row.addEventListener('click',() => { if(![...$('kind').options].some(o=>o.value===kind)){const option=text('option',kind);option.value=kind;$('kind').append(option);} $('kind').value=kind;apply(); });host.append(row);
     });
   }
   function detail(event) {
     const fields=$('detail-fields');fields.replaceChildren();
-    const labels={ts:'时间（UTC）',kind:'事件类型',status:'状态',exit:'退出码',ms:'耗时（ms）',object:'对象',cmd:'命令',detail:'详情',profile:'安全档',net:'网络',uid:'UID',distro:'发行版'};
+    const labels={ts:t('label_ts'),kind:t('label_kind'),status:t('label_status'),exit:t('label_exit'),ms:t('label_ms'),object:t('label_object'),cmd:t('label_cmd'),detail:t('label_detail'),profile:t('label_profile'),net:t('label_net'),uid:t('label_uid'),distro:t('label_distro')};
     Object.entries(labels).forEach(([key,label]) => {if(event[key]!==undefined)fields.append(text('dt',label),text('dd',String(event[key])));});
     $('raw-data').value=JSON.stringify(event,null,2);$('event-detail').showModal();
   }
@@ -150,10 +153,10 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
       const status=document.createElement('td');const known=['ok','fail','warn','start','stop','skip'].includes(event.status)?event.status:'';
       status.append(text('span',event.status,'status-pill '+(failed(event)?'fail':known)));row.append(status);
       const message=event.cmd||event.object||event.detail||'—';const summary=text('td',message);summary.title=message;row.append(summary,text('td',duration(event.ms)));
-      const control=document.createElement('td');const button=text('button','···','detail-button');button.type='button';button.setAttribute('aria-label','查看事件 '+event.id+' 的详情');button.addEventListener('click',()=>detail(event));control.append(button);row.append(control);host.append(row);
+      const control=document.createElement('td');const button=text('button','···','detail-button');button.type='button';button.setAttribute('aria-label',t('view_detail', {id: event.id}));button.addEventListener('click',()=>detail(event));control.append(button);row.append(control);host.append(row);
     });
     $('empty').hidden=filtered.length!==0;
-    $('page-info').textContent=filtered.length?'第 '+fmt(page*pageSize+1)+'–'+fmt(Math.min((page+1)*pageSize,filtered.length))+' 条 / 共 '+fmt(filtered.length)+' 条':'共 0 条事件';
+    $('page-info').textContent=filtered.length?t('page_info', {from: fmt(page*pageSize+1), to: fmt(Math.min((page+1)*pageSize,filtered.length)), total: fmt(filtered.length)}):t('page_info_empty');
     $('page-number').textContent=(page+1)+' / '+pages;$('previous').disabled=page===0;$('next').disabled=page>=pages-1;
   }
   function apply() {
@@ -161,16 +164,16 @@ main{margin-left:212px;padding:35px 42px 32px;max-width:1760px}.topline{display:
     const from=$('from').value?Date.parse($('from').value+'T00:00:00Z'):-Infinity;
     const to=$('to').value?Date.parse($('to').value+'T00:00:00Z')+86400000:Infinity;
     const invalid=from>=to;
-    $('view-message').hidden=!invalid;$('view-message').textContent=invalid?'起始日期晚于结束日期，请调整筛选。':'';
+    $('view-message').hidden=!invalid;$('view-message').textContent=invalid?t('invalid_range'):'';
     filtered=indexed.filter(({event,search})=>!invalid&&(!query||search.includes(query))&&(!$('kind').value||event.kind===$('kind').value)&&(!$('status').value||event.status===$('status').value)&&event.time>=from&&event.time<to).map(item=>item.event);
     const order=$('order').value;
     filtered.sort((a,b)=>order==='duration'?(b.ms??-1)-(a.ms??-1)||b.time-a.time:order==='oldest'?a.time-b.time||a.id-b.id:b.time-a.time||b.id-a.id);
     page=0;
-    $('total-count').textContent=fmt(filtered.length);$('total-foot').textContent='报告内 '+fmt(data.events.length)+' 条记录中的匹配结果';
+    $('total-count').textContent=fmt(filtered.length);$('total-foot').textContent=t('total_foot', {count: fmt(data.events.length)});
     $('failure-count').textContent=fmt(filtered.filter(failed).length);$('warning-count').textContent=fmt(filtered.filter(e=>e.status==='warn').length);
     const elapsed=filtered.filter(e=>e.kind==='exec'&&typeof e.ms==='number').map(e=>e.ms).sort((a,b)=>a-b);
-    $('p95').textContent=elapsed.length?duration(elapsed[Math.ceil(elapsed.length*.95)-1]):'—';$('p95-foot').textContent=elapsed.length?'基于 '+fmt(elapsed.length)+' 条 exec 耗时记录':'没有可用的 exec 耗时记录';
-    $('filtered-label').textContent=fmt(filtered.length)+' / '+fmt(data.events.length)+' 条';
+    $('p95').textContent=elapsed.length?duration(elapsed[Math.ceil(elapsed.length*.95)-1]):'—';$('p95-foot').textContent=elapsed.length?t('p95_foot', {count: fmt(elapsed.length)}):t('p95_foot_empty');
+    $('filtered-label').textContent=t('filtered_label', {filtered: fmt(filtered.length), total: fmt(data.events.length)});
     $('export').disabled=filtered.length===0;trend(filtered);kinds(filtered);table();
   }
   let debounce;

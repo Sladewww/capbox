@@ -203,8 +203,32 @@ def snapshot(path, args):
     return sorted(records, key=lambda event: (event['time'], event['id'])), counters
 
 
+def html_escape(value):
+    return (value.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;'))
+
+
+def ui_strings(catalog):
+    return {key[len('audit.html.'):]: value
+            for key, value in catalog.items() if key.startswith('audit.html.')}
+
+
+def stamp_template(template, catalog):
+    template = template.replace('@@HTML_LANG@@', html_escape(i18n.get(catalog, 'audit.html.locale')))
+
+    def stamp(match):
+        return html_escape(i18n.get(catalog, match.group(1)))
+
+    template = re.sub(r'@@(audit\.html\.[A-Za-z0-9_]+)@@', stamp, template)
+    encoded = json.dumps(ui_strings(catalog), ensure_ascii=True, allow_nan=False, separators=(',', ':'))
+    encoded = encoded.replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026')
+    if template.count('@@I18N@@') != 1:
+        raise ValueError(i18n.t('audit.report_template_incomplete'))
+    return template.replace('@@I18N@@', encoded)
+
+
 def render(document):
     template = Path(__file__).with_suffix('.html').read_text()
+    template = stamp_template(template, i18n.catalog_for(i18n.resolve_lang()))
     for tag, directive in (('style', 'STYLE'), ('script', 'SCRIPT')):
         blocks = re.findall(r'<' + tag + r' data-app>(.*?)</' + tag + '>', template, re.S)
         if len(blocks) != 1:

@@ -40,18 +40,18 @@ class CredError(Exception):
 
 
 def die(message: str, code: int = 1) -> None:
-    print('[capbox] 错误:', message, file=sys.stderr)
+    print(i18n.t('cred.error_prefix', message=message), file=sys.stderr)
     raise SystemExit(code)
 
 
 def private_root() -> Path:
     raw = os.environ.get('CAPBOX_CRED_PRIVATE') or os.environ.get('CAPBOX_AGENT_PRIVATE')
     if not raw:
-        die('缺少宿主私有目录上下文（CAPBOX_CRED_PRIVATE）', 5)
+        die(i18n.t('cred.missing_private_dir'), 5)
     path = Path(raw)
     st = path.lstat()
     if path.is_symlink() or not path.is_dir() or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
-        die('宿主凭据目录必须由当前用户拥有、权限 0700 且不是符号链接', 1)
+        die(i18n.t('cred.private_dir_must_be_owned_0700'), 1)
     return path
 
 
@@ -61,7 +61,7 @@ def cred_dir() -> Path:
         root.mkdir(mode=0o700)
     st = root.lstat()
     if root.is_symlink() or not root.is_dir() or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
-        die('credentials 目录权限不安全', 1)
+        die(i18n.t('cred.credentials_dir_permissions_unsafe'), 1)
     for name in ('secrets', 'custom', 'sessions', 'ca'):
         sub = root / name
         if not sub.exists():
@@ -91,29 +91,29 @@ def read_json(path: Path) -> Any:
     with os.fdopen(fd, encoding='utf-8') as fh:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode):
-            raise CredError('凭据记录必须是普通文件')
+            raise CredError(i18n.t('cred.record_must_be_regular_file'))
         return json.load(fh)
 
 
 def validate_host(host: str) -> str:
     host = (host or '').strip().lower().rstrip('.')
     if not host or len(host) > 253:
-        raise CredError('无效 --host', 2)
+        raise CredError(i18n.t('cred.invalid_host'), 2)
     if host.startswith('*.'):
         base = host[2:]
         if '.' not in base or '*' in base or '/' in base or ':' in base:
-            raise CredError('通配主机仅支持单标签 *.example.com', 2)
+            raise CredError(i18n.t('cred.wildcard_host_single_label'), 2)
         return host
     if '*' in host or '/' in host or ':' in host or ' ' in host:
-        raise CredError('主机名非法', 2)
+        raise CredError(i18n.t('cred.invalid_hostname'), 2)
     if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]*[a-z0-9])?', host):
-        raise CredError('主机名非法', 2)
+        raise CredError(i18n.t('cred.invalid_hostname'), 2)
     return host
 
 
 def validate_env_name(name: str) -> str:
     if not re.fullmatch(r'[A-Z_][A-Z0-9_]{0,127}', name or ''):
-        raise CredError('环境变量名非法', 2)
+        raise CredError(i18n.t('cred.invalid_env_name'), 2)
     return name
 
 
@@ -123,14 +123,14 @@ def read_secret_value(args: argparse.Namespace) -> Tuple[str, Optional[str]]:
     if getattr(args, 'value_stdin', False):
         data = sys.stdin.buffer.read()
         if not data:
-            raise CredError('stdin 为空', 2)
+            raise CredError(i18n.t('cred.stdin_empty'), 2)
         return data.decode('utf-8', 'strict').rstrip('\n'), None
     if sys.stdin.isatty():
-        value = getpass.getpass('Secret value: ')
+        value = getpass.getpass(i18n.t('cred.prompt_secret_value'))
         if not value:
-            raise CredError('空密钥', 2)
+            raise CredError(i18n.t('cred.empty_secret'), 2)
         return value, None
-    raise CredError('非交互环境请使用 --value-stdin 或 --command', 2)
+    raise CredError(i18n.t('cred.noninteractive_use_value_stdin'), 2)
 
 
 def secret_path(kind: str, name: str) -> Path:
@@ -151,14 +151,14 @@ def cmd_set(args: argparse.Namespace) -> int:
     services = load_services()
     if args.custom:
         if not args.host or not args.env:
-            raise CredError('自定义密钥需要 --host 与 --env', 2)
+            raise CredError(i18n.t('cred.custom_requires_host_and_env'), 2)
         domains = [validate_host(h) for h in args.host]
         env_name = validate_env_name(args.env)
         value, command = read_secret_value(args)
         name = args.name or ('custom-' + hashlib.sha256(
             (env_name + '\0' + ','.join(domains)).encode()).hexdigest()[:12])
         if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', name):
-            raise CredError('自定义密钥名非法', 2)
+            raise CredError(i18n.t('cred.invalid_custom_name'), 2)
         record = {
             'schema': SCHEMA,
             'kind': 'custom',
@@ -177,7 +177,7 @@ def cmd_set(args: argparse.Namespace) -> int:
 
     service = args.service
     if not service or service not in services:
-        raise CredError('未知服务；可用: ' + ', '.join(sorted(services)), 2)
+        raise CredError(i18n.t('cred.unknown_service_available', services=', '.join(sorted(services))), 2)
     meta = services[service]
     value, command = read_secret_value(args)
     record = {
@@ -240,7 +240,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
             path.unlink()
             removed.append(kind)
     if not removed:
-        raise CredError('找不到密钥: ' + name + '；用 secret ls 查看，或 secret set <name> --value-stdin 重新绑定', 2)
+        raise CredError(i18n.t('cred.secret_not_found', name=name), 2)
     print(json.dumps({'schema': SCHEMA, 'removed': name, 'kinds': removed}, ensure_ascii=True))
     return 0
 
@@ -249,7 +249,7 @@ def cmd_import(args: argparse.Namespace) -> int:
     services = load_services()
     targets = [args.service] if args.service else sorted(services)
     if args.service and args.service not in services:
-        raise CredError('未知服务', 2)
+        raise CredError(i18n.t('cred.unknown_service'), 2)
     planned = []
     for name in targets:
         meta = services[name]
@@ -272,7 +272,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         if args.dry_run:
             continue
         if not args.all and not args.force and sys.stdin.isatty():
-            answer = input(f'Import {name} from {used}? [y/N] ').strip().lower()
+            answer = input(i18n.t('cred.prompt_import', name=name, used=used)).strip().lower()
             if answer not in ('y', 'yes'):
                 planned[-1]['action'] = 'declined'
                 continue
@@ -312,16 +312,16 @@ def resolve_secret(record: Dict[str, Any], cache: Dict[str, Tuple[str, float]]) 
             env={k: os.environ[k] for k in ('PATH', 'HOME', 'LANG', 'XDG_RUNTIME_DIR') if k in os.environ},
         )
         if proc.returncode != 0:
-            raise CredError(f'动态密钥命令失败: {name}', 1)
+            raise CredError(i18n.t('cred.dynamic_command_failed', name=name), 1)
         value = proc.stdout.strip()
         if not value:
-            raise CredError(f'动态密钥命令无输出: {name}', 1)
+            raise CredError(i18n.t('cred.dynamic_command_no_output', name=name), 1)
         if refresh > 0:
             cache[name] = (value, now)
         return value
     value = record.get('value')
     if not value:
-        raise CredError(f'密钥无值: {name}', 1)
+        raise CredError(i18n.t('cred.secret_has_no_value', name=name), 1)
     return value
 
 
@@ -509,11 +509,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog='capbox secret')
+    p = i18n.I18nArgumentParser(prog='capbox secret')
     sub = p.add_subparsers(dest='action', required=True)
 
-    set_p = sub.add_parser('set', help='存储服务或自定义密钥（真实值仅在宿主）')
-    set_p.add_argument('service', nargs='?', help='内置服务名（openai/anthropic/…）')
+    set_p = sub.add_parser('set', help=i18n.t('cred.help_set'))
+    set_p.add_argument('service', nargs='?', help=i18n.t('cred.help_service'))
     set_p.add_argument('--custom', action='store_true')
     set_p.add_argument('--host', action='append', default=[])
     set_p.add_argument('--env')
@@ -538,7 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
     im_p.add_argument('--dry-run', action='store_true')
     im_p.set_defaults(func=cmd_import)
 
-    prep = sub.add_parser('prepare', help='内部：为 restricted 启动生成占位符与 inject map')
+    prep = sub.add_parser('prepare', help=i18n.t('cred.help_prepare'))
     prep.add_argument('--allow', required=True)
     prep.add_argument('--session')
     prep.set_defaults(func=cmd_prepare)
