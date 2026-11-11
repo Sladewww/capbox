@@ -17,7 +17,7 @@ _capbox_arch() {
     x86_64 | amd64) printf 'x86_64' ;;
     aarch64 | arm64) printf 'aarch64' ;;
     *)
-      log_err "不支持的 CPU 架构: $(uname -m)（需要 x86_64 或 aarch64）"
+      i18n_err rootfs.unsupported_cpu_architecture_x86_64_aarch64_required arch="$(uname -m)"
       return 1
       ;;
   esac
@@ -56,7 +56,7 @@ _distro_tarball_sha256() {
     file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rootfs-sha256.txt"
   fi
   [[ -f "$file" ]] || {
-    log_err "缺少 rootfs 校验和文件: $file"
+    i18n_err rootfs.missing_rootfs_checksum_file file="$file"
     return 1
   }
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -67,7 +67,7 @@ _distro_tarball_sha256() {
         ;;
     esac
   done <"$file"
-  log_err "rootfs-sha256.txt 没有 $key"
+  i18n_err rootfs.rootfs_sha256_txt_has_no key="$key"
   return 1
 }
 
@@ -79,7 +79,7 @@ _tarball_sha256_matches() {
   elif have_cmd shasum; then
     got="$(shasum -a 256 "$f" | awk '{print $1}')"
   else
-    log_err "校验 rootfs 需要 sha256sum"
+    i18n_err rootfs.verifying_rootfs_requires_sha256sum
     return 1
   fi
   [[ "$got" == "$expect" ]]
@@ -162,27 +162,27 @@ fetch_tarball() {
   done
 
   local name
-  name="$(_distro_tarball_name "$distro")" || die 1 "不支持的发行版: $distro（支持: ${CAPBOX_SUPPORTED_DISTROS[*]}）"
+  name="$(_distro_tarball_name "$distro")" || i18n_die 1 rootfs.unsupported_distro_supported distro="$distro" distros="${CAPBOX_SUPPORTED_DISTROS[*]}"
   local dst="$CAPBOX_CACHE_DIR/$name"
-  mkdir -p "$CAPBOX_CACHE_DIR" || die 1 "无法创建缓存目录: $CAPBOX_CACHE_DIR"
+  mkdir -p "$CAPBOX_CACHE_DIR" || i18n_die 1 rootfs.unable_create_cache_directory cache_dir="$CAPBOX_CACHE_DIR"
 
   # 1) 缓存命中
   if (( force == 0 )) && _tarball_ok "$dst" "$distro"; then
-    log_info "使用已缓存镜像: $dst"
+    i18n_info rootfs.using_cached_image dst="$dst"
     printf '%s\n' "$dst"
     return 0
   fi
   if [[ -e "$dst" ]] && ! _tarball_ok "$dst" "$distro"; then
-    log_warn "缓存镜像未通过 SHA256，重新下载: $dst"
+    i18n_warn rootfs.cached_image_failed_sha256_re_downloading dst="$dst"
     rm -f -- "$dst"
   fi
   if (( force == 1 )) && [[ -e "$dst" ]]; then
-    log_info "强制重新下载，删除旧缓存: $dst"
+    i18n_info rootfs.forcing_re_download_removing_old_cache dst="$dst"
     rm -f -- "$dst"
   fi
 
   # 2) 下载
-  need_cmd curl "下载 rootfs 需要 curl"
+  need_cmd curl rootfs.need_curl_to_download
   local tmp="$dst.part.$RANDOM"
   local -a urls=()
   if [[ -n "$url" ]]; then
@@ -201,25 +201,25 @@ fetch_tarball() {
   for u in "${urls[@]}"; do
     [[ -n "$u" ]] || continue
     n=$(( n + 1 ))
-    log_info "下载 $distro rootfs（源 $n/${#urls[@]}）: $u"
+    i18n_info rootfs.downloading_rootfs_source distro="$distro" n="$n" total="${#urls[@]}" u="$u"
     if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -m 1800 \
       -o "$tmp" "$u" 2>/dev/null; then
       if _tarball_ok "$tmp" "$distro"; then
         mv -f -- "$tmp" "$dst"
-        log_info "下载完成: $dst（$(human_bytes "$(stat -c %s "$dst" 2>/dev/null || echo 0)")，SHA256 已核对）"
+        i18n_info rootfs.download_complete_sha256_checked dst="$dst" size="$(human_bytes "$(stat -c %s "$dst" 2>/dev/null || echo 0)")"
         ok=1
         break
       fi
-      log_warn "下载的文件未通过 gzip/SHA256 校验，尝试下一个源"
+      i18n_warn rootfs.downloaded_file_failed_gzip_sha256_checks_trying
     else
-      log_warn "下载失败: $u"
+      i18n_warn rootfs.download_failed u="$u"
     fi
     rm -f -- "$tmp" 2>/dev/null || true
   done
 
   if (( ok == 0 )); then
     rm -f -- "$tmp" 2>/dev/null || true
-    die 1 "所有镜像源都下载失败；可手动下载后放到 $dst，或用 --from <本地路径|URL>"
+    i18n_die 1 rootfs.all_image_mirrors_failed_you_can_download dst="$dst"
   fi
   printf '%s\n' "$dst"
   return 0
@@ -230,18 +230,18 @@ fetch_tarball() {
 extract_rootfs() {
   local tarball="${1:-}"
   local dest="${2:-$CAPBOX_ROOTFS}"
-  [[ -s "$tarball" ]] || die 1 "tarball 不存在: $tarball"
-  need_cmd tar "解包 rootfs 需要 tar"
+  [[ -s "$tarball" ]] || i18n_die 1 rootfs.tarball_does_not_exist tarball="$tarball"
+  need_cmd tar rootfs.need_tar_to_unpack
 
   local parent
   parent="$(dirname "$dest")"
-  mkdir -p "$parent" || die 1 "无法创建目录: $parent"
+  mkdir -p "$parent" || i18n_die 1 rootfs.unable_create_directory parent="$parent"
 
   local stage="$parent/.stage-${CAPBOX_DISTRO:-x}-$$"
   rm -rf -- "$stage" 2>/dev/null || true
-  mkdir -p "$stage" || die 1 "无法创建暂存目录: $stage"
+  mkdir -p "$stage" || i18n_die 1 rootfs.unable_create_staging_directory stage="$stage"
 
-  log_info "解包 rootfs 到 $dest"
+  i18n_info rootfs.extracting_rootfs dest="$dest"
   local rc=0
   tar xzf "$tarball" -C "$stage" --numeric-owner 2>/dev/null
   rc=$?
@@ -253,11 +253,11 @@ extract_rootfs() {
   fi
   if (( rc != 0 )) || [[ ! -d "$stage" ]]; then
     rm -rf -- "$stage" 2>/dev/null || true
-    die 1 "解包失败: $tarball"
+    i18n_die 1 rootfs.extract_failed tarball="$tarball"
   fi
   if ! rootfs_ready_at "$stage"; then
     rm -rf -- "$stage" 2>/dev/null || true
-    die 1 "解包结果不含 /bin/sh，镜像可能不完整: $tarball"
+    i18n_die 1 rootfs.extract_result_has_no_bin_sh_image tarball="$tarball"
   fi
 
   # 原子替换
@@ -266,15 +266,15 @@ extract_rootfs() {
     rm -rf -- "$old" 2>/dev/null || true
     mv -- "$dest" "$old" || {
       rm -rf -- "$stage" 2>/dev/null || true
-      die 1 "无法替换已存在的 rootfs: $dest"
+      i18n_die 1 rootfs.unable_replace_existing_rootfs dest="$dest"
     }
-    mv -- "$stage" "$dest" || die 1 "无法放置 rootfs: $dest"
+    mv -- "$stage" "$dest" || i18n_die 1 rootfs.unable_put_rootfs_place dest="$dest"
     rm -rf -- "$old" 2>/dev/null || true
   else
-    mv -- "$stage" "$dest" || die 1 "无法放置 rootfs: $dest"
+    mv -- "$stage" "$dest" || i18n_die 1 rootfs.unable_put_rootfs_place dest="$dest"
   fi
 
-  log_info "rootfs 就绪: $dest"
+  i18n_info rootfs.rootfs_ready dest="$dest"
   return 0
 }
 
@@ -290,24 +290,24 @@ _rootfs_prepare_parent() {
   local cur="" p
   for p in "${parts[@]}"; do
     [[ -n "$p" && "$p" != "." && "$p" != ".." ]] || {
-      log_err "拒绝 rootfs 路径中的 . 或 ..: $parent"
+      i18n_err rootfs.refusing_rootfs_path parent="$parent"
       return 1
     }
     cur="${cur}/${p}"
     if [[ -L "$cur" ]]; then
-      log_err "拒绝跟随符号链接: $cur"
+      i18n_err rootfs.refusing_follow_symlink cur="$cur"
       return 1
     fi
     if [[ -d "$cur" ]]; then
       continue
     fi
     if [[ -e "$cur" ]]; then
-      log_err "路径组件不是目录: $cur"
+      i18n_err rootfs.path_component_not_directory cur="$cur"
       return 1
     fi
     mkdir -- "$cur" || return 1
     if [[ -L "$cur" || ! -d "$cur" ]]; then
-      log_err "拒绝跟随符号链接: $cur"
+      i18n_err rootfs.refusing_follow_symlink cur="$cur"
       return 1
     fi
   done
@@ -319,7 +319,7 @@ _rootfs_prepare_parent() {
 _rootfs_write_file() {
   local dest="${1:-}"
   [[ "$dest" == /* ]] || {
-    log_err "拒绝相对 rootfs 路径: ${dest:-<empty>}"
+    i18n_err rootfs.refusing_relative_rootfs_path dest="${dest:-<empty>}"
     return 1
   }
   local parent base tmp
@@ -328,7 +328,7 @@ _rootfs_write_file() {
   [[ -n "$base" && "$base" != "." && "$base" != ".." ]] || return 1
   _rootfs_prepare_parent "$parent" || return 1
   if [[ -d "$dest" && ! -L "$dest" ]]; then
-    log_err "拒绝把文件写入目录: $dest"
+    i18n_err rootfs.refusing_write_file_onto_directory dest="$dest"
     return 1
   fi
   tmp="$(mktemp "$parent/.capbox-write.XXXXXX")" || return 1
@@ -338,7 +338,7 @@ _rootfs_write_file() {
   fi
   if [[ -L "$tmp" || ! -f "$tmp" ]]; then
     rm -f -- "$tmp"
-    log_err "拒绝跟随符号链接写入: $dest"
+    i18n_err rootfs.refusing_follow_symlink_when_writing dest="$dest"
     return 1
   fi
   if ! mv -T -f -- "$tmp" "$dest"; then
@@ -355,18 +355,18 @@ inject_mirrors() {
   local rootfs="$CAPBOX_DIR/os/$distro"
 
   if [[ "${CAPBOX_MIRROR:-cn}" == "none" ]]; then
-    log_info "CAPBOX_MIRROR=none，跳过镜像源注入"
+    i18n_info rootfs.capbox_mirror_none_skipping_mirror_injection
     return 0
   fi
   [[ -d "$rootfs" ]] || {
-    log_warn "rootfs 不存在，跳过镜像源注入: $rootfs"
+    i18n_warn rootfs.rootfs_does_not_exist_skipping_mirror_injection rootfs="$rootfs"
     return 0
   }
 
   local url
   url="$(_http_safe_url "$distro" "$(mirror_url_for "$distro")")"
   if [[ -z "$url" ]]; then
-    log_warn "镜像源 URL 为空，跳过注入（检查 CAPBOX_MIRROR_${distro^^}）"
+    i18n_warn rootfs.mirror_url_empty_skipping_injection_check_capbox distro_uc="${distro^^}"
     return 0
   fi
 
@@ -376,7 +376,7 @@ inject_mirrors() {
         printf '%s/v3.24/main\n' "$url"
         printf '%s/v3.24/community\n' "$url"
       } | _rootfs_write_file "$rootfs/etc/apk/repositories" || return 1
-      log_info "已写入 apk 镜像源: $url/v3.24/{main,community}"
+      i18n_info rootfs.wrote_apk_repositories_v3_24 url="$url"
       ;;
     ubuntu)
       local suite="noble"
@@ -430,10 +430,10 @@ inject_mirrors() {
 
       # 精简镜像没有 apt 用的 keyring 目录时补上，否则 apt update 会抱怨
       _rootfs_prepare_parent "$rootfs/etc/apt/trusted.gpg.d" 2>/dev/null || true
-      log_info "已写入 apt 镜像源: $url（suite=$suite）"
+      i18n_info rootfs.wrote_apt_sources_suite url="$url" suite="$suite"
       ;;
     *)
-      log_warn "未知发行版，跳过镜像源注入: $distro"
+      i18n_warn rootfs.unknown_distro_skipping_mirror_injection distro="$distro"
       ;;
   esac
   return 0
@@ -503,11 +503,11 @@ run_bootstrap() {
     return 0
   }
   rootfs_ready_at "$rootfs" || {
-    log_warn "rootfs 不可执行，跳过首次引导"
+    i18n_warn rootfs.rootfs_not_executable_skipping_first_boot
     return 0
   }
 
-  log_info "运行首次引导（bootstrap）"
+  i18n_info rootfs.running_first_boot_bootstrap
   # bootstrap 通过 /workspace（宿主工作区的 bind 挂载点）可见，避免把脚本往 rootfs 里塞。
   # 路径必须相对工作区推导，不能写死 .capbox —— 目录名由用户决定，
   # 仓库也可能直接放进项目根目录（此时 CAPBOX_DIR == CAPBOX_WORKSPACE）。
@@ -518,9 +518,9 @@ run_bootstrap() {
   exec_in_guest "CAPBOX_VERSION=$(_shq "$CAPBOX_VERSION") sh $(_shq "$guest_script")" /workspace 300
   rc=$?
   if (( rc != 0 )); then
-    log_warn "bootstrap 返回 $rc（不致命，rootfs 仍可使用）"
+    i18n_warn rootfs.bootstrap_returned_not_fatal_rootfs_still_usable rc="$rc"
   else
-    log_info "首次引导完成"
+    i18n_info rootfs.first_boot_complete
   fi
   return 0
 }
@@ -569,16 +569,16 @@ cmd_init() {
         return 0
         ;;
       *)
-        die 2 "init: 未知选项 $1"
+        i18n_die 2 rootfs.init_unknown_option arg="$1"
         ;;
     esac
   done
 
-  (( agent + trusted <= 1 )) || die 2 '--agent 与 --trusted 不能同时使用'
+  (( agent + trusted <= 1 )) || i18n_die 2 rootfs.agent_trusted_cannot_together
 
   case "$distro" in
     alpine | ubuntu) ;;
-    *) die 2 "不支持的发行版: $distro（支持: alpine / ubuntu）" ;;
+    *) i18n_die 2 rootfs.unsupported_distro_supported_alpine_ubuntu distro="$distro" ;;
   esac
 
   # 先脚手架项目 .capbox（无模板 / 危险工作区时失败）
@@ -617,27 +617,27 @@ cmd_bootstrap() {
         return 0
         ;;
       *)
-        die 2 "bootstrap: 未知选项 $1"
+        i18n_die 2 rootfs.bootstrap_unknown_option arg="$1"
         ;;
     esac
   done
   if declare -F capbox_scaffold_project >/dev/null 2>&1; then
     capbox_scaffold_project || return 1
   else
-    die 1 "scaffold 实现不可用"
+    i18n_die 1 rootfs.scaffold_implementation_unavailable
   fi
-  log_info "下一步: capbox init --distro ${CAPBOX_DISTRO:-alpine}"
+  i18n_info rootfs.next_capbox_init_distro distro="${CAPBOX_DISTRO:-alpine}"
   return 0
 }
 
 _apply_agent_preset() {
   config_apply SECURITY_PROFILE untrusted NET none IDMAP off RESOURCES_MODE require || return $?
-  log_info "agent 预设: SECURITY_PROFILE=untrusted NET=none IDMAP=off RESOURCES_MODE=require"
-  log_info "资源限额需另设 MEMORY_MAX/CPU_MAX/PIDS_MAX；配置的限额无法兑现时拒绝启动"
-  log_info "untrusted 会遮盖工作区内的 .ssh .gnupg .aws .azure .kube .docker"
-  log_info "pkg install 与 pkg update 会出网。其它命令默认无网络"
-  log_info "当次要出网: capbox exec --net restricted -- CMD（需先写 CAPBOX_NET_ALLOW）或 --net open"
-  log_info "allowlist：example.com 只放行该主机的 80/443；子域写 *.example.com；任意端口加 :* （例 github.com:22）"
+  i18n_info rootfs.agent_preset_security_profile_untrusted_net_none
+  i18n_info rootfs.resource_limits_must_set_separately_via_memory
+  i18n_info rootfs.untrusted_hides_ssh_gnupg_aws_azure_kube
+  i18n_info rootfs.pkg_install_pkg_update_will_network_other
+  i18n_info rootfs.one_shot_network_grant_capbox_exec_net
+  i18n_info rootfs.allowlist_example_com_allows_only_ports_80
 }
 
 # 显式 --from：gzip 必须有效。和官方钉扎一致则记录；不一致只警告。
@@ -646,9 +646,9 @@ _tarball_accept_explicit() {
   _tarball_ok "$f" || return 1
   expect="$(_distro_tarball_sha256 "$distro" 2>/dev/null || true)"
   if [[ -n "$expect" ]] && _tarball_sha256_matches "$f" "$expect"; then
-    log_info "显式 rootfs 与官方 SHA256 一致"
+    i18n_info rootfs.explicit_rootfs_matches_official_sha256
   else
-    log_warn "显式 --from 的 tarball 与官方 SHA256 不一致，按你指定的来源接受（官方下载路径不会这样）"
+    i18n_warn rootfs.explicit_tarball_does_not_match_official_sha256
   fi
   return 0
 }
@@ -660,11 +660,11 @@ _do_init() {
   local agent="${4:-0}"
   local rootfs="$CAPBOX_DIR/os/$distro"
 
-  log_info "初始化 CapBox 发行版: $distro"
+  i18n_info rootfs.initializing_capbox_distro distro="$distro"
 
   # 已存在且不强制 -> 幂等直接返回
   if rootfs_ready_at "$rootfs" && (( force == 0 )); then
-    log_info "rootfs 已存在，跳过下载与解包: $rootfs"
+    i18n_info rootfs.rootfs_already_exists_skipping_download_extract rootfs="$rootfs"
     _init_finalize "$distro" || return $?
     if [[ "$agent" == "1" ]]; then
       _apply_agent_preset || return $?
@@ -677,26 +677,26 @@ _do_init() {
   if [[ -n "$from" ]]; then
     case "$from" in
       http://* | https://*)
-        log_info "从指定 URL 下载: $from"
-        need_cmd curl "从 URL 初始化需要 curl"
+        i18n_info rootfs.downloading_specified_url from="$from"
+        need_cmd curl rootfs.need_curl_to_init_from_url
         local name
         name="$(_distro_tarball_name "$distro")"
         mkdir -p "$CAPBOX_CACHE_DIR"
         local dst="$CAPBOX_CACHE_DIR/$name"
         if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -m 1800 -o "$dst.part" "$from"; then
           rm -f "$dst.part" 2>/dev/null || true
-          die 1 "下载失败: $from"
+          i18n_die 1 rootfs.download_failed_2 from="$from"
         fi
         _tarball_accept_explicit "$dst.part" "$distro" || {
           rm -f "$dst.part" 2>/dev/null || true
-          die 1 "下载的文件不是有效的 gzip tarball: $from"
+          i18n_die 1 rootfs.downloaded_file_not_valid_gzip_tarball from="$from"
         }
         mv -f "$dst.part" "$dst"
         tarball="$dst"
         ;;
       *)
-        [[ -f "$from" ]] || die 1 "本地 tarball 不存在: $from"
-        _tarball_accept_explicit "$from" "$distro" || die 1 "不是有效的 gzip tarball: $from"
+        [[ -f "$from" ]] || i18n_die 1 rootfs.local_tarball_does_not_exist from="$from"
+        _tarball_accept_explicit "$from" "$distro" || i18n_die 1 rootfs.not_valid_gzip_tarball from="$from"
         tarball="$(resolve_path "$from")"
         # 拷进缓存以便下次复用
         local name2
@@ -706,12 +706,12 @@ _do_init() {
     esac
   else
     tarball="$(fetch_tarball "$distro" $( ((force == 1)) && printf '%s' '--force' ))"
-    [[ -n "$tarball" ]] || die 1 "无法获取 rootfs 镜像"
+    [[ -n "$tarball" ]] || i18n_die 1 rootfs.unable_obtain_rootfs_image
   fi
 
   # 2) 解包（force 时先删旧 rootfs）
   if (( force == 1 )) && [[ -d "$rootfs" ]]; then
-    _safe_rm_rootfs "$rootfs" || die 1 "无法删除旧 rootfs"
+    _safe_rm_rootfs "$rootfs" || i18n_die 1 rootfs.unable_remove_old_rootfs
   fi
   extract_rootfs "$tarball" "$rootfs"
 
@@ -733,7 +733,7 @@ _init_finalize() {
   local rootfs="$CAPBOX_DIR/os/$distro"
 
   if ! rootfs_ready_at "$rootfs"; then
-    die 1 "rootfs 不完整（缺可执行 /bin/sh）: $rootfs"
+    i18n_die 1 rootfs.rootfs_incomplete_missing_executable_bin_sh rootfs="$rootfs"
   fi
 
   # 幂等 init 也必须补齐 config.env（之前只有 distro 变化时才写文件）。
@@ -758,8 +758,8 @@ _init_finalize() {
 
   ensure_rootfs_dirs "$rootfs"
   refresh_resolv || true
-  inject_mirrors "$distro" || log_warn "镜像源注入失败（可稍后重跑 capbox init）"
-  inject_proxy_files "$distro" || log_warn "代理文件注入失败（未跟随符号链接写入）"
+  inject_mirrors "$distro" || i18n_warn rootfs.mirror_injection_failed_you_can_rerun_capbox
+  inject_proxy_files "$distro" || i18n_warn rootfs.proxy_file_injection_failed_did_not_follow
 
   # rootfs 内写一份内置版本标记，便于排查
   {
@@ -767,19 +767,19 @@ _init_finalize() {
     printf 'CAPBOX_DISTRO=%s\n' "$distro"
     printf 'CAPBOX_MIRROR=%s\n' "${CAPBOX_MIRROR:-cn}"
     printf 'INIT_AT=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  } | _rootfs_write_file "$rootfs/etc/capbox-release" || log_warn "无法写入 capbox-release"
+  } | _rootfs_write_file "$rootfs/etc/capbox-release" || i18n_warn rootfs.unable_write_capbox_release
 
   run_bootstrap "$distro" || true
 
   # 预构建数字 uid 降权 helper（BusyBox alpine 无 GNU setpriv/python 时必需）
   if declare -F _idmap_ensure_drop_priv_helper >/dev/null 2>&1; then
-    _idmap_ensure_drop_priv_helper || log_warn "drop-priv helper 未就绪（${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-unknown}）；exec --uid 可能失败"
+    _idmap_ensure_drop_priv_helper || i18n_warn rootfs.drop_priv_helper_not_ready_exec_uid detail="${CAPBOX_IDMAP_DROP_HELPER_DETAIL:-unknown}"
   fi
 
   local bytes
   bytes="$(dir_bytes "$rootfs")"
-  log_info "完成: $rootfs（$(human_bytes "$bytes")）"
-  log_info "下一步: capbox exec -- id -u     # 应在容器内输出 0"
+  i18n_info rootfs.done rootfs="$rootfs" size="$(human_bytes "$bytes")"
+  i18n_info rootfs.next_capbox_exec_id_u_should_print
   return 0
 }
 

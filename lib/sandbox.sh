@@ -19,11 +19,11 @@ sandbox_bwrap_cmd() {
 
   case "$mode" in
     oneshot | daemon) ;;
-    *) die 2 "sandbox_bwrap_cmd: 未知模式 $mode（应为 oneshot 或 daemon）" ;;
+    *) i18n_die 2 sandbox.sandbox_bwrap_cmd_unknown_mode_expected_oneshot mode="$mode" ;;
   esac
 
-  [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
-  rootfs_ready || die 4 "rootfs 不存在或不可用: ${CAPBOX_ROOTFS:-未设置}；请先运行 capbox init"
+  [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
+  rootfs_ready || i18n_die 4 sandbox.rootfs_missing_unusable_run_capbox_init_first rootfs="$(i18n_or "${CAPBOX_ROOTFS:-}" val.unset)"
 
   if [[ -z "${CAPBOX_BWRAP_BASELINE_CMD:-}" ]]; then
     if [[ "$mode" == "daemon" && -z "$cmd" ]]; then
@@ -45,9 +45,9 @@ sandbox_bwrap_cmd() {
     return 6
   fi
   if (( _bbrc != 0 )); then
-    die "$_bbrc" "无法构造 bwrap 参数（rc=$_bbrc；常见原因：bwrap 版本不足、FS_BINDS 越界、安全档/seccomp 失败）"
+    i18n_die "$_bbrc" common.unable_build_bwrap_arguments_rc_common_causes _bbrc="$_bbrc"
   fi
-  (( ${#args[@]} > 0 )) || die 4 "无法构造 bwrap 参数（rootfs 缺失）"
+  (( ${#args[@]} > 0 )) || i18n_die 4 sandbox.unable_build_bwrap_arguments_rootfs_missing
 
   printf '%s\0' "$CAPBOX_BWRAP"
   printf '%s\0' "${args[@]}"
@@ -108,13 +108,13 @@ cmd_exec() {
         shift
         ;;
       --net)
-        [[ $# -ge 2 ]] || die 2 "exec: --net 需要模式 none|restricted|open"
+        [[ $# -ge 2 ]] || i18n_die 2 sandbox.exec_net_requires_mode_none_restricted_open
         net_override="${2}"
         shift 2
         ;;
       --net=*)
         net_override="${1#*=}"
-        [[ -n "$net_override" ]] || die 2 "exec: --net 需要模式 none|restricted|open"
+        [[ -n "$net_override" ]] || i18n_die 2 sandbox.exec_net_requires_mode_none_restricted_open
         shift
         ;;
       --uid)
@@ -164,7 +164,7 @@ cmd_exec() {
         return 0
         ;;
       -*)
-        die 2 "exec: 未知选项 $1（用 -- 分隔容器内命令）"
+        i18n_die 2 sandbox.exec_unknown_option_separate_guest_command arg="$1"
         ;;
       *)
         cmd+=("$@")
@@ -173,12 +173,12 @@ cmd_exec() {
     esac
   done
 
-  [[ ${#cmd[@]} -gt 0 ]] || die 2 "exec: 缺少要执行的命令，例如: capbox exec -- id -u"
+  [[ ${#cmd[@]} -gt 0 ]] || i18n_die 2 sandbox.exec_missing_command_run_e_g_capbox
 
-  [[ "$timeout_s" =~ ^[0-9]+$ ]] || die 2 "exec: --timeout 必须是非负整数秒（当前: $timeout_s）"
+  [[ "$timeout_s" =~ ^[0-9]+$ ]] || i18n_die 2 sandbox.exec_timeout_must_non_negative_integer_number timeout_s="$timeout_s"
 
   if [[ -n "$net_override" && "$use_daemon" -eq 1 ]]; then
-    die 2 "exec: --daemon 用的是 capbox up 时的网络；要改网络请重新 up --net"
+    i18n_die 2 sandbox.exec_daemon_uses_network_chosen_capbox_up
   fi
   if [[ -n "$net_override" ]]; then
     _capbox_declare_net "$net_override" exec
@@ -187,7 +187,7 @@ cmd_exec() {
   if [[ -n "$profile_override" ]]; then
     case "$profile_override" in
       compat | untrusted | strict) CAPBOX_SECURITY_PROFILE="$profile_override" ;;
-      *) die 2 "exec: --profile 必须是 compat|untrusted|strict（当前: $profile_override）" ;;
+      *) i18n_die 2 sandbox.exec_profile_must_compat_untrusted_strict_got profile_override="$profile_override" ;;
     esac
   fi
 
@@ -198,7 +198,7 @@ cmd_exec() {
       resolved="$(_idmap_resolve_user "$user_override")" || resolved=""
     fi
     if [[ -z "$resolved" ]]; then
-      die 2 "exec: 无法解析 --user $user_override（检查 rootfs /etc/passwd）"
+      i18n_die 2 sandbox.exec_unable_resolve_user_check_rootfs_etc user_override="$user_override"
     fi
     if [[ "$resolved" == *:* ]]; then
       uid_override="${resolved%%:*}"
@@ -208,11 +208,11 @@ cmd_exec() {
     fi
   fi
   if [[ -n "$uid_override" ]]; then
-    [[ "$uid_override" =~ ^[0-9]+$ ]] || die 2 "exec: --uid 必须是非负整数（当前: $uid_override）"
+    [[ "$uid_override" =~ ^[0-9]+$ ]] || i18n_die 2 sandbox.exec_uid_must_non_negative_integer_got uid_override="$uid_override"
     export CAPBOX_EXEC_UID_OVERRIDE="$uid_override"
   fi
   if [[ -n "$gid_override" ]]; then
-    [[ "$gid_override" =~ ^[0-9]+$ ]] || die 2 "exec: --gid 必须是非负整数（当前: $gid_override）"
+    [[ "$gid_override" =~ ^[0-9]+$ ]] || i18n_die 2 sandbox.exec_gid_must_non_negative_integer_got gid_override="$gid_override"
     export CAPBOX_EXEC_GID_OVERRIDE="$gid_override"
   elif [[ -n "$uid_override" ]]; then
     export CAPBOX_EXEC_GID_OVERRIDE="$uid_override"
@@ -225,8 +225,8 @@ cmd_exec() {
   local resolved_cwd
   if ! resolved_cwd="$(_resolve_guest_cwd "$want_cwd")"; then
     case "$want_cwd" in
-      /*) die 2 "exec: 容器内目录不存在: $want_cwd" ;;
-      *) die 2 "exec: 容器内目录不存在: /workspace/$want_cwd" ;;
+      /*) i18n_die 2 sandbox.exec_guest_directory_does_not_exist want_cwd="$want_cwd" ;;
+      *) i18n_die 2 sandbox.exec_guest_directory_does_not_exist_workspace want_cwd="$want_cwd" ;;
     esac
   fi
   cwd="$resolved_cwd"
@@ -277,7 +277,7 @@ cmd_exec() {
     _security_close_fd
   fi
   if (( rc == 124 )) && (( timeout_s > 0 )); then
-    log_warn "容器内命令超时（${timeout_s}s），已终止"
+    i18n_warn sandbox.guest_command_timed_out_s_terminated timeout_s="${timeout_s}"
   fi
   return "$rc"
 }
@@ -289,11 +289,11 @@ _exec_via_daemon() {
   local timeout_s="${3:-600}"
 
   if ! declare -F daemon_request >/dev/null 2>&1; then
-    log_err "常驻容器功能不可用：缺少库文件 $CAPBOX_LIB_DIR/daemon.sh"
+    i18n_err sandbox.persistent_container_feature_unavailable_missing_library_dae lib_dir="$CAPBOX_LIB_DIR"
     return 3
   fi
   if ! _probe_daemon; then
-    log_err "守护容器未运行；请先以 DSH 后台任务方式启动: capbox up"
+    i18n_err daemon.daemon_container_not_running_start_first_dsh
     return 3
   fi
   local rc=0
@@ -313,25 +313,25 @@ cmd_shell() {
     case "$1" in
       --daemon) use_daemon=1; shift ;;
       --net)
-        [[ $# -ge 2 ]] || die 2 "shell: --net 需要模式 none|restricted|open"
+        [[ $# -ge 2 ]] || i18n_die 2 sandbox.shell_net_requires_mode_none_restricted_open
         net_override="${2}"
         shift 2
         ;;
       --net=*)
         net_override="${1#*=}"
-        [[ -n "$net_override" ]] || die 2 "shell: --net 需要模式 none|restricted|open"
+        [[ -n "$net_override" ]] || i18n_die 2 sandbox.shell_net_requires_mode_none_restricted_open
         shift
         ;;
       -h | --help)
         i18n_print help.shell
         return 0
         ;;
-      *) die 2 "shell: 未知选项 $1" ;;
+      *) i18n_die 2 sandbox.shell_unknown_option arg="$1" ;;
     esac
   done
 
   if [[ -n "$net_override" && "$use_daemon" -eq 1 ]]; then
-    die 2 "shell: --daemon 用的是 capbox up 时的网络；要改网络请重新 up --net"
+    i18n_die 2 sandbox.shell_daemon_uses_network_chosen_capbox_up
   fi
   if [[ -n "$net_override" ]]; then
     _capbox_declare_net "$net_override" shell
@@ -339,7 +339,7 @@ cmd_shell() {
 
   if (( use_daemon == 1 )); then
     if ! declare -F daemon_request >/dev/null 2>&1 || ! _probe_daemon; then
-      log_err "守护容器未运行；请先以 DSH 后台任务方式启动: capbox up"
+      i18n_err daemon.daemon_container_not_running_start_first_dsh
       return 3
     fi
     # 契约 §4：daemon_request CMD [TIMEOUT] [FOLLOW]；FOLLOW=1 让客户端 tail -f 输出
@@ -354,7 +354,7 @@ cmd_shell() {
   fi
 
   require_rootfs
-  [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}"
+  [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
 
   local shbin="/bin/sh"
   local -a shargs=()
@@ -403,7 +403,7 @@ _cp_resolve() {
       path="$spec"
       ;;
   esac
-  [[ -n "$path" ]] || die 2 "cp: 空路径: '$spec'"
+  [[ -n "$path" ]] || i18n_die 2 sandbox.cp_empty_path spec="$spec"
   # 宿主侧相对路径按当前 cwd 解析
   if [[ "$side" == "host" ]]; then
     path="$(resolve_path "$path")"
@@ -425,7 +425,7 @@ cmd_cp() {
         break
         ;;
       -*)
-        die 2 "cp: 未知选项 $1"
+        i18n_die 2 sandbox.cp_unknown_option arg="$1"
         ;;
       *)
         pos+=("$1")
@@ -433,7 +433,7 @@ cmd_cp() {
         ;;
     esac
   done
-  [[ ${#pos[@]} -eq 2 ]] || die 2 "用法: capbox cp SRC DST"
+  [[ ${#pos[@]} -eq 2 ]] || i18n_die 2 sandbox.usage_capbox_cp_src_dst
 
   require_rootfs
 
@@ -449,21 +449,21 @@ cmd_cp() {
   local src_abs dst_abs
   # 容器侧路径必须规范化并落在 CAPBOX_ROOTFS 内（拒绝 .. 穿越与越界 symlink）
   if [[ "$src_side" == "guest" ]]; then
-    src_abs="$(_capbox_guest_path_in_rootfs "$src_path")" || die 1 "拒绝：容器侧源路径越界 rootfs: $src_path"
+    src_abs="$(_capbox_guest_path_in_rootfs "$src_path")" || i18n_die 1 sandbox.refused_container_side_source_path_escapes_rootfs src_path="$src_path"
   else
     src_abs="$src_path"
   fi
   if [[ "$dst_side" == "guest" ]]; then
-    dst_abs="$(_capbox_guest_path_in_rootfs "$dst_path")" || die 1 "拒绝：容器侧目标路径越界 rootfs: $dst_path"
+    dst_abs="$(_capbox_guest_path_in_rootfs "$dst_path")" || i18n_die 1 sandbox.refused_container_side_destination_path_escapes_rootfs dst_path="$dst_path"
   else
     dst_abs="$dst_path"
   fi
 
   if [[ ! -e "$src_abs" ]]; then
     if [[ "$src_side" == "guest" ]]; then
-      die 1 "源文件在容器内不存在: $src_path"
+      i18n_die 1 sandbox.source_file_does_not_exist_container src_path="$src_path"
     fi
-    die 1 "源文件不存在: $src_abs"
+    i18n_die 1 sandbox.source_file_does_not_exist src_abs="$src_abs"
   fi
 
   # 目标是已存在的目录 -> 拷进去（保持 basename 语义）
@@ -482,7 +482,7 @@ cmd_cp() {
     local err
     err="$(cat /tmp/.capbox-cp-err.$$ 2>/dev/null || true)"
     rm -f /tmp/.capbox-cp-err.$$ 2>/dev/null || true
-    log_err "拷贝失败: ${err:-未知错误}"
+    i18n_err sandbox.copy_failed err="$(i18n_or "${err:-}" val.unknown_error)"
     return 1
   fi
   rm -f /tmp/.capbox-cp-err.$$ 2>/dev/null || true
@@ -505,7 +505,7 @@ cmd_ls() {
         break
         ;;
       -*)
-        die 2 "ls: 未知选项 $1"
+        i18n_die 2 sandbox.ls_unknown_option arg="$1"
         ;;
       *)
         path="$1"
@@ -518,7 +518,7 @@ cmd_ls() {
     /*) ;;
     *) path="/workspace/$path" ;;
   esac
-  _container_dir_exists "$path" || die 1 "容器内目录不存在: $path"
+  _container_dir_exists "$path" || i18n_die 1 sandbox.guest_directory_does_not_exist path="$path"
   require_rootfs
   local q
   q="$(printf '%q' "$path")"
@@ -527,7 +527,7 @@ cmd_ls() {
 }
 
 cmd_ps() {
-  [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]] || die 2 "用法: capbox ps"
+  [[ $# -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]] || i18n_die 2 sandbox.usage_capbox_ps
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     i18n_print help.ps
     return 0
@@ -538,7 +538,7 @@ cmd_ps() {
   local rc=$?
   if (( rc != 0 )); then
     # 最坏情况：直接列 /proc
-    log_warn "ps 不可用，退化为读取 /proc"
+    i18n_warn sandbox.ps_unavailable_falling_back_reading_proc
     exec_in_guest 'i=0; for d in /proc/[0-9]*; do p=${d#/proc/}; c=$(cat "$d/comm" 2>/dev/null); echo "$p $c"; i=$((i+1)); done; echo "共 $i 个进程"' /workspace 60
     return $?
   fi
@@ -552,7 +552,7 @@ _pkg_names_ok() {
   local p
   for p in "$@"; do
     [[ "$p" =~ ^[A-Za-z0-9][A-Za-z0-9._+:@/-]*(=[A-Za-z0-9][A-Za-z0-9._+:~/-]*)?$ ]] || {
-      log_err "可疑包名，已拒绝: $p"
+      i18n_err sandbox.suspicious_package_name_rejected p="$p"
       return 1
     }
   done
@@ -583,8 +583,8 @@ cmd_pkg() {
 
   case "$sub" in
     install)
-      [[ $# -gt 0 ]] || die 2 "pkg install: 缺少包名"
-      _pkg_names_ok "$@" || die 2 "包名非法"
+      [[ $# -gt 0 ]] || i18n_die 2 sandbox.pkg_install_missing_package_name
+      _pkg_names_ok "$@" || i18n_die 2 sandbox.invalid_package_name
       if [[ "$distro" == "alpine" ]]; then
         cmdstr="apk add --no-cache $(_q_join "$@")"
       else
@@ -592,8 +592,8 @@ cmd_pkg() {
       fi
       ;;
     remove)
-      [[ $# -gt 0 ]] || die 2 "pkg remove: 缺少包名"
-      _pkg_names_ok "$@" || die 2 "包名非法"
+      [[ $# -gt 0 ]] || i18n_die 2 sandbox.pkg_remove_missing_package_name
+      _pkg_names_ok "$@" || i18n_die 2 sandbox.invalid_package_name
       if [[ "$distro" == "alpine" ]]; then
         cmdstr="apk del $(_q_join "$@")"
       else
@@ -615,12 +615,12 @@ cmd_pkg() {
         cmdstr="dpkg-query -W -f='\${Package} \${Version}\n' 2>/dev/null | sort"
       fi
       if [[ -n "$pat" ]]; then
-        [[ "$pat" =~ ^[A-Za-z0-9._+:@/-]+$ ]] || die 2 "pkg list: 过滤模式非法: $pat"
+        [[ "$pat" =~ ^[A-Za-z0-9._+:@/-]+$ ]] || i18n_die 2 sandbox.pkg_list_invalid_filter_pattern pat="$pat"
         cmdstr="$cmdstr | grep -i -- $(printf '%q' "$pat") || true"
       fi
       ;;
     *)
-      die 2 "pkg: 未知子命令 $sub（install|remove|update|list）"
+      i18n_die 2 sandbox.pkg_unknown_subcommand_install_remove_update_list sub="$sub"
       ;;
   esac
 
@@ -635,9 +635,9 @@ cmd_pkg() {
 
   if (( rc != 0 )); then
     if [[ "${CAPBOX_IDMAP_STATUS:-}" == "multi" ]]; then
-      log_warn "pkg $sub 返回 $rc（请结合上方 dpkg audit / 日志判断）"
+      i18n_warn sandbox.pkg_returned_dpkg_audit_logs_above_judge sub="$sub" rc="$rc"
     else
-      log_warn "pkg $sub 返回 $rc（单 UID 下 chown 告警常见；请看 dpkg audit 与可执行文件）"
+      i18n_warn sandbox.pkg_returned_chown_warnings_common_under_single sub="$sub" rc="$rc"
     fi
   fi
   if declare -F audit_command >/dev/null 2>&1; then
@@ -666,7 +666,7 @@ _pkg_run_guest() {
   if [[ "$sub" == "install" || "$sub" == "update" ]] && [[ "${CAPBOX_NET:-open}" == "none" ]]; then
     CAPBOX_NET=open
     granted=1
-    log_info "pkg ${sub}: 会话网络是 none，本次命令单独出网"
+    i18n_info sandbox.pkg_session_network_none_command_using_one sub="${sub}"
   fi
   exec_in_guest "$cmdstr" /workspace "$timeout_s" || rc=$?
   _security_close_fd
@@ -682,17 +682,17 @@ _pkg_report_dpkg_audit() {
   local out
   out="$(exec_in_guest 'dpkg --audit 2>/dev/null; echo ----; dpkg -l 2>/dev/null | awk '\''$1 ~ /[UF]/ {print}'\'' || true' /workspace 120)" || true
   if printf '%s\n' "$out" | grep -qE '^[hiurpn]*[UF]'; then
-    log_err "dpkg 存在未完成配置的包（状态含 U/F，例如 iU/iF）："
+    i18n_err sandbox.dpkg_has_packages_not_fully_configured_state
     printf '%s\n' "$out" | head -n 40 >&2 || true
-    log_err "这不是被掩盖的成功：请检查 CAPBOX_IDMAP 与 postinst 日志"
+    i18n_err sandbox.not_hidden_success_check_capbox_idmap_postinst
     return 1
   fi
   if printf '%s\n' "$out" | grep -qi 'unpacked but not yet configured'; then
-    log_err "dpkg --audit 报告有未配置的包"
+    i18n_err sandbox.dpkg_audit_reported_unconfigured_packages
     printf '%s\n' "$out" | head -n 40 >&2
     return 1
   fi
-  log_info "dpkg audit：无 iU/iF 残留"
+  i18n_info sandbox.dpkg_audit_no_leftover_iu
   return 0
 
 }
@@ -710,6 +710,6 @@ _q_join() {
 # ---------- 8. 基础命令小工具 -------------------------------------------------
 
 cmd_ls_rootfs() {
-  [[ $# -eq 0 ]] || die 2 "ls-rootfs: 不需要参数"
+  [[ $# -eq 0 ]] || i18n_die 2 sandbox.ls_rootfs_no_arguments_expected
   ls -la -- "$CAPBOX_ROOTFS"
 }

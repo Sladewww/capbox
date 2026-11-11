@@ -17,7 +17,7 @@ cmd_secret() {
       i18n_print help.secret
       ;;
     *)
-      log_err "未知 secret 子命令: ${1:-}"
+      i18n_err cred.unknown_secret_subcommand arg="${1:-}"
       return 2
       ;;
   esac
@@ -31,7 +31,7 @@ _credentials_prepare_restricted() {
   # 库为空则跳过 prepare — 仍成功，active=false。
   out="$(_credentials_command prepare --allow "$allow" --session "${CAPBOX_NET_SESSION:-oneshot}")" || rc=$?
   if (( rc != 0 )); then
-    log_err "凭据会话准备失败"
+    i18n_err cred.failed_prepare_credentials_session
     return "$rc"
   fi
   # 解析小 JSON，不依赖 jq。

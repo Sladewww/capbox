@@ -56,6 +56,9 @@ PY
 assert_rc 0 "python allowlist 策略"
 
 log_err() { printf '%s\n' "$*" >&2; }
+# 单独 source net.sh 时也要加载目录；test/lib.sh 已钉 CAPBOX_LANG=zh。
+# shellcheck disable=SC1091
+. "$REPO/lib/i18n.sh"
 # shellcheck disable=SC1091
 . "$REPO/lib/net.sh"
 CAPBOX_NET=weird

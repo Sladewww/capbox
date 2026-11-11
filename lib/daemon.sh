@@ -55,13 +55,13 @@ fi
 # ---- 0.2 日志与错误（common.sh 已有则不覆盖） --------------------------------
 
 if ! declare -F log_info >/dev/null 2>&1; then
-  log_info() { printf '[capbox] %s\n' "$*" >&2; }
+  log_info() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_INFO:-[capbox]}" "$*" >&2; }
 fi
 if ! declare -F log_warn >/dev/null 2>&1; then
-  log_warn() { printf '[capbox] 警告: %s\n' "$*" >&2; }
+  log_warn() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_WARN:-[capbox] warning:}" "$*" >&2; }
 fi
 if ! declare -F log_err >/dev/null 2>&1; then
-  log_err() { printf '[capbox] 错误: %s\n' "$*" >&2; }
+  log_err() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_ERR:-[capbox] error:}" "$*" >&2; }
 fi
 if ! declare -F log_debug >/dev/null 2>&1; then
   log_debug() { [[ "${CAPBOX_DEBUG:-0}" == "1" ]] || return 0; printf '[capbox] debug: %s\n' "$*" >&2; }
@@ -109,7 +109,7 @@ fi
 # 复用同一安全门禁；模块不完整时失败，不维护第二份策略。
 _daemon_require_bwrap_version() {
   if ! declare -F _capbox_enforce_bwrap_baseline >/dev/null 2>&1; then
-    log_err '启动模块不完整：缺少统一 bwrap 安全门禁'
+    i18n_err daemon.launch_module_incomplete_unified_bwrap_security_gate
     return 5
   fi
   _capbox_enforce_bwrap_baseline
@@ -118,7 +118,7 @@ _daemon_require_bwrap_version() {
 # 保留对调用方的内部入口；不另开独立策略回退。
 _daemon_bwrap_args() {
   if ! declare -F build_bwrap_args >/dev/null 2>&1; then
-    log_err '启动模块不完整：缺少 lib/launch.sh'
+    i18n_err daemon.launch_module_incomplete_lib_launch_sh_missing
     return 5
   fi
   build_bwrap_args "${1:-daemon}" /workspace
@@ -309,12 +309,12 @@ daemon_request() {
   local follow="${3:-0}"
   local cwd="${4:-/workspace}"
 
-  [[ -n "$cmd" ]] || die 2 "daemon_request: 命令为空"
+  [[ -n "$cmd" ]] || i18n_die 2 daemon.daemon_request_command_empty
   [[ "$timeout_s" =~ ^[0-9]+$ ]] || timeout_s="${CAPBOX_EXEC_TIMEOUT:-600}"
   [[ -n "$cwd" ]] || cwd=/workspace
 
   if ! daemon_running; then
-    log_err "守护容器未运行；请先以 DSH 后台任务方式启动: capbox up"
+    i18n_err daemon.daemon_container_not_running_start_first_dsh
     return 3
   fi
 
@@ -322,7 +322,7 @@ daemon_request() {
   # 此时投递的请求要么被 _fail_pending 回写 143，要么一直没人消费到超时，
   # 都不如直接拒绝来得清晰。返回 3 与「未运行」一致，调用方可据此重试/重启。
   if _daemon_draining; then
-    log_err "守护容器正在停止（排空在跑任务），暂不接受新请求；请稍后重试或重新 capbox up"
+    i18n_err daemon.daemon_container_stopping_draining_flight_tasks_not
     return 3
   fi
 
@@ -358,13 +358,13 @@ daemon_request() {
     fi
     printf '%s\n' "$cmd"
   } > "$reqf.tmp" 2>/dev/null || {
-    log_err "无法写入请求文件: $reqf"
+    i18n_err daemon.unable_write_request_file reqf="$reqf"
     rm -f "$inf" 2>/dev/null || true
     return 1
   }
   # 原子投递：客户端与服务端可能在两个 namespace，靠 rename 保证不读到半截文件
   mv -f "$reqf.tmp" "$reqf" 2>/dev/null || {
-    log_err "无法投递请求: $reqf"
+    i18n_err daemon.unable_submit_request reqf="$reqf"
     return 1
   }
 
@@ -471,9 +471,9 @@ daemon_request() {
   fi
 
   if (( timed_out == 1 )); then
-    log_err "容器内命令超时（${timeout_s}s）"
+    i18n_err daemon.guest_command_timed_out_s timeout_s="${timeout_s}"
   elif (( daemon_died == 1 )); then
-    log_err "守护容器在命令执行期间已停止（心跳失联），请求被放弃"
+    i18n_err daemon.daemon_container_stopped_while_command_running_heartbeat
   fi
 
   # 清理本次请求文件（rc 由服务端写，日志与 payload 一并删掉）
@@ -506,7 +506,7 @@ _daemon_build_up_argv() {
     sandbox_bwrap_cmd daemon "" "/workspace" >"$outf" 2>"$errf" || brc=$?
     if (( brc != 0 )); then
       if (( brc != 6 )); then
-        log_err "无法构造守护容器 bwrap 参数（rc=$brc）"
+        i18n_err daemon.unable_build_daemon_container_bwrap_arguments_rc brc="$brc"
       fi
       [[ -s "$errf" ]] && cat "$errf" >&2
       rm -f "$errf" "$outf"
@@ -517,7 +517,7 @@ _daemon_build_up_argv() {
     done <"$outf"
     rm -f "$errf" "$outf"
     (( ${#base[@]} > 0 )) || {
-      log_err "守护容器 bwrap 参数为空"
+      i18n_err daemon.daemon_container_bwrap_arguments_empty
       return 1
     }
   else
@@ -603,10 +603,10 @@ _daemon_systemd_unit_name() {
 
 # 把 capbox up 交给 systemd --user。调用方（常被外层 bwrap --die-with-parent 包住）可以马上返回。
 _daemon_up_via_systemd() {
-  command -v systemd-run >/dev/null 2>&1 || die 5 "capbox up --systemd 需要 systemd-run"
-  command -v systemctl >/dev/null 2>&1 || die 5 "capbox up --systemd 需要 systemctl"
+  command -v systemd-run >/dev/null 2>&1 || i18n_die 5 daemon.capbox_up_systemd_requires_systemd_run
+  command -v systemctl >/dev/null 2>&1 || i18n_die 5 daemon.capbox_up_systemd_requires_systemctl
   if ! systemctl --user show-environment >/dev/null 2>&1; then
-    die 5 "用户 systemd 不可用（systemctl --user 没有 bus）。改用活得更久的任务跑 capbox up，或在登录会话里启用 lingering"
+    i18n_die 5 daemon.user_systemd_unavailable_systemctl_user_has_no
   fi
   local unit cli private
   private="$(_capbox_host_state_dir)" || return 1
@@ -615,16 +615,16 @@ _daemon_up_via_systemd() {
     local wd
     wd="$(systemctl --user show -p WorkingDirectory --value "$unit" 2>/dev/null || true)"
     if [[ -n "$wd" && "$wd" != "${CAPBOX_WORKSPACE}" ]]; then
-      die 1 "systemd 单元 ${unit}.service 已在运行，但 WorkingDirectory=${wd}，不是本工作区 ${CAPBOX_WORKSPACE}"
+      i18n_die 1 daemon.systemd_unit_service_already_running_workingdirectory_which unit="${unit}" wd="${wd}" workspace="${CAPBOX_WORKSPACE}"
     fi
-    log_info "systemd 单元 ${unit}.service 已在运行"
+    i18n_info daemon.systemd_unit_service_already_running unit="${unit}"
     mkdir -p "$CAPBOX_RUN_DIR"
     printf '%s\n' "$unit" >"$private/systemd.unit"
     return 0
   fi
   cli="${_CAPBOX_CLI_BIN_DIR:-}/capbox"
   [[ -x "$cli" ]] || cli="$(command -v capbox 2>/dev/null || true)"
-  [[ -n "$cli" && -x "$cli" ]] || die 1 "找不到 capbox 可执行文件，无法交给 systemd"
+  [[ -n "$cli" && -x "$cli" ]] || i18n_die 1 daemon.capbox_executable_not_found_cannot_hand_off
   local -a child_cmd=("$cli")
   if [[ "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-}" == "1" ]]; then
     child_cmd+=(--allow-old-bwrap)
@@ -643,16 +643,16 @@ _daemon_up_via_systemd() {
   if [[ "${CAPBOX_LANDLOCK:-}" == "on" || "${CAPBOX_LANDLOCK:-}" == "off" ]]; then
     envargs+=(--setenv="CAPBOX_LANDLOCK=${CAPBOX_LANDLOCK}")
   fi
-  log_info "交给 systemd --user 单元 ${unit}.service（脱离当前进程树）"
+  i18n_info daemon.handed_off_systemd_user_unit_service_detached unit="${unit}"
   if ! systemd-run --user --collect --unit="$unit" \
     -p "WorkingDirectory=${CAPBOX_WORKSPACE}" \
     "${envargs[@]}" \
     -- "${child_cmd[@]}" up; then
-    log_err "systemd-run 失败"
+    i18n_err daemon.systemd_run_failed
     return 1
   fi
-  log_info "单元已提交。查看: systemctl --user status ${unit}.service"
-  log_info "停止: capbox down"
+  i18n_info daemon.unit_submitted_inspect_systemctl_user_status_service unit="${unit}"
+  i18n_info daemon.stop_capbox_down
   return 0
 }
 
@@ -669,16 +669,16 @@ cmd_up() {
         shift
         ;;
       --net)
-        [[ $# -ge 2 ]] || die 2 "up: --net 需要模式 none|restricted|open"
+        [[ $# -ge 2 ]] || i18n_die 2 daemon.up_net_requires_mode_none_restricted_open
         net_override="${2}"
         shift 2
         ;;
       --net=*)
         net_override="${1#*=}"
-        [[ -n "$net_override" ]] || die 2 "up: --net 需要模式 none|restricted|open"
+        [[ -n "$net_override" ]] || i18n_die 2 daemon.up_net_requires_mode_none_restricted_open
         shift
         ;;
-      *) die 2 "up: 未知选项 $1" ;;
+      *) i18n_die 2 daemon.up_unknown_option arg="$1" ;;
     esac
   done
 
@@ -691,7 +691,7 @@ cmd_up() {
     return 0
   fi
 
-  [[ -x "${CAPBOX_BWRAP:-}" ]] || die 5 "bwrap 不可用: ${CAPBOX_BWRAP:-未设置}（apt install bubblewrap）"
+  [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable_apt_install_bubblewrap bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
   # rootfs 判据必须按**容器语义**解析符号链接：rootfs 里 /bin/sh -> /bin/busybox 是
   # 指向容器内绝对路径的悬空链接，宿主侧 -e 会跟随到宿主 /bin/busybox 而误判为不存在。
   local rootfs_ok=0
@@ -702,8 +702,8 @@ cmd_up() {
   elif [[ -e "$CAPBOX_ROOTFS/bin/sh" || -e "$CAPBOX_ROOTFS/bin/busybox" || -e "$CAPBOX_ROOTFS/bin/bash" ]]; then
     rootfs_ok=1
   fi
-  (( rootfs_ok == 1 )) || die 4 "rootfs 不存在: $CAPBOX_ROOTFS（请先运行 capbox init）"
-  [[ -f "$CAPBOX_DIR/lib/guest/daemon.sh" ]] || die 1 "缺少服务端脚本: $CAPBOX_DIR/lib/guest/daemon.sh"
+  (( rootfs_ok == 1 )) || i18n_die 4 common.rootfs_does_not_exist_run_capbox_init rootfs="$CAPBOX_ROOTFS"
+  [[ -f "$CAPBOX_DIR/lib/guest/daemon.sh" ]] || i18n_die 1 daemon.missing_server_script_lib_guest_daemon_sh dir="$CAPBOX_DIR"
 
   _daemon_ensure_dirs
   if declare -F ensure_rootfs_dirs >/dev/null 2>&1; then
@@ -742,7 +742,7 @@ cmd_up() {
 
   # 已在运行：幂等返回
   if daemon_running; then
-    log_info "守护容器已在运行（pid $(_daemon_json_num pid 2>/dev/null || echo '?')），无需重复启动"
+    i18n_info daemon.daemon_container_already_running_pid_no_need pid="$(_daemon_json_num pid 2>/dev/null || echo '?')"
     if (( have_lock == 1 )); then flock -u 9 2>/dev/null; exec 9>&- 2>/dev/null; fi
     return 0
   fi
@@ -786,9 +786,9 @@ cmd_up() {
     die 6
   fi
   if (( _up_rc != 0 )); then
-    die "$_up_rc" "无法构造 bwrap 命令"
+    i18n_die "$_up_rc" daemon.unable_build_bwrap_command
   fi
-  (( ${#argv[@]} > 0 )) || die 1 "无法构造 bwrap 命令"
+  (( ${#argv[@]} > 0 )) || i18n_die 1 daemon.unable_build_bwrap_command
 
   local idmap_rc=1
   if declare -F _capbox_idmap_decision >/dev/null 2>&1; then
@@ -816,21 +816,21 @@ cmd_up() {
     rm -f "$info"
   fi
 
-  log_info "启动守护容器（rootfs=$CAPBOX_ROOTFS）"
+  i18n_info daemon.starting_daemon_container_rootfs rootfs="$CAPBOX_ROOTFS"
 
   local child="" got_signal=0
   # 收到 TERM/INT：写 ctl/stop 让服务端优雅退出（它自己清理 daemon.json）
   _daemon_up_on_signal() {
     got_signal=1
     : > "$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
-    log_info "收到终止信号，正在通知守护容器优雅退出…"
+    i18n_info daemon.got_termination_signal_asking_daemon_container_shut
   }
   trap _daemon_up_on_signal TERM INT
 
   if (( use_idmap == 1 )); then
     CAPBOX_IDMAP_SPAWN_LOG="$logf"
     child="$(_idmap_spawn_bwrap_argv "${argv[@]}")" || {
-      log_err "idmap 启动守护容器失败：${CAPBOX_IDMAP_DETAIL:-unknown}"
+      i18n_err daemon.idmap_failed_start_daemon_container detail="${CAPBOX_IDMAP_DETAIL:-unknown}"
       (( restricted_daemon == 1 )) && _net_cleanup_restricted_session
       trap - TERM INT
       return 1
@@ -851,14 +851,14 @@ cmd_up() {
       sandboxed="$(_net_wait_info_child "$info" "$child" || true)"
     fi
     if [[ -z "$sandboxed" ]] || ! _net_start_bridge_for_child "$sandboxed"; then
-      log_err "restricted：守护容器网络桥未就绪（见 $(_net_dir)）"
+      i18n_err daemon.restricted_daemon_container_network_bridge_not_ready path="$(_net_dir)"
       kill "$child" 2>/dev/null || true
       wait "$child" 2>/dev/null || true
       _net_cleanup_restricted_session
       trap - TERM INT
       return 1
     fi
-    log_info "restricted：守护容器 allowlist 代理桥已就绪"
+    i18n_info daemon.restricted_daemon_container_allowlist_proxy_bridge_ready
   fi
 
   # 等待容器就绪（最多 20s），期间保持对信号的响应。
@@ -886,18 +886,18 @@ cmd_up() {
 
   if (( got_signal == 1 )); then
     # 启动途中就收到了终止信号：不必再宣告"就绪"，直接进入收尾等待
-    log_info "收到终止信号，正在等待守护容器退出…"
+    i18n_info daemon.got_termination_signal_waiting_daemon_container_exit
     _daemon_release_up_lock
   elif [[ -f "$CAPBOX_DAEMON_DIR/daemon.json" ]]; then
-    log_info "守护容器就绪（容器内 pid $(_daemon_json_num pid 2>/dev/null || echo '?')，hostname ${CAPBOX_HOSTNAME}）"
-    log_info "IPC 目录: $CAPBOX_DAEMON_DIR"
-    log_info "停止: capbox down（或结束承载本进程的后台任务）"
+    i18n_info daemon.daemon_container_ready_guest_pid_hostname pid="$(_daemon_json_num pid 2>/dev/null || echo '?')" hostname="${CAPBOX_HOSTNAME}"
+    i18n_info daemon.ipc_directory daemon_dir="$CAPBOX_DAEMON_DIR"
+    i18n_info daemon.stop_capbox_down_end_background_task_hosts
     _daemon_release_up_lock
   elif ! kill -0 "$child" 2>/dev/null; then
     local brc=0
     wait "$child" 2>/dev/null
     brc=$?
-    log_err "守护容器启动失败（退出码 $brc），最近日志："
+    i18n_err daemon.daemon_container_failed_start_exit_recent_logs brc="$brc"
     tail -n 20 -- "$logf" >&2 2>/dev/null || true
     _daemon_clear_state
     _daemon_release_up_lock
@@ -909,7 +909,7 @@ cmd_up() {
   else
     # 既没就绪、进程也还在（20s 超时）：不当成失败，继续前台托管，
     # 但要放锁，别让后续 up 被阻塞。
-    log_warn "守护容器在 20s 内未写出 daemon.json，继续等待（日志: $logf）"
+    i18n_warn daemon.daemon_container_did_not_write_daemon_json logf="$logf"
     _daemon_release_up_lock
   fi
 
@@ -943,14 +943,14 @@ cmd_up() {
   local cur_iid
   cur_iid="$(_daemon_json_str iid 2>/dev/null || true)"
   if [[ -f "$CAPBOX_DAEMON_DIR/daemon.json" && -n "$cur_iid" && -n "$own_iid" && "$cur_iid" != "$own_iid" ]]; then
-    log_warn "检测到新实例已接管（iid ${cur_iid:0:8}…），保留其状态文件"
+    i18n_warn daemon.new_instance_has_taken_over_iid_keeping cur_iid="${cur_iid:0:8}"
   else
     _daemon_clear_state
   fi
   rm -f "$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
   rm -rf "$CAPBOX_DAEMON_DIR/ctl/kill" 2>/dev/null || true
 
-  log_info "守护容器已停止（退出码 $rc）"
+  i18n_info daemon.daemon_container_stopped_exit rc="$rc"
   if [[ "${CAPBOX_NET_SESSION:-}" == "daemon" ]] && declare -F _net_cleanup_restricted_session >/dev/null 2>&1; then
     _net_cleanup_restricted_session
   fi
@@ -976,7 +976,7 @@ cmd_down() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h | --help) i18n_print help.down; return 0 ;;
-      *) die 2 "down: 未知选项 $1" ;;
+      *) i18n_die 2 daemon.down_unknown_option arg="$1" ;;
     esac
   done
 
@@ -986,7 +986,7 @@ cmd_down() {
     local unit
     unit="$(tr -d '[:space:]' <"$private/systemd.unit" 2>/dev/null || true)"
     if [[ -n "$unit" ]] && systemctl --user is-active --quiet "$unit" 2>/dev/null; then
-      log_info "停止 systemd 单元 ${unit}.service"
+      i18n_info daemon.stopping_systemd_unit_service unit="${unit}"
       systemctl --user stop "$unit" || return 1
       rm -f "$private/systemd.unit"
       return 0
@@ -1018,7 +1018,7 @@ cmd_down() {
       # 正确做法：仍然发 ctl/stop 让它自己优雅退出。服务端的 self-heal 会先把
       # 骨架补回来（见 guest/daemon.sh 的 _self_heal），因此 ctl/ 一旦建出来
       # 它就能看到 stop 标记。
-      log_warn "检测到孤儿服务端（有新鲜心跳但缺少 daemon.json）；尝试通知它优雅退出"
+      i18n_warn daemon.orphan_server_detected_fresh_heartbeat_no_daemon
       _daemon_ensure_dirs
       : >"$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
       local ow=0
@@ -1029,32 +1029,32 @@ cmd_down() {
         ow=$((ow + 1))
       done
       if [[ -f "$CAPBOX_DAEMON_DIR/hb" ]] && (( $(_daemon_hb_age) <= ttl )); then
-        log_err "孤儿服务端未在 10s 内退出（可能版本过旧、不支持 self-heal）"
-        log_err "建议：结束承载它的 TTY/job，或删除 $CAPBOX_DAEMON_DIR/hb 后重试"
+        i18n_err daemon.orphan_server_did_not_exit_within_10s
+        i18n_err daemon.suggestion_end_tty_job_hosts_delete_hb daemon_dir="$CAPBOX_DAEMON_DIR"
         return 1
       fi
-      log_info "孤儿服务端已退出"
+      i18n_info daemon.orphan_server_has_exited
       _daemon_clear_state
       return 0
     fi
 
     if [[ -f "$CAPBOX_DAEMON_DIR/daemon.json" || -f "$CAPBOX_DAEMON_DIR/hb" || -d "$CAPBOX_DAEMON_DIR/lock.d" ]]; then
       staleness=1
-      log_warn "发现陈旧的状态文件（守护进程已不在），已清理"
+      i18n_warn daemon.stale_state_files_found_daemon_process_gone
       _daemon_clear_state
     else
-      log_info "守护容器未运行"
+      i18n_info daemon.daemon_container_not_running
     fi
     return 3
   fi
 
   local pid
   pid="$(_daemon_json_num pid 2>/dev/null || echo '?')"
-  log_info "正在停止守护容器（容器内 pid $pid）"
+  i18n_info daemon.stopping_daemon_container_guest_pid pid="$pid"
 
   _daemon_ensure_dirs
   : >"$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || {
-    log_err "无法写入 $CAPBOX_DAEMON_DIR/ctl/stop"
+    i18n_err daemon.unable_write_ctl_stop daemon_dir="$CAPBOX_DAEMON_DIR"
     return 1
   }
 
@@ -1088,11 +1088,11 @@ cmd_down() {
       fi
     fi
     if (( acked == 0 )) && (( waited >= noack * 10 )); then
-      log_warn "服务端 ${noack}s 内未响应停止请求（可能已崩溃），直接清理状态文件"
+      i18n_warn daemon.server_did_not_acknowledge_stop_request_within noack="${noack}"
       _daemon_clear_state
       rm -f "$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
       rm -rf "$CAPBOX_DAEMON_DIR/ctl/kill" 2>/dev/null || true
-      log_info "守护容器已停止"
+      i18n_info daemon.daemon_container_stopped
       return 0
     fi
     sleep 0.1
@@ -1100,8 +1100,8 @@ cmd_down() {
   done
 
   if [[ -f "$CAPBOX_DAEMON_DIR/daemon.json" ]]; then
-    log_warn "守护容器未在 $((limit))s 内退出；清理状态文件"
-    log_warn "（跨 PID namespace 无法强制 kill，容器会随承载它的后台任务一并结束）"
+    i18n_warn daemon.daemon_container_did_not_exit_within_s limit="$limit"
+    i18n_warn daemon.cannot_force_kill_across_pid_namespace_container
     _daemon_clear_state
     rm -f "$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
     return 1
@@ -1113,7 +1113,7 @@ cmd_down() {
   rm -f "$CAPBOX_DAEMON_DIR/daemon.json.tmp" 2>/dev/null || true
   rm -f "$CAPBOX_DAEMON_DIR/ctl/stop" 2>/dev/null || true
   rm -rf "$CAPBOX_DAEMON_DIR/ctl/kill" 2>/dev/null || true
-  log_info "守护容器已停止"
+  i18n_info daemon.daemon_container_stopped
   return 0
 }
 
@@ -1127,7 +1127,7 @@ cmd_status() {
     case "$1" in
       --json) json=1; shift ;;
       -h | --help) i18n_print help.status; return 0 ;;
-      *) die 2 "status: 未知选项 $1" ;;
+      *) i18n_die 2 common.status_unknown_option arg="$1" ;;
     esac
   done
 
@@ -1230,14 +1230,14 @@ cmd_logs() {
         i18n_print help.logs
         return 0
         ;;
-      *) die 2 "logs: 未知选项 $1" ;;
+      *) i18n_die 2 daemon.logs_unknown_option arg="$1" ;;
     esac
   done
-  [[ "$lines" =~ ^[0-9]+$ ]] || die 2 "logs: -n 必须是非负整数"
+  [[ "$lines" =~ ^[0-9]+$ ]] || i18n_die 2 daemon.logs_n_must_non_negative_integer
 
   local logf="$CAPBOX_DAEMON_DIR/daemon.log"
   if [[ ! -f "$logf" ]]; then
-    log_info "暂无守护容器日志（$logf 不存在）"
+    i18n_info daemon.no_daemon_container_logs_yet_does_not logf="$logf"
     return 0
   fi
 

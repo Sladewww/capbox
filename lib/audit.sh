@@ -109,7 +109,7 @@ audit_event() {
   mkdir -p "$dir" 2>/dev/null || return 0
   f="$(_audit_path)"
   if [[ -L "$f" || -d "$f" ]]; then
-    log_err "审计日志必须是普通文件，拒绝写入: $f"
+    i18n_err audit.audit_log_must_regular_file_refusing_write f="$f"
     return 1
   fi
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
@@ -197,20 +197,20 @@ cmd_audit() {
       ;;
     clear)
       local f="$(_audit_path)"
-      : >"$f" 2>/dev/null || die 1 "无法清空 $f"
-      log_info "已清空审计日志: $f"
+      : >"$f" 2>/dev/null || i18n_die 1 audit.unable_truncate f="$f"
+      i18n_info audit.cleared_audit_log f="$f"
       return 0
       ;;
     tail)
       local n="${1:-50}"
-      [[ "$n" =~ ^[0-9]+$ ]] || die 2 "audit tail: N 必须是非负整数"
+      [[ "$n" =~ ^[0-9]+$ ]] || i18n_die 2 audit.audit_tail_n_must_non_negative_integer
       local f="$(_audit_path)"
       [[ -f "$f" ]] || { printf '(无审计日志)\n'; return 0; }
       tail -n "$n" -- "$f"
       return 0
       ;;
     *)
-      die 2 "audit: 未知子命令 $sub（report|tail|path|clear）"
+      i18n_die 2 audit.audit_unknown_subcommand_report_tail_path_clear sub="$sub"
       ;;
   esac
 }
@@ -225,7 +225,7 @@ cmd_metrics() {
         i18n_print help.metrics
         return 0
         ;;
-      *) die 2 "metrics: 未知选项 $1" ;;
+      *) i18n_die 2 audit.metrics_unknown_option arg="$1" ;;
     esac
   done
   if (( json == 1 )); then

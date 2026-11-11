@@ -80,26 +80,26 @@ _cfg_validate() {
   case "$k" in
     DISTRO)
       [[ "$v" == "alpine" || "$v" == "ubuntu" ]] || {
-        log_err "CAPBOX_DISTRO 只能是 alpine 或 ubuntu（当前: '$v'）"
+        i18n_err config.capbox_distro_must_alpine_ubuntu_got v="$v"
         return 2
       }
       ;;
     MIRROR)
       [[ "$v" == "cn" || "$v" == "global" || "$v" == "none" ]] || {
-        log_err "CAPBOX_MIRROR 只能是 cn / global / none（当前: '$v'）"
+        i18n_err config.capbox_mirror_must_cn_global_none_got v="$v"
         return 2
       }
       ;;
     NET)
       [[ "$v" == "host" || "$v" == "open" || "$v" == "none" || "$v" == "restricted" ]] || {
-        log_err "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的兼容别名；当前: '$v'）"
+        i18n_err config.capbox_net_must_none_restricted_open_host v="$v"
         return 2
       }
       ;;
     NET_ALLOW)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[A-Za-z0-9._:,/*-]+$ ]] || {
-          log_err "CAPBOX_NET_ALLOW 只能包含域名/IP/逗号/冒号/斜线/星号（当前: '$v'）"
+          i18n_err config.capbox_net_allow_may_only_contain_domain v="$v"
           return 2
         }
       fi
@@ -107,7 +107,7 @@ _cfg_validate() {
     MEMORY_MAX)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[0-9]+([KkMmGg]i?[Bb]?)?$ ]] || {
-          log_err "CAPBOX_MEMORY_MAX 格式无效（例 512M / 1G；当前: '$v'）"
+          i18n_err config.invalid_capbox_memory_max_format_e_g v="$v"
           return 2
         }
       fi
@@ -115,7 +115,7 @@ _cfg_validate() {
     CPU_MAX)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[0-9]+%$ || "$v" =~ ^[0-9]+[[:space:]]+[0-9]+$ || "$v" == "max" ]] || {
-          log_err "CAPBOX_CPU_MAX 格式无效（例 50% 或 '50000 100000'；当前: '$v'）"
+          i18n_err config.invalid_capbox_cpu_max_format_e_g v="$v"
           return 2
         }
       fi
@@ -123,48 +123,48 @@ _cfg_validate() {
     PIDS_MAX)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[0-9]+$ ]] || {
-          log_err "CAPBOX_PIDS_MAX 必须是正整数（当前: '$v'）"
+          i18n_err config.capbox_pids_max_must_positive_integer_got v="$v"
           return 2
         }
       fi
       ;;
     EXEC_TIMEOUT)
       [[ "$v" =~ ^[0-9]+$ ]] || {
-        log_err "CAPBOX_EXEC_TIMEOUT 必须是非负整数秒（当前: '$v'）"
+        i18n_err config.capbox_exec_timeout_must_non_negative_integer v="$v"
         return 2
       }
       ;;
     PROXY)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^(https?|socks5h?)://[^[:space:]]+$ ]] || {
-          log_err "CAPBOX_PROXY 必须是 http:// https:// socks5:// socks5h:// 之一开头，或留空表示直连（当前: '$v'）"
+          i18n_err config.capbox_proxy_must_start_http_https_socks5 v="$v"
           return 2
         }
       fi
       ;;
     HOSTNAME)
       [[ "$v" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || {
-        log_err "CAPBOX_HOSTNAME 只能是字母数字与 . -（当前: '$v'）"
+        i18n_err config.capbox_hostname_may_only_contain_letters_digits v="$v"
         return 2
       }
       ;;
     MIRROR_ALPINE | MIRROR_UBUNTU)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^https?://[^[:space:]]+$ ]] || {
-          log_err "CAPBOX_$k 必须是 http(s):// 开头的 URL（当前: '$v'）"
+          i18n_err config.capbox_must_url_starting_http_s_got k="$k" v="$v"
           return 2
         }
       fi
       ;;
     BWRAP)
       [[ -n "$v" ]] || {
-        log_err "CAPBOX_BWRAP 不能为空（bubblewrap 可执行文件路径）"
+        i18n_err config.capbox_bwrap_must_not_empty_path_bubblewrap
         return 2
       }
       ;;
     IDMAP)
       [[ "$v" == "auto" || "$v" == "on" || "$v" == "off" ]] || {
-        log_err "CAPBOX_IDMAP 只能是 auto / on / off（当前: '$v'）"
+        i18n_err config.capbox_idmap_must_auto_off_got v="$v"
         return 2
       }
       ;;
@@ -177,7 +177,7 @@ _cfg_validate() {
           part="${part%"${part##*[![:space:]]}"}"
           [[ -z "$part" ]] && continue
           [[ "$part" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]] || {
-            log_err "CAPBOX_$k 段须为 guest:host:count（当前段: '$part'）"
+            i18n_err config.capbox_segments_must_guest_host_count_current k="$k" part="$part"
             return 2
           }
         done
@@ -186,89 +186,89 @@ _cfg_validate() {
     SETGROUPS)
       if [[ -n "$v" ]]; then
         [[ "$v" == "allow" || "$v" == "deny" ]] || {
-          log_err "CAPBOX_SETGROUPS 只能是 allow / deny（当前: '$v'）"
+          i18n_err config.capbox_setgroups_must_allow_deny_got v="$v"
           return 2
         }
       fi
       ;;
     EXEC_UID | EXEC_GID)
       [[ "$v" =~ ^[0-9]+$ ]] || {
-        log_err "CAPBOX_$k 必须是非负整数（当前: '$v'）"
+        i18n_err config.capbox_must_non_negative_integer_got k="$k" v="$v"
         return 2
       }
       ;;
     DISK_MAX)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[0-9]+([KkMmGg]i?[Bb]?)?$ ]] || {
-          log_err "CAPBOX_DISK_MAX 格式无效（例 1G；当前: '$v'）"
+          i18n_err config.invalid_capbox_disk_max_format_e_g v="$v"
           return 2
         }
       fi
       ;;
     RESOURCES_MODE)
       [[ "$v" == "warn" || "$v" == "require" || "$v" == "strict" || "$v" == "fail-closed" || "$v" == "fail_closed" || -z "$v" ]] || {
-        log_err "CAPBOX_RESOURCES_MODE 只能是 warn|require（当前: '$v'）"
+        i18n_err config.capbox_resources_mode_must_warn_require_got v="$v"
         return 2
       }
       ;;
     SECURITY_PROFILE)
       [[ "$v" == "compat" || "$v" == "untrusted" || "$v" == "strict" || "$v" == "default" || -z "$v" ]] || {
-        log_err "CAPBOX_SECURITY_PROFILE 只能是 compat|untrusted|strict（当前: '$v'）"
+        i18n_err config.capbox_security_profile_must_compat_untrusted_strict v="$v"
         return 2
       }
       ;;
     LANDLOCK)
       [[ "$v" == "on" || "$v" == "off" || -z "$v" ]] || {
-        log_err "CAPBOX_LANDLOCK 只能是 on 或 off（当前: '$v'）。未设置时 strict 默认开启"
+        i18n_err config.capbox_landlock_must_off_got_when_unset v="$v"
         return 2
       }
       ;;
     ROOTFS_RO)
       [[ "$v" == "0" || "$v" == "1" || "$v" == "true" || "$v" == "false" || "$v" == "yes" || "$v" == "no" || -z "$v" ]] || {
-        log_err "CAPBOX_ROOTFS_RO 只能是 0/1（当前: '$v'）"
+        i18n_err config.capbox_rootfs_ro_must_0_1_got v="$v"
         return 2
       }
       ;;
     FS_HIDE)
       if [[ -n "$v" ]]; then
         [[ "$v" =~ ^[A-Za-z0-9._@+=,/-]+$ ]] || {
-          log_err "CAPBOX_FS_HIDE 含非法字符（当前: '$v'）"
+          i18n_err config.capbox_fs_hide_contains_illegal_characters_got v="$v"
           return 2
         }
-        [[ "$v" != *..* ]] || { log_err "CAPBOX_FS_HIDE 禁止 .."; return 2; }
+        [[ "$v" != *..* ]] || { i18n_err config.capbox_fs_hide_must_not_contain; return 2; }
       fi
       ;;
     FS_BINDS)
       if [[ -n "$v" ]]; then
         # 粗校验；细校验在 fsguard
         [[ "$v" =~ ^[A-Za-z0-9._@+=,:/-]+$ ]] || {
-          log_err "CAPBOX_FS_BINDS 含非法字符（当前: '$v'）"
+          i18n_err config.capbox_fs_binds_contains_illegal_characters_got v="$v"
           return 2
         }
-        [[ "$v" != *..* ]] || { log_err "CAPBOX_FS_BINDS 禁止 .."; return 2; }
+        [[ "$v" != *..* ]] || { i18n_err config.capbox_fs_binds_must_not_contain; return 2; }
       fi
       ;;
     OVERLAY)
       [[ "$v" == "0" || "$v" == "1" || "$v" == "auto" || "$v" == "on" || "$v" == "off" || -z "$v" ]] || {
-        log_err "CAPBOX_OVERLAY 只能是 auto|0|1（当前: '$v'）"
+        i18n_err config.capbox_overlay_must_auto_0_1_got v="$v"
         return 2
       }
       ;;
     AUDIT)
       [[ "$v" == "off" || "$v" == "summary" || "$v" == "full" || "$v" == "0" || "$v" == "1" || -z "$v" ]] || {
-        log_err "CAPBOX_AUDIT 只能是 off|summary|full（当前: '$v'）"
+        i18n_err config.capbox_audit_must_off_summary_full_got v="$v"
         return 2
       }
       ;;
     AUDIT_CMD)
       [[ "$v" == "off" || "$v" == "summary" || "$v" == "full" || -z "$v" ]] || {
-        log_err "CAPBOX_AUDIT_CMD 只能是 off|summary|full（当前: '$v'）"
+        i18n_err config.capbox_audit_cmd_must_off_summary_full v="$v"
         return 2
       }
       ;;
     ALLOW_OLD_BWRAP)
       [[ "$v" == "0" || "$v" == "1" ]] || {
-        log_err "CAPBOX_ALLOW_OLD_BWRAP 只能是 0 或 1（当前: '$v'）。持久放行: capbox config set --yes CAPBOX_ALLOW_OLD_BWRAP 1"
+        i18n_err config.capbox_allow_old_bwrap_must_0_1 v="$v"
         return 2
       }
       ;;
@@ -283,7 +283,7 @@ _cfg_validate() {
       fi
       ;;
     *)
-      log_err "未知配置项: CAPBOX_${k}"
+      i18n_err config.unknown_config_key_capbox k="${k}"
       return 2
       ;;
   esac
@@ -294,7 +294,7 @@ _cfg_validate() {
 config_save() {
   local f="$CAPBOX_DIR/config.env" private tmp k v
   [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || {
-    log_err "配置目标必须是普通文件: $f"; return 1;
+    i18n_err config.config_target_must_regular_file f="$f"; return 1;
   }
   mkdir -p -- "$CAPBOX_DIR" || return 1
   private="$(_capbox_host_state_dir)" || return 1
@@ -314,7 +314,7 @@ config_save() {
   # 所有值在进入这次串行写入前已校验。
   if ! cat -- "$tmp" >"$f"; then
     rm -f -- "$tmp"
-    log_err "配置写入失败: $f"
+    i18n_err config.failed_write_config f="$f"
     return 1
   fi
   rm -f -- "$tmp"
@@ -344,16 +344,16 @@ _config_apply_locked() {
 }
 
 config_apply() {
-  (( $# % 2 == 0 )) || { log_err '配置批次必须为键值对'; return 2; }
+  (( $# % 2 == 0 )) || { i18n_err config.config_batch_must_key_value_pairs; return 2; }
   (( $# > 0 )) || return 0
   local -a pairs=("$@")
   local k v
   while (( $# )); do
     k="$1"; v="$2"; shift 2
-    _cfg_known "$k" || { log_err "未知配置项: $k"; return 2; }
+    _cfg_known "$k" || { i18n_err config.unknown_config_key k="$k"; return 2; }
     _cfg_validate "$k" "$v" || return 2
   done
-  need_cmd flock '配置提交需要进程间锁'
+  need_cmd flock config.need_flock_to_commit
   with_lock config -- _config_apply_locked "${pairs[@]}" || return $?
   set -- "${pairs[@]}"
   while (( $# )); do
@@ -423,7 +423,7 @@ _cfg_parse_assignment_line() {
     if [[ "$raw" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ ]]; then
       local inner="${BASH_REMATCH[1]}"
       if [[ "$inner" =~ [\$\`\\] ]]; then
-        log_warn "config.env 拒绝含展开符的双引号值: $key"
+        i18n_warn config.config_env_rejected_double_quoted_value_containing key="$key"
         return 1
       fi
       _cfg_line_key="$short"
@@ -437,7 +437,7 @@ _cfg_parse_assignment_line() {
     fi
     raw="${raw%"${raw##*[![:space:]]}"}"
     if [[ -n "$raw" && "$raw" =~ [\$\`\;\|\&\<\>\(\)\{\}[:space:]] ]]; then
-      log_warn "config.env 拒绝不安全的裸值: $key"
+      i18n_warn config.config_env_rejected_unsafe_bare_value key="$key"
       return 1
     fi
     _cfg_line_key="$short"
@@ -457,7 +457,7 @@ load_config() {
 
   # ALLOW_OLD_BWRAP 不接受环境变量。父进程 export 不能打开或关闭持久放行。
   if [[ -n "${CAPBOX_ALLOW_OLD_BWRAP+x}" ]]; then
-    log_warn "忽略环境变量 CAPBOX_ALLOW_OLD_BWRAP=${CAPBOX_ALLOW_OLD_BWRAP}；持久放行只能写入 config.env，单次放行用 capbox --allow-old-bwrap"
+    i18n_warn config.ignoring_environment_variable_capbox_allow_old_bwrap value="${CAPBOX_ALLOW_OLD_BWRAP}"
     unset CAPBOX_ALLOW_OLD_BWRAP
   fi
 
@@ -474,13 +474,13 @@ load_config() {
   # 不会被其他 CLI 进程误当成空/半截配置。
   local config_fd="" private=""
   if [[ -d "$CAPBOX_DIR" ]]; then
-    need_cmd flock '读取配置需要共享锁'
-    private="$(_capbox_host_state_dir)" || die 1 '无法创建安全配置锁目录'
-    exec {config_fd}>"$private/config.lock" || die 1 '无法打开配置锁'
-    flock -s -w 180 "$config_fd" || die 1 '等待配置读取锁超时'
+    need_cmd flock config.need_flock_to_read
+    private="$(_capbox_host_state_dir)" || i18n_die 1 config.unable_create_safe_config_lock_directory
+    exec {config_fd}>"$private/config.lock" || i18n_die 1 config.unable_open_config_lock
+    flock -s -w 180 "$config_fd" || i18n_die 1 config.timed_out_waiting_config_read_lock
   fi
   if [[ -e "$f" || -L "$f" ]]; then
-    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || die 2 '配置必须是可读的普通文件，拒绝使用默认配置继续'
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || i18n_die 2 config.config_must_readable_regular_file_refusing_continue
   fi
 
   # 2) 白名单解析配置文件（不 source）
@@ -544,7 +544,7 @@ load_config() {
   : "${CAPBOX_ALLOW_OLD_BWRAP=0}"
 
   # 空值兜底（配置文件写坏了也不至于炸）
-  [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; log_warn "CAPBOX_DISTRO 为空，回退 alpine"; }
+  [[ -n "${CAPBOX_DISTRO:-}" ]] || { CAPBOX_DISTRO=alpine; i18n_warn config.capbox_distro_empty_falling_back_alpine; }
   [[ -n "${CAPBOX_MIRROR:-}" ]] || CAPBOX_MIRROR=cn
   [[ -n "${CAPBOX_NET:-}" ]] || CAPBOX_NET=open
   # host 为历史别名
@@ -552,7 +552,7 @@ load_config() {
   case "${CAPBOX_NET}" in
     none | restricted | open) ;;
     *)
-      die 2 "CAPBOX_NET 只能是 none / restricted / open（host 为 open 的别名；当前: '${CAPBOX_NET}'）。拒绝回退到 open"
+      i18n_die 2 config.capbox_net_must_none_restricted_open_host_2 net="${CAPBOX_NET}"
       ;;
   esac
 
@@ -588,22 +588,21 @@ config_set() {
   k="$(_cfg_norm_key "${1:-}")"
   v="${2-}"
   _cfg_known "$k" || {
-    log_err "未知配置项: ${1:-}；可用: ${CAPBOX_CFG_KEYS[*]}"
+    i18n_err common.unknown_config_key_available arg="${1:-}" keys="${CAPBOX_CFG_KEYS[*]}"
     return 2
   }
   _cfg_validate "$k" "$v" || return 2
   if [[ "$k" == "ALLOW_OLD_BWRAP" && "$v" == "1" && "$confirm" != "1" ]]; then
-    log_err "持久放行旧版 bwrap 需要 --yes（会写入审计日志；doctor 仍为 FAIL）"
+    i18n_err config.persistent_allow_old_bwrap_requires_yes_audit
     _capbox_print_old_bwrap_details
     return 2
   fi
   config_apply "$k" "$v" || return $?
   if [[ "$k" == "ALLOW_OLD_BWRAP" && "$v" == "1" ]]; then
     _capbox_bwrap_version_ok >/dev/null || true
-    ver="${CAPBOX_BWRAP_VERSION:-未知}"
-    [[ -n "$ver" ]] || ver="未知"
+    ver="$(i18n_or "${CAPBOX_BWRAP_VERSION:-}" val.unknown)"
     if ! _capbox_audit_old_bwrap persist "$ver" "config set CAPBOX_ALLOW_OLD_BWRAP 1"; then
-      log_err "无法写入旧版 bwrap 放行审计，已撤销 CAPBOX_ALLOW_OLD_BWRAP"
+      i18n_err config.unable_write_old_bwrap_allow_audit_record
       config_apply ALLOW_OLD_BWRAP 0 || return 1
       return 1
     fi

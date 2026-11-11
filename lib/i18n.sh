@@ -215,4 +215,40 @@ _capbox_resolve_lang() {
   _capbox_i18n_apply_prefixes
 }
 
+
+# 值为空时用目录里的回退词（如 val.unset），供消息占位符使用。
+i18n_or() {
+  local v="${1-}" key="${2-}"
+  if [[ -n "$v" ]]; then
+    printf '%s' "$v"
+  else
+    i18n_get "$key"
+  fi
+}
+
+# 在 common.sh 定义彩色 log_* / die 之前，提供无颜色的兜底实现。
+if ! declare -F log_info >/dev/null 2>&1; then
+  log_info() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_INFO}" "$*" >&2; }
+fi
+if ! declare -F log_warn >/dev/null 2>&1; then
+  log_warn() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_WARN}" "$*" >&2; }
+fi
+if ! declare -F log_err >/dev/null 2>&1; then
+  log_err() { printf '%s %s\n' "${_CAPBOX_LOG_PREFIX_ERR}" "$*" >&2; }
+fi
+
+i18n_info() { log_info "$(i18n_fmt "$@")"; }
+i18n_warn() { log_warn "$(i18n_fmt "$@")"; }
+i18n_err() { log_err "$(i18n_fmt "$@")"; }
+i18n_die() {
+  local code="${1:-1}"
+  shift || true
+  if declare -F die >/dev/null 2>&1; then
+    die "$code" "$(i18n_fmt "$@")"
+  else
+    log_err "$(i18n_fmt "$@")"
+    exit "$code"
+  fi
+}
+
 _capbox_resolve_lang_preview

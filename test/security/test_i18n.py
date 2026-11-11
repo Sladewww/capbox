@@ -175,6 +175,115 @@ class CliResolveTests(unittest.TestCase):
             self.assertIn('[capbox] debug:', result.stderr)
             self.assertNotIn('调试', result.stderr)
 
+    def test_unknown_command_body_locked_in_zh_and_en(self):
+        zh = self.run_cli('definitely-not-a-command', env={'CAPBOX_LANG': 'zh'})
+        self.assertIn('未知命令: definitely-not-a-command', zh.stderr)
+        self.assertNotIn('Unknown command:', zh.stderr)
+        en = self.run_cli('definitely-not-a-command', env={'CAPBOX_LANG': 'en'})
+        self.assertIn('Unknown command: definitely-not-a-command', en.stderr)
+        self.assertNotIn('未知命令:', en.stderr)
+
+    def test_config_usage_error_locked_in_zh_and_en(self):
+        zh = self.run_cli('config', 'get', env={'CAPBOX_LANG': 'zh'})
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertIn('用法: capbox config get KEY', zh.stderr)
+        self.assertNotIn('Usage: capbox config get KEY', zh.stderr)
+        en = self.run_cli('config', 'get', env={'CAPBOX_LANG': 'en'})
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('Usage: capbox config get KEY', en.stderr)
+        self.assertNotIn('用法: capbox config get KEY', en.stderr)
+
+    def test_pre_catalog_root_missing_arg_locked_in_zh_and_en(self):
+        def run(lang):
+            merged = base_env()
+            merged['CAPBOX_LANG'] = lang
+            return subprocess.run([str(CLI), '--root'], env=merged,
+                                  capture_output=True, text=True, timeout=20)
+        zh = run('zh')
+        self.assertEqual(zh.returncode, 2, zh.stderr)
+        self.assertIn('--root 需要参数（工作区路径）', zh.stderr)
+        self.assertIn('[capbox] 错误:', zh.stderr)
+        self.assertNotIn('--root requires an argument', zh.stderr)
+        en = run('en')
+        self.assertEqual(en.returncode, 2, en.stderr)
+        self.assertIn('--root requires an argument (workspace path)', en.stderr)
+        self.assertIn('[capbox] error:', en.stderr)
+        self.assertNotIn('--root 需要参数', en.stderr)
+
+    def test_pre_catalog_upgrade_incomplete_locked_in_zh_and_en(self):
+        cap = self.ws / '.capbox'
+        cap.mkdir(parents=True, exist_ok=True)
+        (cap / '.upgrade-in-progress').touch()
+        zh = self.run_cli('status', env={'CAPBOX_LANG': 'zh'})
+        self.assertNotEqual(zh.returncode, 0)
+        self.assertIn('运行文件升级未完成；请用完整模板运行 upgrade rollback', zh.stderr)
+        self.assertNotIn('A runtime file upgrade did not finish', zh.stderr)
+        en = self.run_cli('status', env={'CAPBOX_LANG': 'en'})
+        self.assertNotEqual(en.returncode, 0)
+        self.assertIn('A runtime file upgrade did not finish; run upgrade rollback with a complete template', en.stderr)
+        self.assertNotIn('升级未完成', en.stderr)
+
+    def test_pre_catalog_missing_template_fallback_locked_in_zh_and_en(self):
+        """CLI copy with no lib/ beside it cannot load catalogs; fallback still honors CAPBOX_LANG."""
+        solo_dir = Path(self.tmp.name) / 'solo-bin'
+        solo_dir.mkdir()
+        solo = solo_dir / 'capbox'
+        solo.write_bytes(CLI.read_bytes())
+        solo.chmod(0o755)
+        empty = Path(self.tmp.name) / 'empty-ws'
+        empty.mkdir()
+        def run(lang):
+            merged = base_env()
+            merged['CAPBOX_LANG'] = lang
+            return subprocess.run([str(solo)], cwd=str(empty), env=merged,
+                                  capture_output=True, text=True, timeout=20)
+        zh = run('zh')
+        self.assertEqual(zh.returncode, 1, zh.stderr)
+        self.assertIn('找不到 CapBox 模板（CLI 旁无 lib/）；请安装 CapBox 或用项目内 .capbox/bin/capbox', zh.stderr)
+        self.assertNotIn('CapBox template not found', zh.stderr)
+        en = run('en')
+        self.assertEqual(en.returncode, 1, en.stderr)
+        self.assertIn('CapBox template not found (no lib/ next to the CLI); install CapBox or use a project-local .capbox/bin/capbox', en.stderr)
+        self.assertNotIn('找不到 CapBox 模板', en.stderr)
+
+    def test_old_bwrap_version_fallback_uses_val_unknown(self):
+        """Host old-bwrap paths must not leak a hardcoded 未知 into English messages."""
+        common = (REPO / 'lib/common.sh').read_text()
+        start = common.index('_capbox_enforce_bwrap_baseline()')
+        end = common.index('_capbox_audit_old_bwrap()', start)
+        body = common[start:end]
+        self.assertNotIn('未知', body)
+        self.assertIn('val.unknown', body)
+        config = (REPO / 'lib/config.sh').read_text()
+        idx = config.index('config set CAPBOX_ALLOW_OLD_BWRAP 1')
+        block = config[max(0, idx - 500): idx + 80]
+        self.assertNotIn('未知', block)
+        self.assertIn('val.unknown', block)
+
+    def test_need_cmd_and_service_reason_args_use_catalog_keys(self):
+        """Hints and service reasons must be catalog keys, not Chinese literals."""
+        zh = i18n.load_catalog('zh')
+        en = i18n.load_catalog('en')
+        self.assertEqual(zh['rootfs.need_curl_to_download'], '下载 rootfs 需要 curl')
+        self.assertEqual(en['rootfs.need_curl_to_download'], 'Downloading a rootfs requires curl')
+        self.assertEqual(zh['cli.module_not_ready'], '{module} 尚未就绪')
+        self.assertEqual(en['cli.module_not_ready'], '{module} is not ready')
+        self.assertEqual(zh['svc.restricted_prerequisites_not_met'], 'restricted 前置不满足')
+        self.assertEqual(en['svc.restricted_prerequisites_not_met'],
+                         'restricted prerequisites are not met')
+        self.assertNotIn('尚未就绪', Path(REPO / 'bin/capbox').read_text())
+        import re
+        cjk = re.compile(r'[\u4e00-\u9fff]')
+        for rel, prefixes in (
+            ('lib/rootfs.sh', ('need_cmd ',)),
+            ('lib/config.sh', ('need_cmd ',)),
+            ('lib/service.sh', ('_service_abort ', '_service_diagnose ')),
+            ('bin/capbox', ('_require_decl ',)),
+        ):
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if any(line.lstrip().startswith(p) or f'; {p}' in line for p in prefixes):
+                    self.assertFalse(cjk.search(line), f'{rel}:{i}: {line}')
+
 
 if __name__ == '__main__':
     unittest.main()

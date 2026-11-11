@@ -13,10 +13,10 @@
 _fsguard_validate_rel_path() {
   local p="${1:-}"
   [[ -n "$p" ]] || return 1
-  [[ "$p" != /* ]] || { log_err "FS 路径不能是绝对路径: $p"; return 2; }
-  [[ "$p" != *..* ]] || { log_err "FS 路径禁止 ..: $p"; return 2; }
-  [[ "$p" != *//* ]] || { log_err "FS 路径禁止空段: $p"; return 2; }
-  [[ "$p" =~ ^[A-Za-z0-9._@+=,/-]+$ ]] || { log_err "FS 路径含非法字符: $p"; return 2; }
+  [[ "$p" != /* ]] || { i18n_err fs.fs_path_must_not_absolute p="$p"; return 2; }
+  [[ "$p" != *..* ]] || { i18n_err fs.fs_path_must_not_contain p="$p"; return 2; }
+  [[ "$p" != *//* ]] || { i18n_err fs.fs_path_must_not_contain_empty_segments p="$p"; return 2; }
+  [[ "$p" =~ ^[A-Za-z0-9._@+=,/-]+$ ]] || { i18n_err fs.fs_path_contains_illegal_characters p="$p"; return 2; }
   return 0
 }
 
@@ -38,15 +38,15 @@ _fsguard_parse_bind_spec() {
   _fs_bind_host="" _fs_bind_guest="" _fs_bind_mode=""
   # 从右拆 mode，再拆 guest（guest 必须绝对路径）
   if [[ ! "$spec" =~ ^(.+):(/[^:]+):(ro|rw)$ ]]; then
-    log_err "FS_BINDS 项格式必须是 host:/guest/path:ro|rw（当前: $spec）"
+    i18n_err fs.fs_binds_entry_must_host_guest_path spec="$spec"
     return 2
   fi
   _fs_bind_host="${BASH_REMATCH[1]}"
   _fs_bind_guest="${BASH_REMATCH[2]}"
   _fs_bind_mode="${BASH_REMATCH[3]}"
-  [[ "$_fs_bind_guest" != *..* ]] || { log_err "guest 路径禁止 .."; return 2; }
+  [[ "$_fs_bind_guest" != *..* ]] || { i18n_err fs.guest_path_must_not_contain; return 2; }
   _fsguard_host_in_workspace "$_fs_bind_host" || {
-    log_err "拒绝工作区外宿主 bind: $_fs_bind_host（只允许 CAPBOX_WORKSPACE 内）"
+    i18n_err fs.refusing_host_bind_outside_workspace_only_paths _fs_bind_host="$_fs_bind_host"
     return 2
   }
   return 0
@@ -76,7 +76,7 @@ _fsguard_validate_config() {
   fi
   case "${CAPBOX_ROOTFS_RO:-0}" in
     0|1|true|false|yes|no|"") ;;
-    *) log_err "CAPBOX_ROOTFS_RO 只能是 0/1"; return 2 ;;
+    *) i18n_err fs.capbox_rootfs_ro_must_0_1; return 2 ;;
   esac
   return 0
 }
@@ -137,13 +137,13 @@ _fsguard_apply_rootfs_mount() {
       base="$(_fsguard_overlay_dir)/active"
       u="$base/upper"
       w="$base/work"
-      mkdir -p "$u" "$w" || die 1 "无法创建 overlay 目录"
+      mkdir -p "$u" "$w" || i18n_die 1 fs.unable_create_overlay_directories
       _fm_arr+=(--overlay-src "$rf" --overlay "$u" "$w" /)
       CAPBOX_FS_OVERLAY_ACTIVE=1
       log_debug "rootfs: overlay RW upper=$u（底层 RO）"
     else
       _fm_arr+=(--ro-bind "$rf" /)
-      log_warn "ROOTFS_RO=1 但 overlay 不可用：根只读挂载，写入 / 会失败（/tmp /run 仍为 tmpfs）"
+      i18n_warn fs.rootfs_ro_1_overlay_unavailable_root_will
     fi
   else
     _fm_arr+=(--bind "$rf" /)
@@ -185,13 +185,13 @@ _fsguard_append_binds() {
     part="${part#"${part%%[![:space:]]*}"}"
     part="${part%"${part##*[![:space:]]}"}"
     [[ -n "$part" ]] || continue
-    _fsguard_parse_bind_spec "$part" || die 2 "FS_BINDS 非法: $part"
+    _fsguard_parse_bind_spec "$part" || i18n_die 2 fs.invalid_fs_binds part="$part"
     if declare -F _capbox_guest_covers_logs >/dev/null 2>&1 && _capbox_guest_covers_logs "$_fs_bind_guest"; then
-      log_err "FS_BINDS 不能挂到 logs/ 上（审计日志必须保持只读）: $_fs_bind_guest"
+      i18n_err fs.fs_binds_cannot_mount_onto_logs_audit _fs_bind_guest="$_fs_bind_guest"
       return 2
     fi
     local abs
-    abs="$(resolve_path "$_fs_bind_host")" || die 2 "无法规范化 FS_BINDS 宿主路径: $_fs_bind_host"
+    abs="$(resolve_path "$_fs_bind_host")" || i18n_die 2 fs.unable_normalize_fs_binds_host_path _fs_bind_host="$_fs_bind_host"
     if [[ "$_fs_bind_mode" == "ro" ]]; then
       _fb_arr+=(--ro-bind "$abs" "$_fs_bind_guest")
     else
@@ -237,7 +237,7 @@ cmd_snapshot() {
       ;;
     create)
       local name="${1:-}"
-      _fsguard_valid_snap_name "$name" || die 2 "快照名非法"
+      _fsguard_valid_snap_name "$name" || i18n_die 2 fs.invalid_snapshot_name
       require_rootfs
       local d out
       d="$(_fsguard_snap_dir)"
@@ -253,7 +253,7 @@ cmd_snapshot() {
       local sum
       sum="$(sha256sum "$out" | awk '{print $1}')"
       printf '%s\n' "$sum" >"${out}.sha256"
-      log_info "快照已创建: $out (sha256=$sum)"
+      i18n_info fs.snapshot_created_sha256 out="$out" sum="$sum"
       if declare -F audit_event >/dev/null 2>&1; then
         audit_event snapshot ok "object=$name" "detail=$out" "exit=0" "ms=0"
       fi
@@ -262,17 +262,17 @@ cmd_snapshot() {
       ;;
     restore)
       local name="${1:-}"
-      _fsguard_valid_snap_name "$name" || die 2 "快照名非法"
+      _fsguard_valid_snap_name "$name" || i18n_die 2 fs.invalid_snapshot_name
       local d arch
       d="$(_fsguard_snap_dir)"
       if [[ -f "$d/${name}.tar.zst" ]]; then arch="$d/${name}.tar.zst"
       elif [[ -f "$d/${name}.tar.gz" ]]; then arch="$d/${name}.tar.gz"
-      else die 1 "快照不存在: $name"; fi
+      else i18n_die 1 fs.snapshot_does_not_exist name="$name"; fi
       if [[ -f "${arch}.sha256" ]]; then
         local expect got
         expect="$(tr -d ' \n' <"${arch}.sha256" | cut -c1-64)"
         got="$(sha256sum "$arch" | awk '{print $1}')"
-        [[ "$expect" == "$got" ]] || die 1 "快照校验失败: $arch"
+        [[ "$expect" == "$got" ]] || i18n_die 1 fs.snapshot_verification_failed arch="$arch"
       fi
       local parent tmp
       parent="$(dirname "$CAPBOX_ROOTFS")"
@@ -285,15 +285,15 @@ cmd_snapshot() {
         tar --numeric-owner -C "$tmp" -xzf "$arch"
       fi
       local extracted="$tmp/$(basename "$CAPBOX_ROOTFS")"
-      [[ -d "$extracted" ]] || die 1 "快照内容缺少 $(basename "$CAPBOX_ROOTFS")"
+      [[ -d "$extracted" ]] || i18n_die 1 fs.snapshot_contents_missing name="$(basename "$CAPBOX_ROOTFS")"
       local bak="$parent/.rootfs-bak-$$"
       mv -- "$CAPBOX_ROOTFS" "$bak"
       if ! mv -- "$extracted" "$CAPBOX_ROOTFS"; then
         mv -- "$bak" "$CAPBOX_ROOTFS" || true
-        die 1 "恢复失败，已尝试回退"
+        i18n_die 1 fs.restore_failed_rollback_attempted
       fi
       rm -rf "$bak" "$tmp"
-      log_info "已从快照恢复: $name"
+      i18n_info fs.restored_snapshot name="$name"
       if declare -F audit_event >/dev/null 2>&1; then
         audit_event snapshot ok "object=$name" "detail=restored" "exit=0" "ms=0"
       fi
@@ -301,13 +301,13 @@ cmd_snapshot() {
       ;;
     rm|remove)
       local name="${1:-}"
-      _fsguard_valid_snap_name "$name" || die 2 "快照名非法"
+      _fsguard_valid_snap_name "$name" || i18n_die 2 fs.invalid_snapshot_name
       rm -f -- "$(_fsguard_snap_dir)/${name}.tar.zst" "$(_fsguard_snap_dir)/${name}.tar.gz" \
         "$(_fsguard_snap_dir)/${name}.tar.zst.sha256" "$(_fsguard_snap_dir)/${name}.tar.gz.sha256"
-      log_info "已删除快照 $name"
+      i18n_info fs.deleted_snapshot name="$name"
       return 0
       ;;
-    *) die 2 "snapshot: 未知子命令 $sub" ;;
+    *) i18n_die 2 fs.snapshot_unknown_subcommand sub="$sub" ;;
   esac
 }
 

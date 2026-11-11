@@ -54,7 +54,7 @@ _recipe_parse_line() {
   raw="${BASH_REMATCH[2]}"
   short="$(_recipe_norm_key "$key")"
   _recipe_known "$short" || {
-    log_err "recipe 未知键: $key"
+    i18n_err recipe.recipe_unknown_key key="$key"
     return 1
   }
   if [[ "$raw" == \'* ]]; then
@@ -86,7 +86,7 @@ _recipe_parse_line() {
     if [[ "$raw" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ ]]; then
       local inner="${BASH_REMATCH[1]}"
       if [[ "$inner" =~ [\$\`\\] ]]; then
-        log_warn "recipe 拒绝含展开符的双引号值: $key"
+        i18n_warn recipe.recipe_rejected_double_quoted_value_containing_expansion key="$key"
         return 1
       fi
       _recipe_key="$short"
@@ -100,7 +100,7 @@ _recipe_parse_line() {
     fi
     raw="${raw%"${raw##*[![:space:]]}"}"
     if [[ -n "$raw" && "$raw" =~ [\$\`\;\|\&\<\>\(\)\{\}] ]]; then
-      log_warn "recipe 拒绝不安全的裸值: $key"
+      i18n_warn recipe.recipe_rejected_unsafe_bare_value key="$key"
       return 1
     fi
     _recipe_key="$short"
@@ -112,7 +112,7 @@ _recipe_parse_line() {
 _recipe_find_file() {
   local hint="${1:-}"
   if [[ -n "$hint" ]]; then
-    [[ -f "$hint" ]] || die 2 "recipe 文件不存在: $hint"
+    [[ -f "$hint" ]] || i18n_die 2 recipe.recipe_file_does_not_exist hint="$hint"
     printf '%s' "$hint"
     return 0
   fi
@@ -137,11 +137,11 @@ _recipe_load_into() {
     [[ -n "$trimmed" && "$trimmed" != \#* ]] || continue
     _recipe_key=""; _recipe_val=""
     if ! _recipe_parse_line "$line"; then
-      log_err "recipe 第 $number 行无效（只接受已知键的 KEY=value）"
+      i18n_err recipe.recipe_line_invalid_only_key_value_known number="$number"
       return 2
     fi
     [[ -z "${_rl[$_recipe_key]+x}" ]] || {
-      log_err "recipe 重复键: $_recipe_key（第 $number 行）"; return 2;
+      i18n_err recipe.recipe_duplicate_key_line _recipe_key="$_recipe_key" number="$number"; return 2;
     }
     _rl["$_recipe_key"]="$_recipe_val"
   done <"$file"
@@ -156,7 +156,7 @@ _recipe_validate() {
       INIT)
         case "${_rv[$k],,}" in
           0|1|true|false|yes|no|on|off) ;;
-          *) log_err 'recipe INIT 只能是布尔值'; return 2 ;;
+          *) i18n_err recipe.recipe_init_must_boolean; return 2 ;;
         esac ;;
       PACKAGES)
         raw="${_rv[$k]//,/ }"
@@ -193,7 +193,7 @@ _cmd_recipe_dispatch() {
       if [[ -f "$sub" ]]; then
         _recipe_cmd_apply "$sub"
       else
-        die 2 "用法: capbox recipe <check|apply|show> [FILE]"
+        i18n_die 2 recipe.usage_capbox_recipe_check_apply_show_file
       fi
       ;;
   esac
@@ -222,7 +222,7 @@ cmd_recipe() {
 
 _recipe_cmd_show() {
   local f
-  f="$(_recipe_find_file "${1:-}")" || die 2 "未找到 recipe（试 capbox.recipe 或 .capbox/recipe.env）"
+  f="$(_recipe_find_file "${1:-}")" || i18n_die 2 recipe.recipe_not_found_tried_capbox_recipe_capbox
   printf '# recipe: %s\n' "$f"
   cat -- "$f"
 }
@@ -233,14 +233,14 @@ _recipe_cmd_apply() {
     case "$1" in
       --check) check=1; shift ;;
       --locked)
-        [[ $# -ge 2 ]] || die 2 '--locked 需要锁文件'
+        [[ $# -ge 2 ]] || i18n_die 2 recipe.locked_requires_lock_file
         locked="$2"; shift 2 ;;
-      -*) die 2 "recipe 未知选项: $1" ;;
-      *) [[ -z "$hint" ]] || die 2 'recipe 只接受一个文件'; hint="$1"; shift ;;
+      -*) i18n_die 2 recipe.recipe_unknown_option arg="$1" ;;
+      *) [[ -z "$hint" ]] || i18n_die 2 recipe.recipe_accepts_only_one_file; hint="$1"; shift ;;
     esac
   done
-  f="$(_recipe_find_file "$hint")" || die 2 "未找到 recipe（试 capbox.recipe 或 .capbox/recipe.env）"
-  log_info "应用配方: $f"
+  f="$(_recipe_find_file "$hint")" || i18n_die 2 recipe.recipe_not_found_tried_capbox_recipe_capbox
+  i18n_info recipe.applying_recipe f="$f"
 
   declare -A R=()
   _recipe_load_into "$f" R || return $?
@@ -269,18 +269,18 @@ _recipe_cmd_apply() {
 
   if (( do_init == 1 )); then
     if ! rootfs_ready 2>/dev/null; then
-      log_info "recipe: rootfs 未就绪，执行 init"
+      i18n_info recipe.recipe_rootfs_not_ready_running_init
       if declare -F cmd_init >/dev/null 2>&1; then
         local d="${R[DISTRO]:-$CAPBOX_DISTRO}"
         cmd_init --distro "$d" || return $?
       else
-        die 1 "cmd_init 不可用"
+        i18n_die 1 recipe.cmd_init_unavailable
       fi
     else
       if [[ -n "${R[DISTRO]:-}" && "${R[DISTRO]}" != "$CAPBOX_DISTRO" ]]; then
         cmd_init --distro "${R[DISTRO]}" || return $?
       fi
-      log_info "recipe: rootfs 已就绪，跳过下载"
+      i18n_info recipe.recipe_rootfs_already_ready_skipping_download
     fi
   fi
 
@@ -291,16 +291,16 @@ _recipe_cmd_apply() {
     raw="${R[PACKAGES]//,/ }"
     read -r -a pkgs <<<"$raw"
     if [[ ${#pkgs[@]} -gt 0 ]]; then
-      log_info "recipe: 安装软件包: ${pkgs[*]}"
+      i18n_info recipe.recipe_installing_packages pkgs="${pkgs[*]}"
       if declare -F cmd_pkg >/dev/null 2>&1; then
         cmd_pkg install -- "${pkgs[@]}" || return $?
       else
-        die 1 "cmd_pkg 不可用"
+        i18n_die 1 recipe.cmd_pkg_unavailable
       fi
     fi
   fi
 
-  log_info "配方应用完成"
+  i18n_info recipe.recipe_applied
   return 0
 }
 

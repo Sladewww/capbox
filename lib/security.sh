@@ -20,7 +20,7 @@ _security_profile() {
     untrusted) printf 'untrusted' ;;
     strict) printf 'strict' ;;
     *)
-      log_err "CAPBOX_SECURITY_PROFILE 只能是 compat|untrusted|strict（当前: ${CAPBOX_SECURITY_PROFILE}）"
+      i18n_err sec.capbox_security_profile_must_compat_untrusted_strict value="${CAPBOX_SECURITY_PROFILE}"
       return 2
       ;;
   esac
@@ -62,12 +62,12 @@ _security_ensure_bpf() {
     *) return 1 ;;
   esac
   have_cmd python3 || {
-    log_err "安全档 $profile 需要 python3 + libseccomp 生成 seccomp BPF"
+    i18n_err sec.security_profile_requires_python3_libseccomp_generate_seccom profile="$profile"
     return 5
   }
   local py out
   py="$(_security_seccomp_py)" || {
-    log_err "缺少 lib/seccomp-gen.py"
+    i18n_err sec.missing_lib_seccomp_gen_py
     return 5
   }
   out="$(_security_bpf_path "$profile")" || return 5
@@ -83,12 +83,12 @@ _security_ensure_bpf() {
   [[ "${CAPBOX_APK_SCRIPT_FILTER:-0}" != 1 ]] || gen_args+=(--deny-exec-memfd)
   if ! python3 "$py" "${gen_args[@]}" 2>"${out}.err"; then
     rm -f -- "$tmp"
-    log_err "seccomp BPF 生成失败（见 ${out}.err）；拒绝伪实现"
+    i18n_err sec.seccomp_bpf_generation_failed_see_err_refusing out="${out}"
     return 5
   fi
   [[ -s "$tmp" ]] || {
     rm -f -- "$tmp"
-    log_err "seccomp BPF 为空，拒绝继续"
+    i18n_err sec.seccomp_bpf_empty_refusing_continue
     return 5
   }
   mv -f -- "$tmp" "$out" || return 5
@@ -205,7 +205,7 @@ _security_wrap_argv() {
   # 打开只读 FD
   local fd
   exec {fd}<"$bpf" || {
-    log_err "无法打开 seccomp BPF: $bpf"
+    i18n_err sec.unable_open_seccomp_bpf bpf="$bpf"
     return 5
   }
   CAPBOX_SECURITY_SECCOMP_FD_HOLD="$fd"

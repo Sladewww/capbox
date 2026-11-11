@@ -52,7 +52,7 @@ _landlock_enabled() {
       return 1
       ;;
     *)
-      log_err "CAPBOX_LANDLOCK 只能是 on 或 off（当前: ${v}）"
+      i18n_err landlock.capbox_landlock_must_off_got v="${v}"
       return 2
       ;;
   esac
@@ -61,13 +61,13 @@ _landlock_enabled() {
 _landlock_ensure_helper() {
   local src dir bin cc tmp err
   src="$(_landlock_src)" || {
-    log_err "缺少 lib/guest/capbox-landlock.c"
+    i18n_err landlock.missing_lib_guest_capbox_landlock_c
     return 5
   }
   dir="$(_landlock_private_dir)" || return 5
   bin="$dir/capbox-landlock"
   if [[ -L "$bin" ]]; then
-    log_err "Landlock helper 是符号链接: $bin"
+    i18n_err landlock.landlock_helper_symlink bin="$bin"
     return 5
   fi
   if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
@@ -76,27 +76,27 @@ _landlock_ensure_helper() {
     elif have_cmd cc; then
       cc=cc
     else
-      log_err "CAPBOX_LANDLOCK 需要宿主 gcc -static 来构建 helper"
+      i18n_err landlock.capbox_landlock_requires_host_gcc_static_build
       return 5
     fi
     tmp="$(mktemp "$dir/build.XXXXXX")" || {
-      log_err "无法创建 Landlock 构建临时文件"
+      i18n_err landlock.unable_create_temporary_file_landlock_build
       return 5
     }
     err="$("$cc" -static -O2 -s -o "$tmp" "$src" 2>&1)" || {
       rm -f "$tmp"
-      log_err "构建 capbox-landlock 失败（需要 gcc -static）: ${err:-unknown}"
+      i18n_err landlock.failed_build_capbox_landlock_gcc_static_required err="${err:-unknown}"
       return 5
     }
     chmod 755 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$bin" || {
       rm -f "$tmp"
-      log_err "无法安装 capbox-landlock: $bin"
+      i18n_err landlock.unable_install_capbox_landlock bin="$bin"
       return 5
     }
   fi
   [[ -x "$bin" && ! -L "$bin" ]] || {
-    log_err "capbox-landlock 不可执行: $bin"
+    i18n_err landlock.capbox_landlock_not_executable bin="$bin"
     return 5
   }
   printf '%s' "$bin"
@@ -119,7 +119,7 @@ _landlock_write_rules() {
   local dir file mode base ent disk
   dir="$(_landlock_private_dir)" || return 5
   file="$(mktemp "$dir/rules.XXXXXX")" || {
-    log_err "无法创建 Landlock 规则文件"
+    i18n_err landlock.unable_create_landlock_rules_file
     return 5
   }
   chmod 644 "$file" 2>/dev/null || true
@@ -149,7 +149,7 @@ _landlock_write_rules() {
     fi
   } >"$file" || {
     rm -f "$file"
-    log_err "写入 Landlock 规则失败"
+    i18n_err landlock.failed_write_landlock_rules
     return 5
   }
   printf '%s' "$file"
@@ -179,7 +179,7 @@ _landlock_apply_argv() {
     fi
   done
   if (( bwrap_i < 0 )); then
-    log_err "Landlock 已启用，但启动命令里没有 bwrap"
+    i18n_err landlock.landlock_enabled_launch_command_has_no_bwrap
     return 5
   fi
   for (( i = bwrap_i + 1; i < ${#_ll_cmd[@]}; i++ )); do
@@ -189,11 +189,11 @@ _landlock_apply_argv() {
     fi
   done
   if (( dd < 0 )); then
-    log_err "Landlock 已启用，但 bwrap 参数缺少命令分隔符 --"
+    i18n_err landlock.landlock_enabled_bwrap_arguments_missing_command_separator
     return 5
   fi
   if (( dd + 1 >= ${#_ll_cmd[@]} )); then
-    log_err "Landlock 已启用，但没有容器内命令"
+    i18n_err landlock.landlock_enabled_there_no_guest_command
     return 5
   fi
 
