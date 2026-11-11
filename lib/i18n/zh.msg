@@ -1051,3 +1051,8 @@ res.fail_closed_memory_max=MEMORY_MAX(需要 cgroup memory.max，不能用 prlim
 res.fail_closed_pids_max=PIDS_MAX(需要 cgroup pids.max)
 res.fail_closed_cpu_max=CPU_MAX(需要 cgroup cpu.max)
 res.fail_closed_disk_not_honored=未按私有 loop 兑现
+
+# leftover resources.sh runtime errors interpolated on the host into wrap/cleanup scripts
+res.disk_max_unload_failed_leaving=capbox: DISK_MAX 卸载失败，保留 {base}
+res.cgroup_procs_write_failed=写入 cgroup.procs 失败
+res.cgroup_leaf_missing_after_setup=setup 后缺少 cgroup leaf

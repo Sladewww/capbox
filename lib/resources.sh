@@ -633,6 +633,9 @@ _resources_apply_disk_wrap() {
   fi
 
   # 命令结束后用同一份脚本卸载。sudo 失败不回落到无特权 rm。
+  # 在宿主上译好文案再嵌入 bash -c；子脚本内不得调用 i18n_*。
+  local unload_fail
+  unload_fail="$(i18n_get res.disk_max_unload_failed_leaving)"
   _dw_cmd=(
     /bin/bash -c
     'set -u
@@ -647,7 +650,8 @@ _resources_apply_disk_wrap() {
        if [[ "$rc" -eq 0 ]]; then
          rm -f -- "$ops"
        else
-         printf "capbox: DISK_MAX 卸载失败，保留 %s\n" "$base" >&2
+         _um='"$(printf '%q' "$unload_fail")"'
+         printf "%s\n" "${_um//\{base\}/$base}" >&2
        fi
        return "$rc"
      }
@@ -706,11 +710,16 @@ _resources_wrap_argv() {
   local cgroup_ok=0
   if _resources_setup_cgroup; then
     cgroup_ok=1
-    local cg="${CAPBOX_RESOURCES_CGROUP_LEAF:?setup 后缺少 cgroup leaf}"
+    local leaf_missing
+    leaf_missing="$(i18n_get res.cgroup_leaf_missing_after_setup)"
+    local cg="${CAPBOX_RESOURCES_CGROUP_LEAF:?$leaf_missing}"
     local -a inner=("${_rw_cmd[@]}")
+    # 在宿主上译好文案再嵌入 bash -c；子脚本内不得调用 i18n_*。
+    local procs_fail
+    procs_fail="$(i18n_get res.cgroup_procs_write_failed)"
     _rw_cmd=(
       /bin/bash -c
-      'if ! echo $$ >"$1/cgroup.procs"; then printf "写入 cgroup.procs 失败\n" >&2; exit 1; fi; shift; exec "$@"'
+      'if ! echo $$ >"$1/cgroup.procs"; then printf "%s\n" '"$(printf '%q' "$procs_fail")"' >&2; exit 1; fi; shift; exec "$@"'
       bash
       "$cg"
       "${inner[@]}"
