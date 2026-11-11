@@ -11,6 +11,7 @@ import tarfile
 import time
 import unittest
 from test_agent_workflows import Fixture, ROOTFS, REPO
+os.environ['CAPBOX_LANG'] = 'zh'
 import importlib.util
 from types import SimpleNamespace
 

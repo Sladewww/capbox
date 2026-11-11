@@ -14,6 +14,11 @@ import stat
 import sys
 import uuid
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 SCHEMA = 'capbox.audit-report.v1'
 MAX_SCAN = 32 * 1024 * 1024
 MAX_LINE = 64 * 1024
@@ -26,11 +31,11 @@ SENSITIVE = (r'(?:[A-Za-z][A-Za-z0-9_-]{0,80}[_-])?'
 
 def utc(value, *, date_only=False):
     if not isinstance(value, str) or len(value) > 80:
-        raise ValueError('时间必须为 ISO 8601 格式')
+        raise ValueError(i18n.t('audit.time_must_be_iso8601'))
     parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
     if parsed.tzinfo is None:
         if not date_only or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
-            raise ValueError('时间必须包含时区，例如 2026-11-08T00:00:00Z')
+            raise ValueError(i18n.t('audit.time_must_include_timezone'))
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
@@ -39,19 +44,19 @@ def unique(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError('重复 JSON 键')
+            raise ValueError(i18n.t('audit.duplicate_json_key'))
         result[key] = value
     return result
 
 
 def integer(value):
     if len(value) > 20:
-        raise ValueError('整数过长')
+        raise ValueError(i18n.t('audit.integer_too_long'))
     return int(value)
 
 
 def constant(_value):
-    raise ValueError('非 JSON 数值')
+    raise ValueError(i18n.t('audit.not_a_json_number'))
 
 
 def redact(value):
@@ -67,7 +72,7 @@ def parent_fd(path):
     """钉住每一级目录，不跟随 guest 可写的符号链接祖先。"""
     path = Path(os.path.abspath(path))
     if not path.name:
-        raise ValueError('必须指定文件名')
+        raise ValueError(i18n.t('audit.filename_required'))
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
         for component in path.parts[1:-1]:
@@ -82,12 +87,12 @@ def parent_fd(path):
 
 def normalise(data, number, counters):
     if not isinstance(data, dict):
-        raise ValueError('记录不是对象')
+        raise ValueError(i18n.t('audit.record_not_an_object'))
     timestamp = utc(data.get('ts'))
     for key, limit in (('kind', 64), ('status', 64)):
         value = data.get(key)
         if not isinstance(value, str) or not value.strip() or len(value) > limit:
-            raise ValueError('记录缺少类型或状态')
+            raise ValueError(i18n.t('audit.record_missing_type_or_status'))
     event = dict(id=number, ts=timestamp.isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
                  time=round(timestamp.timestamp() * 1000), kind=data['kind'], status=data['status'])
     for key in STRING_FIELDS:
@@ -102,7 +107,7 @@ def normalise(data, number, counters):
             counters['redacted_fields'] += 1
         if len(clean) > 2048:
             counters['truncated_fields'] += 1
-            clean = clean[:2048] + '… [字段已截断]'
+            clean = clean[:2048] + i18n.t('audit.field_truncated')
         event[key] = clean
     for key in ('exit', 'ms'):
         value = data.get(key)
@@ -137,7 +142,7 @@ def snapshot(path, args):
     with os.fdopen(fd, 'rb') as incoming:
         info = os.fstat(incoming.fileno())
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError('审计源必须是普通文件')
+            raise ValueError(i18n.t('audit.source_must_be_regular_file'))
         counters['source_bytes'] = info.st_size
         counters['_source_identity'] = (info.st_dev, info.st_ino)
         start = max(0, info.st_size - MAX_SCAN)
@@ -203,16 +208,16 @@ def render(document):
     for tag, directive in (('style', 'STYLE'), ('script', 'SCRIPT')):
         blocks = re.findall(r'<' + tag + r' data-app>(.*?)</' + tag + '>', template, re.S)
         if len(blocks) != 1:
-            raise ValueError('报告模板不完整')
+            raise ValueError(i18n.t('audit.report_template_incomplete'))
         digest = base64.b64encode(hashlib.sha256(blocks[0].encode()).digest()).decode()
         template = template.replace('@@' + directive + '_HASH@@', digest)
     encoded = json.dumps(document, ensure_ascii=True, allow_nan=False, separators=(',', ':'))
     # 惰性 JSON 绝不能关闭其 script 元素。
     encoded = encoded.replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026')
     if len(encoded) > MAX_PAYLOAD:
-        raise ValueError('报告数据超过 32MiB，请缩小 --limit 或时间范围')
+        raise ValueError(i18n.t('audit.report_data_exceeds_32mib'))
     if template.count('@@DATA@@') != 1:
-        raise ValueError('报告模板不完整')
+        raise ValueError(i18n.t('audit.report_template_incomplete'))
     return template.replace('@@DATA@@', encoded).encode()
 
 
@@ -222,18 +227,18 @@ def publish(path, workspace, payload, force, source_identity):
     try:
         actual = Path(os.readlink('/proc/self/fd/' + str(parent)))
         if actual.is_relative_to(workspace):
-            raise ValueError('报告必须导出到工作区之外，避免 guest 改写报告')
+            raise ValueError(i18n.t('audit.report_must_be_outside_workspace'))
         try:
             existing = os.stat(name, dir_fd=parent, follow_symlinks=False)
         except FileNotFoundError:
             existing = None
         if existing is not None:
             if (existing.st_dev, existing.st_ino) == source_identity:
-                raise ValueError('输出不能覆盖审计源文件或其硬链接')
+                raise ValueError(i18n.t('audit.output_cannot_overwrite_source'))
             if not force:
-                raise ValueError('输出已存在；确认替换普通报告文件时使用 --force')
+                raise ValueError(i18n.t('audit.output_exists_use_force'))
             if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid():
-                raise ValueError('只能替换当前用户拥有的普通文件')
+                raise ValueError(i18n.t('audit.can_only_replace_own_regular_file'))
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
         with os.fdopen(fd, 'wb') as output:
             output.write(payload)
@@ -254,23 +259,23 @@ def publish(path, workspace, payload, force, source_identity):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog='capbox audit report', description='导出可搜索、筛选的离线 HTML 审计报告，不启动服务')
-    parser.add_argument('--output', required=True, help='工作区外的 HTML 文件；父目录必须已存在')
-    parser.add_argument('--input', help='显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl')
-    parser.add_argument('--limit', type=int, default=5000, help='保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）')
-    parser.add_argument('--since', help='起始时间（包含）；ISO 8601 时区或 UTC 日期')
-    parser.add_argument('--until', help='结束时间（不包含）；ISO 8601 时区或 UTC 日期')
-    parser.add_argument('--kind', action='append', help='只导出此类型，可重复')
-    parser.add_argument('--status', action='append', help='只导出此状态，可重复')
-    parser.add_argument('--force', action='store_true', help='原子替换当前用户已有的普通输出文件')
-    parser.add_argument('--json', action='store_true', help='输出机器可读的生成结果')
+    parser = i18n.I18nArgumentParser(prog='capbox audit report', description=i18n.t('audit.report_description'))
+    parser.add_argument('--output', required=True, help=i18n.t('audit.help_output'))
+    parser.add_argument('--input', help=i18n.t('audit.help_input'))
+    parser.add_argument('--limit', type=int, default=5000, help=i18n.t('audit.help_limit'))
+    parser.add_argument('--since', help=i18n.t('audit.help_since'))
+    parser.add_argument('--until', help=i18n.t('audit.help_until'))
+    parser.add_argument('--kind', action='append', help=i18n.t('audit.help_kind'))
+    parser.add_argument('--status', action='append', help=i18n.t('audit.help_status'))
+    parser.add_argument('--force', action='store_true', help=i18n.t('audit.help_force'))
+    parser.add_argument('--json', action='store_true', help=i18n.t('audit.help_json'))
     args = parser.parse_args()
     if not 1 <= args.limit <= 20000:
-        parser.error('--limit 必须是 1–20000')
+        parser.error(i18n.t('audit.limit_must_be_1_20000'))
     args.since = round(utc(args.since, date_only=True).timestamp() * 1000) if args.since else None
     args.until = round(utc(args.until, date_only=True).timestamp() * 1000) if args.until else None
     if args.since is not None and args.until is not None and args.since >= args.until:
-        parser.error('--since 必须早于 --until')
+        parser.error(i18n.t('audit.since_must_precede_until'))
     source = Path(args.input or os.environ['CAPBOX_AUDIT_REPORT_SOURCE']).absolute()
     workspace = Path(os.environ['CAPBOX_AUDIT_REPORT_WORKSPACE']).resolve()
     destination = Path(args.output).absolute()
@@ -282,16 +287,16 @@ def main():
                                   filters=dict(since=args.since, until=args.until, kind=args.kind, status=args.status)))
     publish(destination, workspace, render(document), args.force, source_identity)
     result = dict(schema=SCHEMA, path=str(destination), events=len(events), coverage=document['coverage'])
-    print(json.dumps(result, ensure_ascii=True) if args.json else '已生成审计报告: %s（%d 条事件）' % (destination, len(events)))
+    print(json.dumps(result, ensure_ascii=True) if args.json else i18n.t('audit.report_generated', path=destination, count=len(events)))
     return 0
 
 
 if __name__ == '__main__':
     if sys.version_info < (3, 10):
-        print('[capbox] 审计报告需要宿主 Python 3.10+', file=sys.stderr)
+        print(i18n.t('audit.report_requires_python_3_10'), file=sys.stderr)
         sys.exit(5)
     try:
         sys.exit(main())
     except (OSError, ValueError, KeyError, OverflowError) as error:
-        print('[capbox] 审计报告失败: ' + str(error), file=sys.stderr)
+        print(i18n.t('audit.report_failed', error=error), file=sys.stderr)
         sys.exit(1)

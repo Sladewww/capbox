@@ -23,6 +23,11 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+_LIB_DIR = str(Path(__file__).resolve().parent)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import i18n
+
 SCHEMA = 'capbox.credentials.v1'
 PLACEHOLDER_PREFIX = 'capbox-sec-'
 SERVICES_FILE = Path(__file__).with_name('credentials-services.json')
@@ -424,12 +429,12 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     allow = [p.strip() for p in (args.allow or '').split(',') if p.strip()]
     if not allow:
         print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'empty-allow',
-            'hint': '未绑定凭据：CAPBOX_NET_ALLOW 为空。先 config set CAPBOX_NET_ALLOW <host>，再 secret set <service> --value-stdin。'}, ensure_ascii=True))
+            'hint': i18n.t('cred.hint_empty_net_allow')}, ensure_ascii=True))
         return 0
     records = iter_records()
     if not records:
         print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'no-secrets',
-            'hint': '未绑定凭据：宿主密钥库为空。运行: printf "%s" "$KEY" | capbox secret set <service> --value-stdin；guest 只会看到 capbox-sec-… 占位符。'}, ensure_ascii=True))
+            'hint': i18n.t('cred.hint_empty_store')}, ensure_ascii=True))
         return 0
     inject: Dict[str, Any] = {'schema': SCHEMA, 'entries': []}
     guest_env: Dict[str, str] = {}
@@ -465,7 +470,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         needs_mitm = True
     if not inject['entries']:
         print(json.dumps({'schema': SCHEMA, 'active': False, 'skipped': skipped,
-            'hint': '未绑定凭据：已存密钥的域名不在 CAPBOX_NET_ALLOW 中（不会静默放宽）。把 provider host 写入 NET_ALLOW，或 secret set --custom --host …。'}, ensure_ascii=True))
+            'hint': i18n.t('cred.hint_domains_not_in_net_allow')}, ensure_ascii=True))
         return 0
     session = args.session or secrets.token_hex(8)
     root = cred_dir()

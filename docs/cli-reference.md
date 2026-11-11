@@ -195,31 +195,30 @@ CapBox —— 工作区内持久化的 root Linux 容器
 ## capbox task --help
 
 ```text
-usage: capbox task [-h]
-                   {start,list,status,wait,attach,cancel,logs,diff,rm} ...
+用法: capbox task [-h] {start,list,status,wait,attach,cancel,logs,diff,rm} ...
 
-positional arguments:
+位置参数:
   {start,list,status,wait,attach,cancel,logs,diff,rm}
     start               启动独立监督的 exec 任务
 
-options:
-  -h, --help            show this help message and exit
+选项:
+  -h, --help            显示此帮助并退出
 ```
 
 ## capbox task start --help
 
 ```text
-usage: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
-                         [--net {none,restricted,open,host}]
-                         [--profile {compat,untrusted,strict}] [--isolate]
-                         [--max-output-bytes MAX_OUTPUT_BYTES]
-                         ...
+用法: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
+                      [--net {none,restricted,open,host}]
+                      [--profile {compat,untrusted,strict}] [--isolate]
+                      [--max-output-bytes MAX_OUTPUT_BYTES]
+                      ...
 
-positional arguments:
+位置参数:
   command
 
-options:
-  -h, --help            show this help message and exit
+选项:
+  -h, --help            显示此帮助并退出
   --json                结果默认即为版本化 JSON
   --timeout TIMEOUT
   --cwd CWD
@@ -232,61 +231,60 @@ options:
 ## capbox policy --help
 
 ```text
-usage: capbox policy [-h] {show,check} ...
+用法: capbox policy [-h] {show,check} ...
 
-positional arguments:
+位置参数:
   {show,check}
 
-options:
-  -h, --help    show this help message and exit
+选项:
+  -h, --help    显示此帮助并退出
 ```
 
 ## capbox setup --help
 
 ```text
-usage: capbox setup [-h] {check,plan} ...
+用法: capbox setup [-h] {check,plan} ...
 
-positional arguments:
+位置参数:
   {check,plan}
 
-options:
-  -h, --help    show this help message and exit
+选项:
+  -h, --help    显示此帮助并退出
 ```
 
 ## capbox bundle --help
 
 ```text
-usage: capbox bundle [-h] {pack,verify,check,restore} ...
+用法: capbox bundle [-h] {pack,verify,check,restore} ...
 
-positional arguments:
+位置参数:
   {pack,verify,check,restore}
 
-options:
-  -h, --help            show this help message and exit
+选项:
+  -h, --help            显示此帮助并退出
 ```
 
 ## capbox mcp --help
 
 ```text
-usage: capbox mcp [-h] [--profile {untrusted,strict}]
-                  [--net {none,restricted}]
-                  [--workspace-mode {isolated,shared}]
-                  [--max-timeout MAX_TIMEOUT]
-                  {serve}
+用法: capbox mcp [-h] [--profile {untrusted,strict}] [--net {none,restricted}]
+               [--workspace-mode {isolated,shared}]
+               [--max-timeout MAX_TIMEOUT]
+               {serve}
 
-positional arguments:
+位置参数:
   {serve}
 
-options:
-  -h, --help            show this help message and exit
+选项:
+  -h, --help            显示此帮助并退出
   --profile {untrusted,strict}
-                        安全配置档（默认: untrusted)
+                        安全配置档（默认: untrusted）
   --net {none,restricted}
                         网络模式（默认: none；拒绝 open）
   --workspace-mode {isolated,shared}
-                        任务工作区（默认: isolated)
+                        任务工作区（默认: isolated）
   --max-timeout MAX_TIMEOUT
-                        任务超时上限秒数（默认: 600)
+                        任务超时上限秒数（默认: 600）
 ```
 
 ## capbox audit --help
@@ -311,14 +309,14 @@ CAPBOX_AUDIT_CMD=summary|full|off
 ## capbox audit report --help
 
 ```text
-usage: capbox audit report [-h] --output OUTPUT [--input INPUT]
-                           [--limit LIMIT] [--since SINCE] [--until UNTIL]
-                           [--kind KIND] [--status STATUS] [--force] [--json]
+用法: capbox audit report [-h] --output OUTPUT [--input INPUT] [--limit LIMIT]
+                        [--since SINCE] [--until UNTIL] [--kind KIND]
+                        [--status STATUS] [--force] [--json]
 
 导出可搜索、筛选的离线 HTML 审计报告，不启动服务
 
-options:
-  -h, --help       show this help message and exit
+选项:
+  -h, --help       显示此帮助并退出
   --output OUTPUT  工作区外的 HTML 文件；父目录必须已存在
   --input INPUT    显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl
   --limit LIMIT    保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）
