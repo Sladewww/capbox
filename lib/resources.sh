@@ -90,11 +90,11 @@ _resources_probe_cgroup() {
   # 不清理 CAPBOX_CGROUP_ROOT：它是用户可选覆盖，不得被 probe/其它路径覆写
 
   if [[ ! -d /sys/fs/cgroup ]]; then
-    CAPBOX_CGROUP_DETAIL="无 /sys/fs/cgroup"
+    CAPBOX_CGROUP_DETAIL="$(i18n_get res.detail_no_sys_fs_cgroup)"
     return 1
   fi
   if [[ ! -f /sys/fs/cgroup/cgroup.controllers ]]; then
-    CAPBOX_CGROUP_DETAIL="非 cgroup v2 统一层级（缺 cgroup.controllers）"
+    CAPBOX_CGROUP_DETAIL="$(i18n_get res.detail_not_cgroup_v2)"
     return 1
   fi
 
@@ -103,15 +103,15 @@ _resources_probe_cgroup() {
     if ! _resources_self_cgroup_writable; then
       CAPBOX_CGROUP_ACTIVE=""
       CAPBOX_CGROUP_STATUS=denied
-      CAPBOX_CGROUP_DETAIL="限额根探针通过（$find_out），但进程自身 cgroup 不可写，无法迁入子 cgroup。$(_resources_cgroup_dual_hint)"
+      CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_root_ok_self_not_writable root="$find_out" hint="$(_resources_cgroup_dual_hint)")"
       return 1
     fi
     CAPBOX_CGROUP_ACTIVE="$find_out"
     CAPBOX_CGROUP_STATUS=ready
     if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
-      CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=$find_out（真实探针：subtree_control+memory.max 可写）"
+      CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_cgroup_root_writable root="$find_out")"
     else
-      CAPBOX_CGROUP_DETAIL="可写 cgroup 根: $find_out（真实探针：subtree_control+memory.max 可写）"
+      CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_writable_cgroup_root root="$find_out")"
     fi
     return 0
   fi
@@ -119,7 +119,7 @@ _resources_probe_cgroup() {
 
   if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
     CAPBOX_CGROUP_STATUS=denied
-    CAPBOX_CGROUP_DETAIL="CAPBOX_CGROUP_ROOT=${CAPBOX_CGROUP_ROOT} 不可用：${find_out:-不可写或子 cgroup 缺少可写 memory.max}"
+    CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_cgroup_root_unusable root="${CAPBOX_CGROUP_ROOT}" reason="$(i18n_or "${find_out:-}" res.detail_cgroup_root_unwritable_fallback)")"
     return 1
   fi
 
@@ -129,10 +129,15 @@ _resources_probe_cgroup() {
   err="$(mkdir "${cgpath}/.capbox-probe-$$" 2>&1 || true)"
   rmdir "${cgpath}/.capbox-probe-$$" 2>/dev/null || true
   CAPBOX_CGROUP_STATUS=denied
-  if [[ "${find_out}" == *"兑现限额需同时满足"* ]]; then
-    CAPBOX_CGROUP_DETAIL="无法获得可用 cgroup 父目录（self=${self:-/}）；${find_out}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?')"
+  local _hint _ctrls _reason
+  _hint="$(_resources_cgroup_dual_hint)"
+  _ctrls="$(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?')"
+  if [[ -n "$_hint" && "${find_out}" == *"$_hint"* ]]; then
+    CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_no_usable_cgroup_parent self="${self:-/}" reason="${find_out}" controllers="$_ctrls")"
   else
-    CAPBOX_CGROUP_DETAIL="无法获得可用 cgroup 父目录（self=${self:-/}）；${find_out:-mkdir 证据: ${err:-permission denied}}。控制器有 $(tr ' ' ',' </sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo '?') 但当前路径无有效委派。$(_resources_cgroup_dual_hint)"
+    _reason="${find_out:-}"
+    [[ -n "$_reason" ]] || _reason="$(i18n_fmt res.detail_mkdir_evidence err="${err:-permission denied}")"
+    CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_no_usable_cgroup_parent_no_delegate self="${self:-/}" reason="$_reason" controllers="$_ctrls" hint="$_hint")"
   fi
   return 1
 }
@@ -153,7 +158,7 @@ _resources_cgroup_try_enable() {
 # 真实探针：mkdir 子 cgroup → 写 subtree_control(+memory) → 写 memory.max → rmdir。
 # 任一步失败都不算可用。失败原因写入 CAPBOX_CGROUP_FIND_WHY；_resources_find_cgroup_root 亦经 stdout 回传。
 _resources_cgroup_dual_hint() {
-  printf '%s' "兑现限额需同时满足：(1) 进程自身 cgroup 可写（才能把任务迁入子 cgroup）；(2) 限额根为空且已委派（可 mkdir、写 cgroup.subtree_control 与 memory.max）。可 systemctl --user start capbox.slice，设 CAPBOX_CGROUP_ROOT 指向该 slice，并在可写的 user scope 中运行。"
+  i18n_get res.cgroup_dual_hint
 }
 
 # 迁移进子 cgroup 时，源 cgroup 的 cgroup.procs 也必须可写。
@@ -170,13 +175,13 @@ _resources_cgroup_root_usable() {
   local root="$1"
   local probe err=""
   if [[ ! -d "$root" ]]; then
-    CAPBOX_CGROUP_FIND_WHY="不是目录"
+    CAPBOX_CGROUP_FIND_WHY="$(i18n_get res.find_why_not_dir)"
     return 1
   fi
   probe="$root/.capbox-ctrl-probe-$$-$RANDOM"
   if ! mkdir "$probe" 2>/dev/null; then
     err="$(mkdir "$probe" 2>&1 || true)"
-    CAPBOX_CGROUP_FIND_WHY="无法 mkdir 子目录: ${err:-permission denied}"
+    CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_mkdir_failed err="${err:-permission denied}")"
     return 1
   fi
 
@@ -185,7 +190,7 @@ _resources_cgroup_root_usable() {
     if ! echo '+memory' >"$root/cgroup.subtree_control" 2>/dev/null; then
       err="$(echo '+memory' >"$root/cgroup.subtree_control" 2>&1 || true)"
       rmdir "$probe" 2>/dev/null || true
-      CAPBOX_CGROUP_FIND_WHY="无法写入 cgroup.subtree_control(+memory): ${err:-EBUSY/denied}（限额根须为空且已委派；父 cgroup 内有进程时会 EBUSY）。$(_resources_cgroup_dual_hint)"
+      CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_subtree_control err="${err:-EBUSY/denied}" hint="$(_resources_cgroup_dual_hint)")"
       return 1
     fi
     echo '+pids' >"$root/cgroup.subtree_control" 2>/dev/null || true
@@ -200,7 +205,7 @@ _resources_cgroup_root_usable() {
 
   if [[ ! -e "$probe/memory.max" ]]; then
     rmdir "$probe" 2>/dev/null || true
-    CAPBOX_CGROUP_FIND_WHY="子 cgroup 无 memory.max（父级未能委派 memory）。$(_resources_cgroup_dual_hint)"
+    CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_no_memory_max hint="$(_resources_cgroup_dual_hint)")"
     return 1
   fi
 
@@ -209,7 +214,7 @@ _resources_cgroup_root_usable() {
   if ! { echo max >|"$probe/memory.max"; } 2>/dev/null; then
     err="$( { echo max >|"$probe/memory.max"; } 2>&1 || true)"
     rmdir "$probe" 2>/dev/null || true
-    CAPBOX_CGROUP_FIND_WHY="无法写入子 cgroup memory.max: ${err:-permission denied}。$(_resources_cgroup_dual_hint)"
+    CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_memory_max_unwritable err="${err:-permission denied}" hint="$(_resources_cgroup_dual_hint)")"
     return 1
   fi
 
@@ -226,7 +231,7 @@ _resources_find_cgroup_root() {
       printf '%s' "$CAPBOX_CGROUP_ROOT"
       return 0
     fi
-    printf '%s' "${CAPBOX_CGROUP_FIND_WHY:-不可用}"
+    printf '%s' "$(i18n_or "${CAPBOX_CGROUP_FIND_WHY:-}" val.unavailable)"
     return 1
   fi
 
@@ -249,7 +254,7 @@ _resources_find_cgroup_root() {
     last_why="${CAPBOX_CGROUP_FIND_WHY:-}"
   done
   CAPBOX_CGROUP_FIND_WHY="${last_why}"
-  printf '%s' "${last_why:-无可用 cgroup 父目录}"
+  printf '%s' "$(i18n_or "${last_why:-}" res.find_why_no_usable_parent)"
   return 1
 }
 
@@ -394,20 +399,20 @@ _resources_probe_disk() {
   CAPBOX_DISK_PRIV_MODE="${CAPBOX_DISK_PRIV_MODE:-none}"
   if [[ -z "${CAPBOX_DISK_MAX:-}" ]]; then
     CAPBOX_DISK_STATUS=unset
-    CAPBOX_DISK_DETAIL="未配置 CAPBOX_DISK_MAX"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_unset)"
     return 1
   fi
   local guest=""
   if ! guest="$(_resources_disk_guest_path)"; then
-    CAPBOX_DISK_DETAIL="CAPBOX_DISK_GUEST_PATH 非法（必须是绝对路径，且不能含 .. 或 /.）"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_guest_path_invalid)"
     return 1
   fi
   if ! PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}" command -v losetup >/dev/null 2>&1 || ! PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}" command -v mkfs.ext4 >/dev/null 2>&1 || ! command -v mount >/dev/null 2>&1; then
-    CAPBOX_DISK_DETAIL="缺少 losetup/mkfs.ext4/mount（需 e2fsprogs + util-linux）"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_missing_tools)"
     return 1
   fi
   if [[ ! -e /dev/loop-control ]]; then
-    CAPBOX_DISK_DETAIL="无 /dev/loop-control"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_no_loop_control)"
     return 1
   fi
   local mode
@@ -421,18 +426,18 @@ _resources_probe_disk() {
   case "$mode" in
     direct)
       CAPBOX_DISK_STATUS=capable
-      CAPBOX_DISK_DETAIL="priv=direct；loop→${guest}（需 mount 权限，非 rootless）"
+      CAPBOX_DISK_DETAIL="$(i18n_fmt res.disk_detail_priv_direct guest="$guest")"
       return 0
       ;;
     sudo)
       CAPBOX_DISK_STATUS=capable
-      CAPBOX_DISK_DETAIL="priv=sudo -n；loop→${guest}（需宿主授权，非 rootless）"
+      CAPBOX_DISK_DETAIL="$(i18n_fmt res.disk_detail_priv_sudo guest="$guest")"
       return 0
       ;;
     *)
       local lsout
       lsout="$(ls -l /dev/loop-control 2>&1 || true)"
-      CAPBOX_DISK_DETAIL="无 loop/mount 特权: $lsout；需要 root/disk 组或 sudo -n（拒绝假装已限额）"
+      CAPBOX_DISK_DETAIL="$(i18n_fmt res.disk_detail_no_priv lsout="$lsout")"
       return 1
       ;;
   esac
@@ -584,7 +589,7 @@ _resources_apply_disk_wrap() {
     return 1
   }
   guest="$(_resources_disk_guest_path)" || {
-    CAPBOX_DISK_DETAIL="CAPBOX_DISK_GUEST_PATH 非法（必须是绝对路径，且不能含 .. 或 /.）"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_guest_path_invalid)"
     return 1
   }
   _resources_probe_disk || return 1
@@ -595,12 +600,12 @@ _resources_apply_disk_wrap() {
   diskroot="${CAPBOX_STATE_DIR:?}/disk"
   mkdir -p -- "$diskroot" || return 1
   if [[ -L "$diskroot" || -L "${CAPBOX_STATE_DIR}" ]]; then
-    CAPBOX_DISK_DETAIL="state/disk 是符号链接，拒绝建立配额盘"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_state_symlink)"
     return 1
   fi
   base="$(mktemp -d "$diskroot/d.XXXXXX")" || return 1
   if [[ -L "$base" || ! -d "$base" ]]; then
-    CAPBOX_DISK_DETAIL="配额目录不是真实目录"
+    CAPBOX_DISK_DETAIL="$(i18n_get res.disk_detail_quota_dir_not_real)"
     return 1
   fi
   img="$base/disk.img"
@@ -617,13 +622,13 @@ _resources_apply_disk_wrap() {
   fi
 
   if ! _resources_disk_run_ops "$mode" "$ops" setup "$base" "$img" "$bytes"; then
-    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "建立 loop 配额盘失败（priv=$mode）"
+    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "$(i18n_fmt res.disk_detail_loop_setup_failed mode="$mode")"
     return 1
   fi
 
   local -a inner=("${_dw_cmd[@]}")
   if ! _resources_disk_bind_into inner "$base/mnt" "$guest"; then
-    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "argv 中没有 --，无法把配额盘挂进 guest"
+    _resources_disk_fail_cleanup "$mode" "$ops" "$base" "$(i18n_get res.disk_detail_no_dashdash)"
     return 1
   fi
 

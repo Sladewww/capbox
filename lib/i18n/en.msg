@@ -1001,3 +1001,48 @@ doctor.security_idmap_skip_disable_userns=Do not combine an untrusted workload w
 doctor.security_bpf_failed=security profile {profile}, but a seccomp BPF could not be generated (refusing a fake implementation)
 doctor.security_need_seccomp_tools=security profile {profile} requires python3 + lib/seccomp-gen.py + libseccomp
 doctor.security_userns_boundary_recorded=userns boundary recorded: harden reduces the guest attack surface and does not claim host-level isolation
+
+# Shared CAPBOX_*_DETAIL / CAPBOX_BWRAP_VERSION_DETAIL / cgroup find-why text
+common.bwrap_version_unparseable=unable to parse {bin} --version (need >= 0.12.0)
+common.bwrap_version_detail_below=bwrap {ver} is below 0.12.0 (distro-reverted 0.11.x patches do not count; need >= 0.12.0)
+idmap.detail_off=CAPBOX_IDMAP=off (force a single UID)
+idmap.detail_missing_helpers=newuidmap/newgidmap are missing (install the uidmap package); the kernel only allows a single-UID self-mapping
+idmap.detail_no_subuid=user {user} has no usable entry in /etc/subuid
+idmap.detail_uid_map_unparseable=CAPBOX_UID_MAP could not be parsed: {spec}
+idmap.detail_gid_map_unparseable=CAPBOX_GID_MAP could not be parsed: {spec}
+idmap.detail_tmp_dir_failed=could not create the idmap probe temporary directory
+idmap.detail_probe_file_failed=could not create the idmap probe file
+idmap.detail_map_write_failed=newuidmap is present but writing the multi-line mapping failed: {detail}
+idmap.drop_helper_missing_src=capbox-drop-priv.c is missing
+idmap.drop_helper_no_gcc=gcc/cc is missing, cannot build the static helper
+idmap.drop_helper_gcc_failed=gcc -static failed: {err}
+idmap.drop_helper_ready=static helper is ready for a read-only bind ({bin})
+idmap.drop_helper_missing_after_build=helper is still missing after the build
+res.cgroup_dual_hint=Honoring limits requires both: (1) the process's own cgroup is writable (so the task can be moved into a child cgroup); (2) the limit root is empty and already delegated (mkdir, and writes to cgroup.subtree_control and memory.max, succeed). You can systemctl --user start capbox.slice, set CAPBOX_CGROUP_ROOT to that slice, and run inside a writable user scope.
+res.detail_no_sys_fs_cgroup=/sys/fs/cgroup is missing
+res.detail_not_cgroup_v2=not a cgroup v2 unified hierarchy (cgroup.controllers is missing)
+res.detail_root_ok_self_not_writable=limit-root probe succeeded ({root}), but the process's own cgroup is not writable, so the task cannot be moved into a child cgroup. {hint}
+res.detail_cgroup_root_writable=CAPBOX_CGROUP_ROOT={root} (live probe: subtree_control+memory.max are writable)
+res.detail_writable_cgroup_root=writable cgroup root: {root} (live probe: subtree_control+memory.max are writable)
+res.detail_cgroup_root_unwritable_fallback=not writable, or a child cgroup is missing a writable memory.max
+res.detail_cgroup_root_unusable=CAPBOX_CGROUP_ROOT={root} is unusable: {reason}
+res.detail_no_usable_cgroup_parent=no usable cgroup parent (self={self}); {reason}. controllers: {controllers}
+res.detail_no_usable_cgroup_parent_no_delegate=no usable cgroup parent (self={self}); {reason}. controllers: {controllers}, but the current path has no effective delegation. {hint}
+res.detail_mkdir_evidence=mkdir evidence: {err}
+res.find_why_not_dir=not a directory
+res.find_why_mkdir_failed=cannot mkdir a child directory: {err}
+res.find_why_subtree_control=cannot write cgroup.subtree_control(+memory): {err} (the limit root must be empty and already delegated; EBUSY if the parent cgroup has processes). {hint}
+res.find_why_no_memory_max=child cgroup has no memory.max (parent did not delegate memory). {hint}
+res.find_why_memory_max_unwritable=cannot write child cgroup memory.max: {err}. {hint}
+res.find_why_no_usable_parent=no usable cgroup parent
+res.disk_detail_unset=CAPBOX_DISK_MAX is not set
+res.disk_detail_guest_path_invalid=CAPBOX_DISK_GUEST_PATH is invalid (must be an absolute path, and must not contain .. or /.)
+res.disk_detail_missing_tools=losetup/mkfs.ext4/mount are missing (need e2fsprogs + util-linux)
+res.disk_detail_no_loop_control=/dev/loop-control is missing
+res.disk_detail_priv_direct=priv=direct; loop→{guest} (needs mount permission, not rootless)
+res.disk_detail_priv_sudo=priv=sudo -n; loop→{guest} (needs host authorization, not rootless)
+res.disk_detail_no_priv=no loop/mount privilege: {lsout}; need root, the disk group, or sudo -n (refusing to pretend limits are in effect)
+res.disk_detail_state_symlink=state/disk is a symlink, refusing to create the quota disk
+res.disk_detail_quota_dir_not_real=quota directory is not a real directory
+res.disk_detail_loop_setup_failed=failed to create the loop quota disk (priv={mode})
+res.disk_detail_no_dashdash=argv has no --, cannot bind the quota disk into the guest

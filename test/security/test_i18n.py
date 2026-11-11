@@ -338,6 +338,77 @@ class CliResolveTests(unittest.TestCase):
         self.assertEqual(zh['doctor.workspace_safe'], '工作区安全 ({workspace})')
         self.assertEqual(en['doctor.workspace_safe'], 'Workspace is safe ({workspace})')
 
+    def test_shared_detail_values_locked_and_not_leaked_in_english_doctor(self):
+        """CAPBOX_*_DETAIL assignment sites follow CAPBOX_LANG; English doctor must not embed Chinese details."""
+        zh_cat = i18n.load_catalog('zh')
+        en_cat = i18n.load_catalog('en')
+        self.assertEqual(
+            zh_cat['idmap.detail_missing_helpers'],
+            '缺少 newuidmap/newgidmap（安装 uidmap 包）；内核仅允许单 UID 自映射')
+        self.assertEqual(
+            en_cat['idmap.detail_missing_helpers'],
+            'newuidmap/newgidmap are missing (install the uidmap package); '
+            'the kernel only allows a single-UID self-mapping')
+        self.assertEqual(
+            zh_cat['common.bwrap_version_unparseable'],
+            '无法解析 {bin} --version（需要 >= 0.12.0）')
+        self.assertEqual(
+            en_cat['common.bwrap_version_unparseable'],
+            'unable to parse {bin} --version (need >= 0.12.0)')
+        self.assertEqual(zh_cat['res.cgroup_dual_hint'].startswith('兑现限额需同时满足'), True)
+        self.assertIn('Honoring limits requires both', en_cat['res.cgroup_dual_hint'])
+
+        chinese_details = (
+            '缺少 newuidmap/newgidmap',
+            '内核仅允许单 UID 自映射',
+            '无法获得可用 cgroup 父目录',
+            '兑现限额需同时满足',
+            '无法 mkdir 子目录',
+            '无法解析',
+        )
+        zh = self.run_cli('doctor', env={'CAPBOX_LANG': 'zh'})
+        en = self.run_cli('doctor', env={'CAPBOX_LANG': 'en'})
+        en_text = en.stdout + en.stderr
+        for phrase in chinese_details:
+            self.assertNotIn(phrase, en_text, phrase)
+        # On hosts without uidmap, the representative idmap detail must flip with the language.
+        if '缺少 newuidmap/newgidmap' in zh.stdout:
+            self.assertIn('newuidmap/newgidmap are missing', en.stdout)
+
+        fake = Path(self.tmp.name) / 'bwrap-unparseable-detail'
+        fake.write_text('#!/bin/sh\necho no-version-here\n')
+        fake.chmod(0o755)
+        def version_detail(lang):
+            quoted = subprocess.list2cmdline([str(fake)])
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/common.sh"; '
+                f'_capbox_bwrap_version_ok {quoted} || true; '
+                'printf "%s\n" "$CAPBOX_BWRAP_VERSION_DETAIL"'
+            )
+            result = run_bash(script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+        zh_detail = version_detail('zh')
+        en_detail = version_detail('en')
+        self.assertIn('无法解析', zh_detail)
+        self.assertNotIn('unable to parse', zh_detail)
+        self.assertIn('unable to parse', en_detail)
+        self.assertNotIn('无法解析', en_detail)
+
+        import re
+        cjk = re.compile(r'[\u4e00-\u9fff]')
+        for rel, needles in (
+            ('lib/common.sh', ('CAPBOX_BWRAP_VERSION_DETAIL=',)),
+            ('lib/idmap.sh', ('CAPBOX_IDMAP_DETAIL=', 'CAPBOX_IDMAP_DROP_HELPER_DETAIL=')),
+            ('lib/resources.sh', ('CAPBOX_CGROUP_DETAIL=', 'CAPBOX_CGROUP_FIND_WHY=', 'CAPBOX_DISK_DETAIL=')),
+        ):
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if line.lstrip().startswith('#'):
+                    continue
+                if any(n in line for n in needles) and cjk.search(line):
+                    self.fail(f'{rel}:{i} still has a Chinese DETAIL literal: {line}')
+
 
 if __name__ == '__main__':
     unittest.main()
