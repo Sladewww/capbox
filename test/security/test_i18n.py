@@ -409,6 +409,56 @@ class CliResolveTests(unittest.TestCase):
                 if any(n in line for n in needles) and cjk.search(line):
                     self.fail(f'{rel}:{i} still has a Chinese DETAIL literal: {line}')
 
+    def test_fail_closed_limit_reasons_locked_in_zh_and_en(self):
+        """Require-mode fail-closed reasons, including the empty DISK_MAX fallback, follow CAPBOX_LANG."""
+        zh_cat = i18n.load_catalog('zh')
+        en_cat = i18n.load_catalog('en')
+        self.assertEqual(
+            zh_cat['res.fail_closed_memory_max'],
+            'MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)')
+        self.assertEqual(
+            en_cat['res.fail_closed_memory_max'],
+            'MEMORY_MAX(requires cgroup memory.max, cannot use prlimit)')
+        self.assertEqual(zh_cat['res.fail_closed_pids_max'], 'PIDS_MAX(需要 cgroup pids.max)')
+        self.assertEqual(en_cat['res.fail_closed_pids_max'], 'PIDS_MAX(requires cgroup pids.max)')
+        self.assertEqual(zh_cat['res.fail_closed_cpu_max'], 'CPU_MAX(需要 cgroup cpu.max)')
+        self.assertEqual(en_cat['res.fail_closed_cpu_max'], 'CPU_MAX(requires cgroup cpu.max)')
+        self.assertEqual(zh_cat['res.fail_closed_disk_not_honored'], '未按私有 loop 兑现')
+        self.assertEqual(en_cat['res.fail_closed_disk_not_honored'], 'not honored via a private loop')
+
+        def run_fail_closed(lang):
+            script = (
+                f'export CAPBOX_LANG={lang}; '
+                f'source "{I18N_SH}"; source "{REPO}/lib/resources.sh"; '
+                '_resources_probe_disk() { CAPBOX_DISK_DETAIL=""; return 1; }; '
+                'CAPBOX_RESOURCES_MODE=require; '
+                'CAPBOX_MEMORY_MAX=32M; CAPBOX_PIDS_MAX=64; '
+                'CAPBOX_CPU_MAX=50%; CAPBOX_DISK_MAX=1G; '
+                'unset CAPBOX_RESOURCES_APPLIED_MEMORY CAPBOX_RESOURCES_APPLIED_PIDS; '
+                'unset CAPBOX_RESOURCES_APPLIED_CPU CAPBOX_RESOURCES_APPLIED_DISK; '
+                '_resources_fail_closed_check'
+            )
+            return run_bash(script)
+
+        zh = run_fail_closed('zh')
+        self.assertNotEqual(zh.returncode, 0, zh.stderr)
+        self.assertIn('MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)', zh.stderr)
+        self.assertIn('PIDS_MAX(需要 cgroup pids.max)', zh.stderr)
+        self.assertIn('CPU_MAX(需要 cgroup cpu.max)', zh.stderr)
+        self.assertIn('DISK_MAX(未按私有 loop 兑现)', zh.stderr)
+        self.assertNotIn('cannot use prlimit', zh.stderr)
+        self.assertNotIn('not honored via a private loop', zh.stderr)
+
+        en = run_fail_closed('en')
+        self.assertNotEqual(en.returncode, 0, en.stderr)
+        self.assertIn('MEMORY_MAX(requires cgroup memory.max, cannot use prlimit)', en.stderr)
+        self.assertIn('PIDS_MAX(requires cgroup pids.max)', en.stderr)
+        self.assertIn('CPU_MAX(requires cgroup cpu.max)', en.stderr)
+        self.assertIn('DISK_MAX(not honored via a private loop)', en.stderr)
+        self.assertNotIn('不能用 prlimit', en.stderr)
+        self.assertNotIn('未按私有 loop 兑现', en.stderr)
+        self.assertNotIn('需要 cgroup', en.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

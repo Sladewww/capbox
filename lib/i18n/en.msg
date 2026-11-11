@@ -1046,3 +1046,9 @@ res.disk_detail_state_symlink=state/disk is a symlink, refusing to create the qu
 res.disk_detail_quota_dir_not_real=quota directory is not a real directory
 res.disk_detail_loop_setup_failed=failed to create the loop quota disk (priv={mode})
 res.disk_detail_no_dashdash=argv has no --, cannot bind the quota disk into the guest
+
+# fail-closed resource limit reasons interpolated into require-mode errors
+res.fail_closed_memory_max=MEMORY_MAX(requires cgroup memory.max, cannot use prlimit)
+res.fail_closed_pids_max=PIDS_MAX(requires cgroup pids.max)
+res.fail_closed_cpu_max=CPU_MAX(requires cgroup cpu.max)
+res.fail_closed_disk_not_honored=not honored via a private loop

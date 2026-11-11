@@ -1045,3 +1045,9 @@ res.disk_detail_state_symlink=state/disk 是符号链接，拒绝建立配额盘
 res.disk_detail_quota_dir_not_real=配额目录不是真实目录
 res.disk_detail_loop_setup_failed=建立 loop 配额盘失败（priv={mode}）
 res.disk_detail_no_dashdash=argv 中没有 --，无法把配额盘挂进 guest
+
+# fail-closed resource limit reasons interpolated into require-mode errors
+res.fail_closed_memory_max=MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)
+res.fail_closed_pids_max=PIDS_MAX(需要 cgroup pids.max)
+res.fail_closed_cpu_max=CPU_MAX(需要 cgroup cpu.max)
+res.fail_closed_disk_not_honored=未按私有 loop 兑现

@@ -674,17 +674,17 @@ _resources_fail_closed_check() {
   [[ "$(_resources_mode)" == "require" ]] || return 0
   local missing=()
   if [[ -n "${CAPBOX_MEMORY_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_MEMORY:-}" != cgroup:* ]]; then
-    missing+=("MEMORY_MAX(需要 cgroup memory.max，不能用 prlimit)")
+    missing+=("$(i18n_get res.fail_closed_memory_max)")
   fi
   if [[ -n "${CAPBOX_PIDS_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_PIDS:-}" != cgroup:* ]]; then
-    missing+=("PIDS_MAX(需要 cgroup pids.max)")
+    missing+=("$(i18n_get res.fail_closed_pids_max)")
   fi
   if [[ -n "${CAPBOX_CPU_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_CPU:-}" != cgroup:* ]]; then
-    missing+=("CPU_MAX(需要 cgroup cpu.max)")
+    missing+=("$(i18n_get res.fail_closed_cpu_max)")
   fi
   if [[ -n "${CAPBOX_DISK_MAX:-}" && "${CAPBOX_RESOURCES_APPLIED_DISK:-}" != loop:* ]]; then
     _resources_probe_disk || true
-    missing+=("DISK_MAX(${CAPBOX_DISK_DETAIL:-未按私有 loop 兑现})")
+    missing+=("DISK_MAX($(i18n_or "${CAPBOX_DISK_DETAIL:-}" res.fail_closed_disk_not_honored))")
   fi
   if (( ${#missing[@]} > 0 )); then
     i18n_err res.capbox_resources_mode_require_following_limits_cannot missing="${missing[*]}"
