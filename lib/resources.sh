@@ -670,7 +670,7 @@ _resources_apply_disk_wrap() {
 
   CAPBOX_DISK_BASE="$base"
   CAPBOX_RESOURCES_APPLIED_DISK="loop:${bytes}:${guest}"
-  log_debug "DISK_MAX 已应用: $bytes -> guest:$guest via state loop (priv=$mode)"
+  log_debug "DISK_MAX applied: $bytes -> guest:$guest via state loop (priv=$mode)"
   return 0
 }
 
@@ -724,7 +724,7 @@ _resources_wrap_argv() {
       "$cg"
       "${inner[@]}"
     )
-    log_debug "资源限额经 cgroup 应用: $cg (mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-})"
+    log_debug "resource limits applied via cgroup: $cg (mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-})"
   else
     _resources_probe_cgroup || true
 

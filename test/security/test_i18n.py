@@ -1622,7 +1622,7 @@ class LandlockHelperI18nTests(unittest.TestCase):
 
 
 class SupervisorSeccompI18nTests(unittest.TestCase):
-    """CLI help and SystemExit follow CAPBOX_LANG; supervisor _log stays literal."""
+    """CLI help and SystemExit follow CAPBOX_LANG; supervisor _log stays a language-independent English literal."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='capbox-i18n-supervisor-')
@@ -1732,7 +1732,7 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
         self.assertNotIn('{bytes}', zh_run.stderr + en_run.stderr)
         self.assertNotIn('配置=', en_run.stderr)
 
-    def test_hardcoded_cli_literals_are_gone_and_log_left_untouched(self):
+    def test_hardcoded_cli_literals_are_gone_and_log_is_english(self):
         supervisor = (REPO / 'lib/service-supervisor.py').read_text()
         seccomp = (REPO / 'lib/seccomp-gen.py').read_text()
         for needle in (
@@ -1745,12 +1745,28 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
             self.assertNotIn(needle, seccomp, f'seccomp-gen.py still hardcodes {needle!r}')
         self.assertNotIn('ap.error("--pass-fd 必须是大于 stderr 的描述符")', supervisor)
         self.assertIn('i18n.t("supervisor.pass_fd_must_be_gt_stderr")', supervisor)
-        # _log 按 log_debug 处理：本刀不进目录，也不改写成英文。
+        # _log is a language-independent English literal, like log_debug; not catalogized.
         for needle in (
+            '_log(log, "ready: ok")',
+            '_log(log, "ready: timeout")',
+            '_log(log, f"stop timed out after {stop_timeout}s → SIGKILL")',
+            '_log(args.log, "supervisor: missing child argv")',
+            '_log(args.log, f"supervisor: starting {\' \'.join(child[:3])}...")',
+            '_log(args.log, "exceeded max restarts after ready failure")',
+            '_log(args.log, f"health check failed {fails}/{args.health_retries}")',
+            '_log(args.log, "health: giving up → restart/stop")',
+            '_log(args.log, "supervisor: stopped")',
+            '_log(args.log, f"child exited rc={rc}")',
+            '_log(args.log, "exceeded max restarts")',
+        ):
+            self.assertIn(needle, supervisor, f'_log literal was changed: {needle!r}')
+        self.assertEqual(supervisor.count('i18n.t('), 1)
+        for old in (
             '_log(log, "ready: 就绪")',
             '_log(log, "ready: 超时")',
             '_log(log, f"停止超时 {stop_timeout}s → SIGKILL")',
             '_log(args.log, "supervisor: 缺少子进程 argv")',
+            '_log(args.log, f"supervisor: 启动 {\' \'.join(child[:3])}...")',
             '_log(args.log, "就绪失败后超过最大重启次数")',
             '_log(args.log, f"健康检查失败 {fails}/{args.health_retries}")',
             '_log(args.log, "health: 放弃 → 重启/停止")',
@@ -1758,8 +1774,7 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
             '_log(args.log, f"子进程退出 rc={rc}")',
             '_log(args.log, "超过最大重启次数")',
         ):
-            self.assertIn(needle, supervisor, f'_log literal was changed: {needle!r}')
-        self.assertEqual(supervisor.count('i18n.t('), 1)
+            self.assertNotIn(old, supervisor, f'Chinese _log text still present: {old!r}')
 
     def test_supervisor_cli_and_seccomp_errors_follow_lang(self):
         log = Path(self.tmp.name) / 'svc.log'
@@ -1786,7 +1801,7 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
         self.assertNotIn('usage:', zh_help.stdout)
         self.assertNotIn('用法:', en_help.stdout)
 
-        # 缺少子进程走 _log，两种语言都仍是中文原文。
+        # Missing child argv goes through _log; both languages keep the English literal.
         zh_miss = self.run_tool(
             'lib/service-supervisor.py',
             ['--name', 'demo', '--log', str(log), '--pidfile', str(pid)], 'zh')
@@ -1795,9 +1810,10 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
             ['--name', 'demo', '--log', str(log), '--pidfile', str(pid)], 'en')
         self.assertEqual(zh_miss.returncode, 2, zh_miss.stderr)
         self.assertEqual(en_miss.returncode, 2, en_miss.stderr)
-        self.assertIn('supervisor: 缺少子进程 argv', zh_miss.stderr)
-        self.assertIn('supervisor: 缺少子进程 argv', en_miss.stderr)
-        self.assertNotIn('missing child argv', en_miss.stderr)
+        self.assertIn('supervisor: missing child argv', zh_miss.stderr)
+        self.assertIn('supervisor: missing child argv', en_miss.stderr)
+        self.assertEqual(zh_miss.stderr, en_miss.stderr)
+        self.assertNotIn('缺少子进程 argv', zh_miss.stderr + en_miss.stderr)
 
         zh_err = self.run_tool(
             'lib/seccomp-gen.py',
@@ -1836,10 +1852,11 @@ class DaemonStopMarkerTests(unittest.TestCase):
     def test_guest_emits_english_marker(self):
         guest = (REPO / 'lib/guest/daemon.sh').read_text()
         self.assertIn(
-            f'log "{self.MARKER}, 等待在跑任务完成（上限 ${{STOP_WAIT}}s）"',
+            f'log "{self.MARKER}, waiting for running jobs to finish (limit ${{STOP_WAIT}}s)"',
             guest)
         self.assertNotIn(self.OLD_PHRASE, guest)
-        # 标记是写死的英文，不走 i18n，也不进目录。
+        self.assertNotIn('等待在跑任务完成', guest)
+        # Marker is a fixed English literal, not catalogized.
         self.assertNotIn('i18n.t', guest)
         self.assertNotRegex(guest, r'i18n_[A-Za-z0-9_]+.*received stop request')
 
@@ -1865,9 +1882,13 @@ class DaemonStopMarkerTests(unittest.TestCase):
 
     def test_host_grep_matches_new_and_old_guest_lines_only(self):
         log_prefix = '[capbox-daemon] '
-        guest_line = f'{log_prefix}{self.MARKER}, 等待在跑任务完成（上限 30s）\n'
+        guest_line = (
+            f'{log_prefix}{self.MARKER}, waiting for running jobs to finish (limit 30s)\n'
+        )
         old_line = f'{log_prefix}{self.OLD_PHRASE}，等待在跑任务完成（上限 30s）\n'
-        other_line = f'{log_prefix}收到终止信号（TERM/INT），准备优雅退出\n'
+        other_line = (
+            f'{log_prefix}received termination signal (TERM/INT), preparing graceful shutdown\n'
+        )
         warn_line = 'Server did not acknowledge the stop request within 5s\n'
 
         def greps(text):
@@ -1880,6 +1901,223 @@ class DaemonStopMarkerTests(unittest.TestCase):
         self.assertEqual(greps(old_line), 0)
         self.assertEqual(greps(other_line), 1)
         self.assertEqual(greps(warn_line), 1)
+
+
+
+class LogDebugEnglishTests(unittest.TestCase):
+    """Remaining log_debug and supervisor _log lines are English literals, not catalog keys."""
+
+    CJK = re.compile(r'[\u4e00-\u9fff]')
+    LOG_DEBUG_FILES = {
+        'lib/common.sh': (
+            'log_debug "host has no flock, skipping lock: $name"',
+            'log_debug "refreshed $dst"',
+            'log_debug "$distro rootfs has no CA certificates, falling back to http mirror: $url"',
+            'log_debug "daemon heartbeat expired (${age}s > ${ttl}s), treating as not running"',
+            'log_debug "daemon already exited before stop (rc=3), continuing cleanup"',
+        ),
+        'lib/fsguard.sh': (
+            'log_debug "rootfs: overlay RW upper=$u (lower layer RO)"',
+        ),
+        'lib/landlock.sh': (
+            'log_debug "Landlock prefix added helper=$helper"',
+        ),
+        'lib/resources.sh': (
+            'log_debug "DISK_MAX applied: $bytes -> guest:$guest via state loop (priv=$mode)"',
+            'log_debug "resource limits applied via cgroup: $cg (mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-})"',
+        ),
+        'lib/rootfs.sh': (
+            'log_debug "tar --numeric-owner failed (rc=$rc), retrying without it"',
+            'log_debug "injected proxy file: $prof"',
+            'log_debug "no bootstrap.sh, skipping first-boot bootstrap"',
+        ),
+    }
+    ENGLISH_LITERALS = (
+        'host has no flock, skipping lock:',
+        'rootfs has no CA certificates, falling back to http mirror:',
+        'daemon heartbeat expired',
+        'daemon already exited before stop (rc=3), continuing cleanup',
+        'Landlock prefix added helper=',
+        'DISK_MAX applied:',
+        'resource limits applied via cgroup:',
+        'tar --numeric-owner failed',
+        'injected proxy file:',
+        'no bootstrap.sh, skipping first-boot bootstrap',
+        'ready: ok',
+        'ready: timeout',
+        'stop timed out after',
+        'supervisor: missing child argv',
+        'supervisor: starting',
+        'exceeded max restarts after ready failure',
+        'health check failed',
+        'health: giving up → restart/stop',
+        'supervisor: stopped',
+        'child exited rc=',
+        'exceeded max restarts',
+    )
+
+    def _prod_files(self):
+        skip_parts = {'.git', 'os', 'logs', 'state', 'test', '__pycache__'}
+        for path in REPO.rglob('*'):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(REPO)
+            if any(part in skip_parts for part in rel.parts):
+                continue
+            if path.suffix in {'.sh', '.py'} or path.name == 'capbox':
+                yield path, rel
+
+    def test_log_debug_literals_are_english_and_not_catalogized(self):
+        for rel, needles in self.LOG_DEBUG_FILES.items():
+            text = (REPO / rel).read_text()
+            for needle in needles:
+                self.assertIn(needle, text, f'missing {needle!r} in {rel}')
+                self.assertNotIn('i18n_get', needle)
+                self.assertNotIn('i18n_fmt', needle)
+                self.assertNotIn('i18n.t', needle)
+                self.assertNotIn('i18n_t', needle)
+
+    def test_english_log_strings_are_not_catalog_keys(self):
+        for lang in ('zh', 'en'):
+            catalog = i18n.load_catalog(lang)
+            self.assertEqual(len(catalog), 1154)
+            for literal in self.ENGLISH_LITERALS:
+                self.assertNotIn(literal, catalog)
+                for key, value in catalog.items():
+                    self.assertNotIn(
+                        literal, key,
+                        f'catalog key {key!r} contains log literal {literal!r}')
+                    self.assertNotIn(
+                        literal, value,
+                        f'catalog {lang}:{key} contains log literal {literal!r}')
+
+    def test_no_chinese_remains_in_log_debug_or_supervisor_log_arguments(self):
+        found = []
+        for path, rel in self._prod_files():
+            lines = path.read_text(encoding='utf-8').splitlines()
+            i = 0
+            while i < len(lines):
+                raw = lines[i]
+                stripped = raw.lstrip()
+                if (stripped.startswith('#')
+                        or stripped.startswith('def _log')
+                        or stripped.startswith('log_debug()')):
+                    i += 1
+                    continue
+                if (re.search(r'\b(log_debug|_log)\s*(\(|")', raw)
+                        or re.search(r'\b_log\(', raw)):
+                    block = [raw]
+                    j = i
+
+                    def unclosed(s):
+                        esc = in_dq = in_sq = False
+                        for ch in s:
+                            if esc:
+                                esc = False
+                                continue
+                            if ch == '\\':
+                                esc = True
+                                continue
+                            if not in_sq and ch == '"':
+                                in_dq = not in_dq
+                            elif not in_dq and ch == "'":
+                                in_sq = not in_sq
+                        return in_dq or in_sq
+
+                    blob = '\n'.join(block)
+                    opens = blob.count('(') - blob.count(')')
+                    while (opens > 0 or unclosed(blob)) and j + 1 < len(lines):
+                        j += 1
+                        block.append(lines[j])
+                        blob = '\n'.join(block)
+                        opens = blob.count('(') - blob.count(')')
+                    if self.CJK.search(blob):
+                        found.append(f'{rel}:{i + 1}: {blob.strip()}')
+                    i = j + 1
+                    continue
+                i += 1
+        self.assertEqual(
+            found, [],
+            'Chinese remains in log_debug/_log arguments:\n' + '\n'.join(found))
+
+
+
+class GuestDaemonLogEnglishTests(unittest.TestCase):
+    """Guest daemon.sh log lines are English literals and are not catalogized."""
+
+    CJK = re.compile(r'[\u4e00-\u9fff]')
+    GUEST = 'lib/guest/daemon.sh'
+    LOG_LITERALS = (
+        'log "received termination signal (TERM/INT), preparing graceful shutdown"',
+        'log "unable to create IPC directory: $D (is /workspace bound into the container?)"',
+        'log "a daemon is already running (heartbeat fresh, ${_hb_age}s ago), this instance exiting"',
+        'log "found stale lock (heartbeat stale for ${_hb_age}s), taking over"',
+        'log "unable to acquire daemon lock, exiting"',
+        'log "daemon started (pid=$$ hostname=$HOSTN distro=$DISTRO max jobs=$MAXJOBS tick=${TICK}s)"',
+        'log "IPC directory: $D"',
+        'log "cancelled timed-out request $_kid (process group $_kpg)"',
+        'log "concurrency at max $MAXJOBS, deferring new requests this tick"',
+        'log "received stop request, waiting for running jobs to finish (limit ${STOP_WAIT}s)"',
+        'log "jobs still running at drain limit ${STOP_WAIT}s, forcing exit (those requests will be cancelled)"',
+        'log "daemon exiting (ran $(( $(_now) - STARTED ))s, processed $TICKN ticks)"',
+    )
+    # Distinctive phrases checked against catalog keys/values. Omit
+    # "IPC directory:" because the host catalog already has daemon.ipc_directory.
+    ENGLISH_LITERALS = (
+        'received termination signal (TERM/INT), preparing graceful shutdown',
+        'unable to create IPC directory:',
+        'a daemon is already running (heartbeat fresh,',
+        'found stale lock (heartbeat stale for',
+        'unable to acquire daemon lock, exiting',
+        'daemon started (pid=',
+        'cancelled timed-out request',
+        'concurrency at max',
+        'waiting for running jobs to finish (limit',
+        'jobs still running at drain limit',
+        'daemon exiting (ran',
+    )
+
+    def test_guest_daemon_log_literals_are_english_and_not_catalogized(self):
+        text = (REPO / self.GUEST).read_text()
+        for needle in self.LOG_LITERALS:
+            self.assertIn(needle, text, f'missing {needle!r} in {self.GUEST}')
+            self.assertNotIn('i18n_get', needle)
+            self.assertNotIn('i18n_fmt', needle)
+            self.assertNotIn('i18n.t', needle)
+        self.assertNotIn('i18n.t', text)
+        self.assertNotRegex(text, r'\bi18n_[A-Za-z0-9_]+\b')
+        bootstrap = (REPO / 'lib/guest/bootstrap.sh').read_text()
+        for needle in self.LOG_LITERALS:
+            self.assertNotIn(needle, bootstrap)
+
+    def test_guest_daemon_log_strings_are_not_catalog_keys(self):
+        for lang in ('zh', 'en'):
+            catalog = i18n.load_catalog(lang)
+            self.assertEqual(len(catalog), 1154)
+            for literal in self.ENGLISH_LITERALS:
+                self.assertNotIn(literal, catalog)
+                for key, value in catalog.items():
+                    self.assertNotIn(
+                        literal, key,
+                        f'catalog key {key!r} contains guest log literal {literal!r}')
+                    self.assertNotIn(
+                        literal, value,
+                        f'catalog {lang}:{key} contains guest log literal {literal!r}')
+
+    def test_no_chinese_remains_in_guest_daemon_log_arguments(self):
+        text = (REPO / self.GUEST).read_text()
+        found = []
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith('#'):
+                continue
+            if re.search(r'\blog\s+"', line) and self.CJK.search(line):
+                found.append(f'{self.GUEST}:{i}: {line.strip()}')
+        self.assertEqual(
+            found, [],
+            'Chinese remains in guest daemon log arguments:\n' + '\n'.join(found))
+        self.assertIn('received stop request', text)
+        self.assertNotIn('收到停止请求', text)
 
 
 

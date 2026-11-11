@@ -214,7 +214,7 @@ _landlock_apply_argv() {
     "$guest_helper" --rules "$guest_rules" --
     "${tail[@]}"
   )
-  log_debug "Landlock 前缀已加上 helper=$helper"
+  log_debug "Landlock prefix added helper=$helper"
   return 0
 }
 

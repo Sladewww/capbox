@@ -100,7 +100,7 @@ cleanup_state() {
 
 on_term() {
   STOPPING=1
-  log "收到终止信号（TERM/INT），准备优雅退出"
+  log "received termination signal (TERM/INT), preparing graceful shutdown"
 }
 
 trap on_term TERM INT
@@ -108,7 +108,7 @@ trap on_term TERM INT
 # ---------- 3. 启动：建目录、防重入、写 daemon.json ----------------------------
 
 mkdir -p "$REQ" "$OUT" "$CTL" "$RUN" 2>/dev/null || {
-  log "无法创建 IPC 目录: $D（/workspace 是否已 bind 进容器？）"
+  log "unable to create IPC directory: $D (is /workspace bound into the container?)"
   exit 1
 }
 
@@ -116,13 +116,13 @@ mkdir -p "$REQ" "$OUT" "$CTL" "$RUN" 2>/dev/null || {
 if ! mkdir "$LOCKD" 2>/dev/null; then
   _hb_age=$(( $( _now ) - $( _file_mtime "$HB" ) ))
   if [ -f "$HB" ] && [ "$_hb_age" -ge 0 ] && [ "$_hb_age" -le "$HB_TTL" ]; then
-    log "已有守护容器在运行（心跳新鲜，${_hb_age}s 前），本实例退出"
+    log "a daemon is already running (heartbeat fresh, ${_hb_age}s ago), this instance exiting"
     exit 0
   fi
-  log "发现陈旧锁（心跳 ${_hb_age}s 未更新），接管"
+  log "found stale lock (heartbeat stale for ${_hb_age}s), taking over"
   rm -rf "$LOCKD" 2>/dev/null
   mkdir "$LOCKD" 2>/dev/null || {
-    log "无法获得守护容器锁，退出"
+    log "unable to acquire daemon lock, exiting"
     exit 1
   }
 fi
@@ -160,8 +160,8 @@ beat() { _write_atomic "$HB" "$(_now)" >/dev/null 2>&1; }
 beat
 write_json
 
-log "守护容器已启动（pid=$$ hostname=$HOSTN distro=$DISTRO 并发上限=$MAXJOBS 轮询=${TICK}s）"
-log "IPC 目录: $D"
+log "daemon started (pid=$$ hostname=$HOSTN distro=$DISTRO max jobs=$MAXJOBS tick=${TICK}s)"
+log "IPC directory: $D"
 
 # ---------- 4. 任务管理 --------------------------------------------------------
 
@@ -247,7 +247,7 @@ _reap_kills() {
           kill -TERM "-$_kpg" 2>/dev/null
           sleep 0.3
           kill -KILL "-$_kpg" 2>/dev/null
-          log "已取消超时请求 $_kid（进程组 $_kpg）"
+          log "cancelled timed-out request $_kid (process group $_kpg)"
           ;;
       esac
     fi
@@ -354,11 +354,11 @@ while :; do
     run_one "$_id" "$RUN/$_id.sh" &
     JOBS="$JOBS $_id:$!"
   done
-  [ "$_paused" -eq 1 ] && log "并发已达上限 $MAXJOBS，本轮暂缓派发新请求"
+  [ "$_paused" -eq 1 ] && log "concurrency at max $MAXJOBS, deferring new requests this tick"
 
   # 5.4 停止判定
   if [ -f "$CTL/stop" ] || [ "$STOPPING" -eq 1 ]; then
-    log "received stop request, 等待在跑任务完成（上限 ${STOP_WAIT}s）"
+    log "received stop request, waiting for running jobs to finish (limit ${STOP_WAIT}s)"
 
     # 排空期**必须继续 beat()**，原因是一个真实踩过的矛盾：
     #   * 若排空期不发心跳，则 hb 会在 STOP_WAIT 内停止前进；
@@ -382,7 +382,7 @@ while :; do
       _prune
       [ -z "$JOBS" ] && break
       [ "$(_now)" -ge "$_deadline" ] && {
-        log "仍有任务未完成，已到排空上限 ${STOP_WAIT}s，强制退出（其请求将被取消）"
+        log "jobs still running at drain limit ${STOP_WAIT}s, forcing exit (those requests will be cancelled)"
         break
       }
       sleep 0.2
@@ -394,7 +394,7 @@ while :; do
     rm -f "$CTL/draining" 2>/dev/null
     _fail_pending
     rm -f "$CTL/stop" 2>/dev/null
-    log "守护容器退出（运行 $(( $(_now) - STARTED ))s，已处理的请求共 $TICKN 轮）"
+    log "daemon exiting (ran $(( $(_now) - STARTED ))s, processed $TICKN ticks)"
     exit 0
   fi
 

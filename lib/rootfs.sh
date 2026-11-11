@@ -247,7 +247,7 @@ extract_rootfs() {
   rc=$?
   # 少数实现/包不支持 --numeric-owner，重试一次
   if (( rc != 0 )); then
-    log_debug "tar --numeric-owner 失败（rc=$rc），改用普通模式重试"
+    log_debug "tar --numeric-owner failed (rc=$rc), retrying without it"
     tar xzf "$tarball" -C "$stage" 2>/dev/null
     rc=$?
   fi
@@ -485,7 +485,7 @@ inject_proxy_files() {
     printf 'proxy = %s\n' "$p"
   } | _rootfs_write_file "$pipconf" || return 1
 
-  log_debug "已注入代理文件: $prof"
+  log_debug "injected proxy file: $prof"
   return 0
 }
 
@@ -499,7 +499,7 @@ run_bootstrap() {
   local script="$CAPBOX_GUEST_DIR/bootstrap.sh"
 
   [[ -f "$script" ]] || {
-    log_debug "无 bootstrap.sh，跳过首次引导"
+    log_debug "no bootstrap.sh, skipping first-boot bootstrap"
     return 0
   }
   rootfs_ready_at "$rootfs" || {
