@@ -191,10 +191,11 @@ Docker/OCI 导入落在 .capbox/images/docker/<name>/，不替换 Alpine/Ubuntu 
   show NAME                打印 meta.json
   rm NAME                  删除一个已导入镜像
   run NAME|ARCHIVE [选项] [--] [CMD...]
-                           参数是文件就先导入，再用 bwrap 启动
+                           参数是已导入名字就直接启动；是文件则已有同名镜像时复用，否则先导入。显式 --force 才重新导入
 
 run 选项:
   --name NAME              文件导入后的名字（默认取标签，否则 img-<摘要>）
+  --force                  文件路径已有同名镜像时仍重新导入
   --cwd DIR                覆盖 WorkingDir
   --user USER              覆盖 User（名字、uid 或 uid:gid）
   --timeout N              一次性超时秒数

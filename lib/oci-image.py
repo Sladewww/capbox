@@ -14,7 +14,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -31,6 +30,7 @@ import i18n  # noqa: E402
 
 MAX_LAYER_BYTES = 8 * 1024 ** 3
 MAX_ROOTFS_BYTES = 8 * 1024 ** 3
+MAX_ARCHIVE_BYTES = 8 * 1024 ** 3
 MAX_MEMBERS = 200_000
 MAX_ENV_ITEMS = 256
 MAX_ENV_VALUE = 32 * 1024
@@ -237,18 +237,27 @@ def sha256_bytes(data: bytes) -> str:
     return 'sha256:' + hashlib.sha256(data).hexdigest()
 
 
-def spool_stream(stream, limit: int) -> tempfile.SpooledTemporaryFile:
-    tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+def copy_limited(src, dst, limit: int) -> int:
+    """Copy src to dst, aborting if decompressed output would exceed limit."""
     total = 0
     while True:
-        chunk = stream.read(1024 * 1024)
+        chunk = src.read(1024 * 1024)
         if not chunk:
             break
         total += len(chunk)
         if total > limit:
-            tmp.close()
             raise OciError('oci.too_large', limit='8GiB')
-        tmp.write(chunk)
+        dst.write(chunk)
+    return total
+
+
+def spool_stream(stream, limit: int) -> tempfile.SpooledTemporaryFile:
+    tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        copy_limited(stream, tmp, limit)
+    except Exception:
+        tmp.close()
+        raise
     tmp.seek(0)
     return tmp
 
@@ -256,22 +265,25 @@ def spool_stream(stream, limit: int) -> tempfile.SpooledTemporaryFile:
 def zstd_decompress(src) -> tempfile.SpooledTemporaryFile:
     tool = 'zstd'
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [tool, '-q', '-d', '-c'],
             stdin=src,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=False,
         )
     except FileNotFoundError as exc:
         raise OciError('oci.zstd_required') from exc
-    if proc.returncode != 0:
+    try:
+        out = spool_stream(proc.stdout, MAX_LAYER_BYTES)
+        if proc.stderr is not None:
+            proc.stderr.read()
+        rc = proc.wait()
+    except Exception:
+        proc.kill()
+        proc.wait()
+        raise
+    if rc != 0:
         raise OciError('oci.zstd_required')
-    if len(proc.stdout) > MAX_LAYER_BYTES:
-        raise OciError('oci.too_large', limit='8GiB')
-    out = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
-    out.write(proc.stdout)
-    out.seek(0)
     return out
 
 
@@ -305,25 +317,38 @@ def open_outer(path: Path):
         tmp = tempfile.NamedTemporaryFile(prefix='capbox-oci-', suffix='.tar', delete=False)
         tmp.close()
         cleanup = Path(tmp.name)
-        with gzip.open(path, 'rb') as src, cleanup.open('wb') as dst:
-            shutil.copyfileobj(src, dst)
+        try:
+            with gzip.open(path, 'rb') as src, cleanup.open('wb') as dst:
+                copy_limited(src, dst, MAX_ARCHIVE_BYTES)
+        except Exception:
+            cleanup.unlink(missing_ok=True)
+            raise
         tar_path = cleanup
     elif magic.startswith(ZSTD_MAGIC):
         tmp = tempfile.NamedTemporaryFile(prefix='capbox-oci-', suffix='.tar', delete=False)
         tmp.close()
         cleanup = Path(tmp.name)
         try:
-            with cleanup.open('wb') as dst:
-                proc = subprocess.run(
-                    ['zstd', '-q', '-d', '-c', str(path)],
-                    stdout=dst,
-                    stderr=subprocess.PIPE,
-                    check=False,
-                )
+            proc = subprocess.Popen(
+                ['zstd', '-q', '-d', '-c', str(path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
         except FileNotFoundError as exc:
             cleanup.unlink(missing_ok=True)
             raise OciError('oci.zstd_required') from exc
-        if proc.returncode != 0:
+        try:
+            with cleanup.open('wb') as dst:
+                copy_limited(proc.stdout, dst, MAX_ARCHIVE_BYTES)
+            if proc.stderr is not None:
+                proc.stderr.read()
+            rc = proc.wait()
+        except Exception:
+            proc.kill()
+            proc.wait()
+            cleanup.unlink(missing_ok=True)
+            raise
+        if rc != 0:
             cleanup.unlink(missing_ok=True)
             raise OciError('oci.zstd_required')
         tar_path = cleanup

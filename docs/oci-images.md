@@ -18,7 +18,7 @@ capbox image docker run alpine.tar -- uname -a
 capbox image docker run alpine --entrypoint /bin/sh -- -c 'echo "$IMAGE_ENV"'
 ```
 
-`import` 写到 `.capbox/images/docker/<name>/rootfs`，并在旁边放 `meta.json`。不改 `DISTRO`，也不替换 `os/alpine` 或 `os/ubuntu`。同名已存在时要 `--force`。`run` 的参数如果是文件，会按该文件重新展开后再启动。
+`import` 写到 `.capbox/images/docker/<name>/rootfs`，并在旁边放 `meta.json`。不改 `DISTRO`，也不替换 `os/alpine` 或 `os/ubuntu`。同名已存在时要 `--force`。`run` 的参数如果是文件，且同名镜像尚未导入，会先导入再启动；已存在则复用，除非显式传入 `--force`。外层 gzip/zstd 解压过程中限制在 8GiB。
 
 `pull` 不自己实现仓库协议，也不连接 Docker daemon 或 `docker.sock`。宿主 PATH 上有 `skopeo` 时用它，否则用 `crane`；两个都没有就失败。标签会先解析成 `sha256`，再按这个摘要复制到临时 OCI layout，然后走同一条 `import`。复制结果的摘要必须和解析到的一致。
 

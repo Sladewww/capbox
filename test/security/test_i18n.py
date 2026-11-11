@@ -1980,7 +1980,7 @@ class LogDebugEnglishTests(unittest.TestCase):
     def test_english_log_strings_are_not_catalog_keys(self):
         for lang in ('zh', 'en'):
             catalog = i18n.load_catalog(lang)
-            self.assertEqual(len(catalog), 1154)
+            self.assertEqual(len(catalog), 1194)
             for literal in self.ENGLISH_LITERALS:
                 self.assertNotIn(literal, catalog)
                 for key, value in catalog.items():
@@ -2093,7 +2093,7 @@ class GuestDaemonLogEnglishTests(unittest.TestCase):
     def test_guest_daemon_log_strings_are_not_catalog_keys(self):
         for lang in ('zh', 'en'):
             catalog = i18n.load_catalog(lang)
-            self.assertEqual(len(catalog), 1154)
+            self.assertEqual(len(catalog), 1194)
             for literal in self.ENGLISH_LITERALS:
                 self.assertNotIn(literal, catalog)
                 for key, value in catalog.items():

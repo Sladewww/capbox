@@ -192,10 +192,11 @@ Usage: capbox image docker <inspect|import|pull|list|show|rm|run> ...
   show NAME                Print meta.json
   rm NAME                  Delete one imported image
   run NAME|ARCHIVE [options] [--] [CMD...]
-                           Import if given a file, then start it with bwrap
+                           Start a stored name, or a file: reuse an existing image unless --force
 
 run options:
   --name NAME              Store a file under this name (default: tag, else img-<digest>)
+  --force                  Re-import a file even when the image already exists
   --cwd DIR                Override WorkingDir
   --user USER              Override User (name, uid, or uid:gid)
   --timeout N              One-shot timeout in seconds

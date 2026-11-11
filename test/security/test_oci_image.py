@@ -15,6 +15,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -302,6 +303,37 @@ class MaterializeTests(unittest.TestCase):
             oci.materialize(multi, nowhere, platform='linux/386', index=None, tag=None)
         self.assertEqual(caught.exception.key, 'oci.platform_missing')
 
+    def test_open_outer_caps_gzip_and_zstd_decompress(self):
+        layer = layer_bytes([('file', 'hello', b'payload-' * 64, 0o644)])
+        archive = self.base / 'outer.tar.gz'
+        docker_save(archive, [{'tags': ['gz:1'], 'layers': [layer]}], gzip_outer=True)
+        raw_size = len(gzip.decompress(archive.read_bytes()))
+        self.assertGreater(raw_size, 64)
+        before = set(Path(tempfile.gettempdir()).glob('capbox-oci-*.tar'))
+        with mock.patch.object(oci, 'MAX_ARCHIVE_BYTES', 64):
+            with self.assertRaises(oci.OciError) as caught:
+                oci.open_outer(archive)
+            self.assertEqual(caught.exception.key, 'oci.too_large')
+            with self.assertRaises(oci.OciError) as caught:
+                self.extract(archive)
+            self.assertEqual(caught.exception.key, 'oci.too_large')
+        after = set(Path(tempfile.gettempdir()).glob('capbox-oci-*.tar'))
+        self.assertEqual(after, before)
+
+        if not shutil.which('zstd'):
+            return
+        plain = self.base / 'plain.tar'
+        zst = self.base / 'outer.tar.zst'
+        docker_save(plain, [{'tags': ['zst:1'], 'layers': [layer]}])
+        subprocess.run(['zstd', '-q', '-f', str(plain), '-o', str(zst)], check=True)
+        before = set(Path(tempfile.gettempdir()).glob('capbox-oci-*.tar'))
+        with mock.patch.object(oci, 'MAX_ARCHIVE_BYTES', 64):
+            with self.assertRaises(oci.OciError) as caught:
+                oci.open_outer(zst)
+            self.assertEqual(caught.exception.key, 'oci.too_large')
+        after = set(Path(tempfile.gettempdir()).glob('capbox-oci-*.tar'))
+        self.assertEqual(after, before)
+
     def test_plan_replaces_cmd_and_resolves_user(self):
         root = self.base / 'root'
         (root / 'etc').mkdir(parents=True)
@@ -439,6 +471,30 @@ class CliTests(unittest.TestCase):
             self.assertTrue(run.stderr)
         mode = (self.ws / '.capbox/images/docker/app/rootfs/bin/sh').stat().st_mode
         self.assertTrue(mode & stat.S_IXUSR)
+
+    def test_run_file_reuses_existing_image_unless_force(self):
+        archive = self.archive()
+        imported = self.cli('image', 'docker', 'import', str(archive), '--name', 'app')
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        rootfs = self.ws / '.capbox/images/docker/app/rootfs'
+        marker = rootfs / 'reuse-marker'
+        marker.write_text('keep\n', encoding='utf-8')
+        reused = self.cli('image', 'docker', 'run', str(archive), '--name', 'app', '--', '-c', 'true')
+        self.assertTrue(marker.is_file(), reused.stderr)
+        self.assertEqual(marker.read_text(encoding='utf-8'), 'keep\n')
+        forced = self.cli('image', 'docker', 'run', str(archive), '--name', 'app', '--force', '--', '-c', 'true')
+        self.assertFalse(marker.exists(), forced.stderr)
+        self.assertTrue((rootfs / 'bin/sh').is_file())
+        # 不传 --name 时按标签推导名字；第二次 run FILE 仍应复用。
+        first = self.cli('image', 'docker', 'run', str(archive), '--', '-c', 'true')
+        docker_dir = self.ws / '.capbox/images/docker'
+        derived = [p for p in docker_dir.iterdir() if p.is_dir() and p.name != 'app' and not p.name.startswith('.')]
+        self.assertEqual(len(derived), 1, first.stderr + ' names=' + ','.join(p.name for p in docker_dir.iterdir()))
+        marker2 = derived[0] / 'rootfs' / 'reuse-marker'
+        marker2.write_text('derived\n', encoding='utf-8')
+        second = self.cli('image', 'docker', 'run', str(archive), '--', '-c', 'true')
+        self.assertTrue(marker2.is_file(), second.stderr)
+        self.assertEqual(len([p for p in docker_dir.iterdir() if p.is_dir() and not p.name.startswith('.')]), 2)
 
 
 class PullRefTests(unittest.TestCase):

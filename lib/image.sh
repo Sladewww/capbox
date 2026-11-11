@@ -330,7 +330,7 @@ _image_docker_import() {
 
 _image_docker_run() {
   local target="" name="" platform="" index="" tag="" cwd="" user="" timeout_s="" net_override="" profile="" entrypoint=""
-  local clear=0
+  local clear=0 force=0
   local -a cmd=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -345,6 +345,7 @@ _image_docker_run() {
       --profile) profile="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
       --entrypoint) entrypoint="${2:-}"; shift 2 || i18n_die 2 oci.run_needs_target ;;
       --clear-entrypoint) clear=1; shift ;;
+      --force) force=1; shift ;;
       --) shift; cmd+=("$@"); break ;;
       -*) i18n_die 2 oci.unknown_option arg="$1" ;;
       *)
@@ -359,15 +360,29 @@ _image_docker_run() {
     esac
   done
   [[ -n "$target" ]] || i18n_die 2 oci.run_needs_target
-  local use_name="$name" imported=""
+  local use_name="$name" imported="" dest=""
   if [[ -e "$target" && ! -L "$target" && ( -f "$target" || -d "$target" ) ]]; then
-    local -a imp=("$target" --force)
-    [[ -n "$name" ]] && imp+=(--name "$name")
-    [[ -n "$platform" ]] && imp+=(--platform "$platform")
-    [[ -n "$index" ]] && imp+=(--index "$index")
-    [[ -n "$tag" ]] && imp+=(--tag "$tag")
-    imported="$(_image_docker_import "${imp[@]}")" || return $?
-    use_name="$(basename -- "$(dirname -- "$imported")")"
+    if [[ -z "$use_name" ]]; then
+      local -a inspect=(inspect --input "$target")
+      [[ -n "$platform" ]] && inspect+=(--platform "$platform")
+      [[ -n "$index" ]] && inspect+=(--index "$index")
+      [[ -n "$tag" ]] && inspect+=(--tag "$tag")
+      local preview
+      preview="$(_oci_py_cmd "${inspect[@]}")" || return $?
+      use_name="$(printf '%s' "$preview" | _image_docker_suggest_name)" || return 1
+    fi
+    _image_valid_name "$use_name" || i18n_die 2 image.invalid_image_name
+    dest="$(_image_docker_home "$use_name")"
+    # 已有同名镜像则复用，只有用户显式 --force 才重新导入。
+    if [[ "$force" -eq 1 || ! -d "$dest" || -L "$dest" || ! -d "$dest/rootfs" || -L "$dest/rootfs" || ! -f "$dest/meta.json" || -L "$dest/meta.json" ]]; then
+      local -a imp=("$target" --name "$use_name")
+      [[ -n "$platform" ]] && imp+=(--platform "$platform")
+      [[ -n "$index" ]] && imp+=(--index "$index")
+      [[ -n "$tag" ]] && imp+=(--tag "$tag")
+      (( force == 1 )) && imp+=(--force)
+      imported="$(_image_docker_import "${imp[@]}")" || return $?
+      use_name="$(basename -- "$(dirname -- "$imported")")"
+    fi
   else
     use_name="${name:-$target}"
   fi
