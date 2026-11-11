@@ -1826,5 +1826,57 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
         self.assertNotIn('用法:', en_help.stdout)
 
 
+class DaemonStopMarkerTests(unittest.TestCase):
+    """Guest stop ack is a fixed English marker; host greps that same token."""
+
+    MARKER = 'received stop request'
+
+    def test_guest_emits_english_marker(self):
+        guest = (REPO / 'lib/guest/daemon.sh').read_text()
+        self.assertIn(
+            f'log "{self.MARKER}, 等待在跑任务完成（上限 ${{STOP_WAIT}}s）"',
+            guest)
+        self.assertNotIn('收到停止请求', guest)
+        # 标记是写死的英文，不走 i18n，也不进目录。
+        self.assertNotIn('i18n.t', guest)
+        self.assertNotRegex(guest, r'i18n_[A-Za-z0-9_]+.*received stop request')
+
+    def test_host_criterion_matches_the_same_marker(self):
+        host = (REPO / 'lib/daemon.sh').read_text()
+        self.assertIn(f"grep -q '{self.MARKER}'", host)
+        self.assertEqual(host.count(f"grep -q '{self.MARKER}'"), 1)
+        self.assertIn(f'会往 daemon.log 写「{self.MARKER}」', host)
+        self.assertNotIn('收到停止请求', host)
+
+    def test_marker_is_not_a_catalog_key_or_value(self):
+        for lang in ('zh', 'en'):
+            catalog = i18n.load_catalog(lang)
+            self.assertNotIn(self.MARKER, catalog)
+            for key, value in catalog.items():
+                self.assertNotIn(
+                    self.MARKER, key, f'catalog key {key!r} contains marker')
+                self.assertNotIn(
+                    self.MARKER, value,
+                    f'catalog {lang}:{key} contains marker')
+
+    def test_host_grep_matches_guest_log_line_only(self):
+        log_prefix = '[capbox-daemon] '
+        guest_line = f'{log_prefix}{self.MARKER}, 等待在跑任务完成（上限 30s）\n'
+        old_line = f'{log_prefix}收到停止请求，等待在跑任务完成（上限 30s）\n'
+        other_line = f'{log_prefix}收到终止信号（TERM/INT），准备优雅退出\n'
+        warn_line = 'Server did not acknowledge the stop request within 5s\n'
+
+        def greps(text):
+            result = subprocess.run(
+                ['grep', '-q', self.MARKER],
+                input=text, text=True, capture_output=True)
+            return result.returncode
+
+        self.assertEqual(greps(guest_line), 0)
+        self.assertEqual(greps(old_line), 1)
+        self.assertEqual(greps(other_line), 1)
+        self.assertEqual(greps(warn_line), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
