@@ -116,9 +116,13 @@ ARGPARSE_MESSAGES = {
 }
 
 
-def fmt(catalog: dict[str, str], key: str, **kwargs: object) -> str:
-    """Replace {name} placeholders; unknown placeholders stay literal."""
-    text = get(catalog, key)
+def fmt(catalog: dict[str, str], _key: str, **kwargs: object) -> str:
+    """Replace {name} placeholders; unknown placeholders stay literal.
+
+    形参刻意不用 `key` —— 模板占位符里就有 {key}，用同名形参会与
+    `**{'key': ...}` 冲突（TypeError: got multiple values for argument 'key'）。
+    """
+    text = get(catalog, _key)
     if not kwargs:
         return text
 
@@ -202,9 +206,12 @@ def catalog_for(lang: str) -> dict[str, str]:
     return cached
 
 
-def t(key: str, **kwargs: object) -> str:
-    """Look up a catalog key in the current process language."""
-    return fmt(catalog_for(resolve_lang()), key, **kwargs)
+def t(_key: str, **kwargs: object) -> str:
+    """Look up a catalog key in the current process language.
+
+    形参不用 `key`：模板占位符 {key} 需要能通过 kwargs 传入。
+    """
+    return fmt(catalog_for(resolve_lang()), _key, **kwargs)
 
 
 def argparse_gettext(message: str) -> str:

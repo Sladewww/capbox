@@ -379,7 +379,7 @@ def pack(ctx,args):
         recipe=json.loads(success(cli(ctx,'recipe','export',Path(args.recipe).absolute()),i18n.t('bundle.recipe_check_failed')))['values']
         if set(recipe)-PORTABLE-{'INIT','PACKAGES'}: raise Failure(i18n.t('bundle.recipe_has_nonportable_or_secret_settings'))
         for k,v in recipe.items():
-            if k in PORTABLE and config.get(k)!=v: raise Failure(i18n.t('bundle.recipe_differs_from_current', key=k))
+            if k in PORTABLE and config.get(k)!=v: raise Failure(i18n.t('bundle.recipe_differs_from_current', **{'key': k}))
     private=Path(tempfile.mkdtemp(prefix='.capbox-bundle-',dir=parent))
     try:
         lock=Path(success(cli(ctx,'image','lock','save'),i18n.t('bundle.unable_to_save_package_lock')).decode().strip())
