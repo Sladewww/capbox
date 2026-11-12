@@ -35,4 +35,16 @@ capbox image docker pull ghcr.io/org/app@sha256:0123456789abcdef0123456789abcdef
 
 `image docker run` 把镜像里的 `Entrypoint`、`Cmd`、`User`、`WorkingDir`、`Env` 当数据用：argv 直接交给 bwrap，`Env` 只变成 `--setenv`，不写进宿主 shell，也不 source。`--` 后面的参数替换 `Cmd`，保留 `Entrypoint`。`exec --image NAME` 只更换这一次的 rootfs，命令仍是你写的那条，并且要求镜像里有 `/bin/sh`。它不能和 `--daemon` 一起用。
 
+`exec --image` 的写入直接落在 `.capbox/images/docker/<name>/rootfs`，不是一次性的上层副本：命令结束后改动保留，下次 `exec --image` 仍在。要还原镜像，重新 `image docker import --force`。
+
+镜像内的包操作被打断（命令超时、进程被杀、两个操作挨得太近）会留下未完成事务。RPM 系随后可能报 `rpmdb: BDB0113` 或 `cannot open Packages database`。同一份 rootfs 上一次只跑一个包操作；已经坏掉时按顺序修：
+
+```sh
+rm -f /var/lib/rpm/__db*
+rpm --rebuilddb
+yum-complete-transaction --cleanup-only
+```
+
+`yum check` 报同一个包的多个版本并存时，再跑 `package-cleanup --cleandupes`（来自 `yum-utils`）。`centos:7` 官方镜像自带一条构建期未完成的卸载事务，在 `yum history` 里标记为 `E<`，这类镜像先跑上面三步再装包。
+
 不可信镜像请加 `--profile untrusted` 或 `--profile strict`。`compat` 仍是全 capability、无 seccomp。外层 zstd 或 zstd 层需要宿主有 `zstd`。
