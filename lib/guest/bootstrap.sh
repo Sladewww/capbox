@@ -15,7 +15,7 @@
 set -u
 
 MARKER=/etc/capbox-bootstrap.done
-VERSION="${CAPBOX_VERSION:-0.5.0}"
+VERSION="${CAPBOX_VERSION:-0.5.1}"
 DISTRO=""
 
 say() { printf '[bootstrap] %s\n' "$*"; }
