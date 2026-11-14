@@ -381,8 +381,8 @@ _capbox_audit_old_bwrap() {
   local dir f ts esc_ts esc_ver esc_scope esc_cmd
   [[ "$scope" == "once" || "$scope" == "persist" ]] || return 1
   [[ -n "${CAPBOX_DIR:-}" ]] || return 1
-  dir="${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}"
-  f="$dir/audit.jsonl"
+  f="${_audit_task_path:-${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}/audit.jsonl}"
+  dir="${f%/*}"
   if [[ -L "$dir" || -L "$f" ]]; then
     i18n_err common.audit_log_path_symlink_refusing_record_old f="$f"
     return 1
@@ -404,6 +404,12 @@ _capbox_audit_old_bwrap() {
   esc_ver="$(json_escape "$version")"
   esc_scope="$(json_escape "$scope")"
   esc_cmd="$(json_escape "$cmd")"
+  if [[ -n "${_audit_task_path:-}" ]]; then
+    printf '{"ts":"%s","kind":"security","status":"warn","event":"old_bwrap_bypass","object":"old_bwrap_bypass","task_id":"%s","version":"%s","scope":"%s","cmd":"%s"}\n' \
+      "$esc_ts" "$_audit_task_id" "$esc_ver" "$esc_scope" "$esc_cmd" |
+      python3 "${BASH_SOURCE[0]%/*}/audit_store.py" "$f"
+    return $?
+  fi
   printf '{"ts":"%s","event":"old_bwrap_bypass","version":"%s","scope":"%s","cmd":"%s"}\n' \
     "$esc_ts" "$esc_ver" "$esc_scope" "$esc_cmd" >>"$f" || return 1
   return 0
@@ -1167,8 +1173,8 @@ join_cmd_str() {
 # 直接用 [[ -e "$rootfs/bin/sh" ]] 会跟随到**宿主**的 /bin/busybox 而误判为不存在。
 _rootfs_path_exists() {
   local r="${1:-$CAPBOX_ROOTFS}"
-  local p="${2:-}"
-  [[ -n "$r" && -n "$p" ]] || return 1
+  local p="${2:-}" hops="${3:-0}"
+  [[ -n "$r" && -n "$p" && "$hops" -lt 40 ]] || return 1
   local full="$r$p"
   [[ -e "$full" ]] && return 0
   [[ -L "$full" ]] || return 1
@@ -1178,8 +1184,8 @@ _rootfs_path_exists() {
   target="$(readlink -- "$full" 2>/dev/null)" || return 1
   [[ -n "$target" ]] || return 1
   case "$target" in
-    /*) _rootfs_path_exists "$r" "$target" ;;
-    *) _rootfs_path_exists "$r" "$(dirname "$p")/$target" ;;
+    /*) _rootfs_path_exists "$r" "$target" "$((hops + 1))" ;;
+    *) _rootfs_path_exists "$r" "$(dirname "$p")/$target" "$((hops + 1))" ;;
   esac
 }
 
@@ -1478,25 +1484,31 @@ _doctor_strip_marker() {
   rm -f -- "$tmp"
 }
 
-# 探测 userns 内是否拿到全量 capability；成功时打印 CapEff 十六进制值
+# Probe the host tools without a project rootfs. Keep kernel diagnostics for the caller.
 _doctor_probe_userns() {
-  local bwrap="${CAPBOX_BWRAP:-}"
-  [[ -x "$bwrap" ]] || return 5
-  local out uid capeff
-  out="$("$bwrap" --clearenv --unshare-net --unshare-user --unshare-uts --unshare-ipc \
-    --uid 0 --gid 0 --cap-add ALL \
-    --setenv PATH /usr/bin:/bin \
-    --ro-bind / / --proc /proc --dev /dev \
-    -- /bin/sh -c 'id -u; sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status' 2>/dev/null)" || return 1
-  uid="$(printf '%s\n' "$out" | sed -n '1p')"
-  capeff="$(printf '%s\n' "$out" | sed -n '2p')"
-  [[ "$uid" == "0" ]] || return 1
-  [[ -n "$capeff" ]] || return 1
-  local val want
-  val=$(( 16#${capeff} ))
-  want=$(( (1 << 41) - 1 ))
-  (( (val & want) == want )) || return 1
-  printf '%s' "$capeff"
+  local bwrap="${CAPBOX_BWRAP:-}" out uid capeff
+  local -a deadline=() net=()
+  CAPBOX_USERNS_DETAIL=""
+  [[ -f "$bwrap" && -x "$bwrap" ]] || return 5
+  have_cmd timeout && deadline=(timeout 10)
+  [[ "${1:-}" == network ]] && net=(--unshare-net)
+  if ! out="$(LC_ALL=C "${deadline[@]}" "$bwrap" --die-with-parent --clearenv \
+      "${net[@]}" --unshare-user --unshare-uts --unshare-ipc \
+      --uid 0 --gid 0 --cap-add ALL --setenv PATH /usr/bin:/bin \
+      --ro-bind / / --proc /proc --dev /dev \
+      -- /bin/sh -c 'id -u; sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status' 2>&1)"; then
+    CAPBOX_USERNS_DETAIL="${out:0:512}"
+    CAPBOX_USERNS_DETAIL="${CAPBOX_USERNS_DETAIL:-$(i18n_get doctor.userns_no_detail)}"
+    return 1
+  fi
+  uid="${out%%$'\n'*}"
+  capeff="${out##*$'\n'}"
+  if [[ "$uid" != 0 || ! "$capeff" =~ ^[0-9a-fA-F]{1,16}$ ]] ||
+      (( (16#$capeff & ((1 << 41) - 1)) != (1 << 41) - 1 )); then
+    CAPBOX_USERNS_DETAIL="$(i18n_get doctor.userns_insufficient)"
+    return 1
+  fi
+  CAPBOX_USERNS_DETAIL="$capeff"
 }
 
 # 报告 bwrap 是否达到 0.12.0。放行不把这一项改成 PASS。
@@ -1507,7 +1519,7 @@ _capbox_doctor_check_bwrap() {
   CAPBOX_DOCTOR_BWRAP_VER_OK=0
   CAPBOX_DOCTOR_BWRAP_LAUNCH_OK=0
   CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL=0
-  if [[ -n "$bwrap" && -x "$bwrap" ]]; then
+  if [[ -f "$bwrap" && -x "$bwrap" ]]; then
     _doctor_pass_i18n doctor.bwrap_installed bwrap="$bwrap"
     if _capbox_bwrap_version_ok "$bwrap"; then
       CAPBOX_DOCTOR_BWRAP_VER_OK=1
@@ -1529,6 +1541,7 @@ _capbox_doctor_check_bwrap() {
     fi
   else
     _doctor_fail_i18n doctor.bwrap_unavailable bwrap="$(i18n_or "${bwrap:-}" val.unset)"
+    _doctor_warn_i18n setup.next_bwrap
   fi
 }
 
@@ -1559,13 +1572,24 @@ cmd_doctor() {
   _bwrap_launch_ok="${CAPBOX_DOCTOR_BWRAP_LAUNCH_OK:-0}"
   _bwrap_baseline_fail="${CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL:-0}"
 
-  # 2) userns 全权限
-  if [[ -n "$bwrap" && -x "$bwrap" ]]; then
-    local caphex
-    if caphex="$(_doctor_probe_userns)"; then
-      _doctor_pass_i18n doctor.userns_ok caphex="$caphex"
+  # 2) Host namespace checks are independent of rootfs preparation.
+  local _host_launch_ok=0
+  if [[ -f "$bwrap" && -x "$bwrap" ]]; then
+    if _doctor_probe_userns; then
+      _doctor_pass_i18n doctor.userns_ok caphex="$CAPBOX_USERNS_DETAIL"
+      _host_launch_ok=1
+      if [[ "${CAPBOX_NET:-open}" != open ]]; then
+        if _doctor_probe_userns network; then
+          _doctor_pass_i18n doctor.netns_ready
+        else
+          _doctor_fail_i18n doctor.netns_probe_failed detail="$CAPBOX_USERNS_DETAIL"
+          _doctor_warn_i18n doctor.netns_next
+          _host_launch_ok=0
+        fi
+      fi
     else
-      _doctor_fail_i18n doctor.userns_probe_failed
+      _doctor_fail_i18n doctor.userns_host_failed detail="$CAPBOX_USERNS_DETAIL"
+      _doctor_warn_i18n doctor.userns_next
     fi
   else
     _doctor_fail_i18n doctor.userns_not_probed
@@ -1710,7 +1734,7 @@ cmd_doctor() {
 
   # 9) 环境变量清空（--clearenv 白名单）
   # 版本不够时不跑 oneshot：build_bwrap_args 会拒绝，探针会误报成「环境变量未清空」。
-  if (( _bwrap_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+  if (( _bwrap_launch_ok == 1 && _host_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
     local env_probe="" env_rc=0
     # 用真实 oneshot 路径探测；哨兵与常见密钥名都不得出现，HOME/PATH 仍须可用。
     env_probe="$(
@@ -1733,13 +1757,15 @@ cmd_doctor() {
     _doctor_warn_i18n doctor.skip_env_old_bwrap
   elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
     _doctor_warn_i18n doctor.skip_env_no_bwrap
+  elif (( _host_launch_ok == 0 )); then
+    _doctor_warn_i18n doctor.skip_guest_host_probe
   else
     _doctor_warn_i18n doctor.skip_env_no_rootfs
   fi
 
   # 10) 缺失配置路径预占（CVE-2026-25725 同类：guest 不得创建宿主会读的 config/services）
   #     同时确认 logs/audit.jsonl 对 guest 只读。
-  if (( _bwrap_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
+  if (( _bwrap_launch_ok == 1 && _host_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
     local _cfg_g _svc_g _log_g _probe_out _probe_rc=0 _host_cfg _host_svc_probe _host_log _log_tampered=0
     _cfg_g="$(_guest_workspace_path "$CAPBOX_DIR/config.env")"
     _svc_g="$(_guest_workspace_path "$CAPBOX_DIR/services")"
@@ -1794,6 +1820,8 @@ cmd_doctor() {
     _doctor_warn_i18n doctor.skip_preoccupy_old_bwrap
   elif (( _bwrap_launch_ok != 1 && _bwrap_ver_ok != 1 )); then
     _doctor_warn_i18n doctor.skip_preoccupy_no_bwrap
+  elif (( _host_launch_ok == 0 )); then
+    _doctor_warn_i18n doctor.skip_guest_host_probe
   else
     _doctor_warn_i18n doctor.skip_preoccupy_no_rootfs
   fi

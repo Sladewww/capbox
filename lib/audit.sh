@@ -31,6 +31,12 @@ _audit_json_escape() {
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
   s="${s//$'\t'/\\t}"
+  local code char escaped
+  for ((code=1; code<32; code++)); do
+    printf -v escaped '%02x' "$code"
+    printf -v char '%b' "\x$escaped"
+    s="${s//"$char"/\\u00$escaped}"
+  done
   printf '%s' "$s"
 }
 
@@ -105,14 +111,16 @@ audit_event() {
   [[ -n "$kind" && -n "$status" ]] || return 0
 
   local dir f ts
-  dir="$(dirname "$(_audit_path)")"
-  mkdir -p "$dir" 2>/dev/null || return 0
-  f="$(_audit_path)"
-  if [[ -L "$f" || -d "$f" ]]; then
+  f="${_audit_task_path:-$(_audit_path)}"
+  dir="$(dirname "$f")"
+  if [[ -z "${_audit_task_path:-}" ]]; then
+    mkdir -p "$dir" 2>/dev/null || return 0
+  fi
+  if [[ -L "$dir" || -L "$f" || ( -e "$f" && ! -f "$f" ) ]]; then
     i18n_err audit.audit_log_must_regular_file_refusing_write f="$f"
     return 1
   fi
-  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null || date)"
 
   local cmd="" exit_c="" ms="" object="" detail="" profile="" net="" uid="" output=""
   local kv k v
@@ -135,11 +143,15 @@ audit_event() {
   local cmd_out
   cmd_out="$(_audit_cmd_field "$cmd")"
 
-  {
+  local record
+  record="$(
     printf '{'
     printf '"ts":"%s",' "$(_audit_json_escape "$ts")"
     printf '"kind":"%s",' "$(_audit_json_escape "$kind")"
     printf '"status":"%s"' "$(_audit_json_escape "$status")"
+    if [[ "${_audit_task_id:-}" =~ ^[0-9a-f]{32}$ ]]; then
+      printf ',"task_id":"%s"' "$_audit_task_id"
+    fi
     [[ -n "$exit_c" ]] && printf ',"exit":%s' "$exit_c"
     [[ -n "$ms" ]] && printf ',"ms":%s' "$ms"
     [[ -n "$object" ]] && printf ',"object":"%s"' "$(_audit_json_escape "$object")"
@@ -153,7 +165,12 @@ audit_event() {
     fi
     printf ',"distro":"%s"' "$(_audit_json_escape "${CAPBOX_DISTRO:-}")"
     printf '}\n'
-  } >>"$f" 2>/dev/null || true
+  )"
+  if [[ -n "${_audit_task_path:-}" ]]; then
+    printf '%s\n' "$record" | python3 "${BASH_SOURCE[0]%/*}/audit_store.py" "$f" 2>/dev/null || true
+  else
+    printf '%s\n' "$record" >>"$f" 2>/dev/null || true
+  fi
 }
 
 # audit_command KIND RC T0 [KEY=VAL ...]
@@ -188,12 +205,16 @@ cmd_audit() {
       printf '%s\n' "$(_audit_path)"
       return 0
       ;;
-    report)
+    report|query)
       need_cmd python3
-      local report_lib="${BASH_SOURCE[0]%/*}"
+      local report_lib="${BASH_SOURCE[0]%/*}" private=""
+      if [[ " $* " == *" --task-id "* || " $* " == *" --task-id="* ]]; then
+        private="$(_capbox_host_state_dir)" || private=""
+      fi
       env "CAPBOX_AUDIT_REPORT_SOURCE=$(_audit_path)" \
         "CAPBOX_AUDIT_REPORT_WORKSPACE=$CAPBOX_WORKSPACE" \
-        python3 "$report_lib/audit-report.py" "$@"
+        "CAPBOX_AUDIT_REPORT_PRIVATE=$private" \
+        python3 "$report_lib/audit-report.py" "$sub" "$@"
       ;;
     clear)
       local f="$(_audit_path)"

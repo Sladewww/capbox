@@ -58,7 +58,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   image export|import|docker|lock|cache
                                     rootfs 归档、包锁，以及本地 Docker/OCI 镜像
   secret set|ls|rm|import           宿主凭据（真实 key 不进沙箱；见 docs/credentials.md）
-  audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
+  audit report|query|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
   help, --help, -h                  显示本帮助
@@ -335,9 +335,10 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox audit --help
 
 ```text
-用法: capbox audit <report|tail|path|clear> [参数]
+用法: capbox audit <report|query|tail|path|clear> [参数]
 
   report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
+  query --task-id ID    以 JSON 查询任务及关联事件
   tail [N]   显示最近 N 条（默认 50）
   path       打印审计文件路径
   clear      清空审计文件（需确认意图：直接执行即清空）
@@ -354,23 +355,45 @@ CAPBOX_AUDIT_CMD=summary|full|off
 ## capbox audit report --help
 
 ```text
-用法: capbox audit report [-h] --output OUTPUT [--input INPUT] [--limit LIMIT]
+用法: capbox audit report [-h] [--task-id TASK_ID] --output OUTPUT [--force]
+                        [--json] [--input INPUT] [--limit LIMIT]
                         [--since SINCE] [--until UNTIL] [--kind KIND]
-                        [--status STATUS] [--force] [--json]
+                        [--status STATUS]
 
 导出可搜索、筛选的离线 HTML 审计报告，不启动服务
 
 选项:
-  -h, --help       显示此帮助并退出
-  --output OUTPUT  工作区外的 HTML 文件；父目录必须已存在
-  --input INPUT    显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl
-  --limit LIMIT    保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）
-  --since SINCE    起始时间（包含）；ISO 8601 时区或 UTC 日期
-  --until UNTIL    结束时间（不包含）；ISO 8601 时区或 UTC 日期
-  --kind KIND      只导出此类型，可重复
-  --status STATUS  只导出此状态，可重复
-  --force          原子替换当前用户已有的普通输出文件
-  --json           输出机器可读的生成结果
+  -h, --help         显示此帮助并退出
+  --task-id TASK_ID  精确匹配任务 ID（32 位小写十六进制字符）
+  --output OUTPUT    工作区外的 HTML 文件；父目录必须已存在
+  --force            原子替换当前用户已有的普通输出文件
+  --json             输出机器可读的生成结果
+  --input INPUT      显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl
+  --limit LIMIT      保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）
+  --since SINCE      起始时间（包含）；ISO 8601 时区或 UTC 日期
+  --until UNTIL      结束时间（不包含）；ISO 8601 时区或 UTC 日期
+  --kind KIND        只导出此类型，可重复
+  --status STATUS    只导出此状态，可重复
+```
+
+## capbox audit query --help
+
+```text
+用法: capbox audit query [-h] --task-id TASK_ID [--input INPUT] [--limit LIMIT]
+                       [--since SINCE] [--until UNTIL] [--kind KIND]
+                       [--status STATUS]
+
+从项目审计日志查询任务及其事件，输出 JSON
+
+选项:
+  -h, --help         显示此帮助并退出
+  --task-id TASK_ID  精确匹配任务 ID（32 位小写十六进制字符）
+  --input INPUT      显式读取其它普通 JSONL 审计文件；默认当前项目 logs/audit.jsonl
+  --limit LIMIT      保留扫描区域内最后 N 条匹配记录（1–20000，默认 5000）
+  --since SINCE      起始时间（包含）；ISO 8601 时区或 UTC 日期
+  --until UNTIL      结束时间（不包含）；ISO 8601 时区或 UTC 日期
+  --kind KIND        只导出此类型，可重复
+  --status STATUS    只导出此状态，可重复
 ```
 
 ## capbox pkg --help

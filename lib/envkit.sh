@@ -12,6 +12,45 @@ _envkit_command() {
     context+=("CAPBOX_ENVKIT_CFG_$key=$(_cfg_value "$key")"
       "CAPBOX_ENVKIT_SOURCE_$key=${CAPBOX_CFG_EXPLICIT[$key]:-default}")
   done
+  if [[ "${1:-}" == setup ]]; then
+    local rootfs=missing userns=not_probed netns=not_probed cgroup=not_probed
+    local probe=0 arg namespace_detail="" cgroup_detail=""
+    rootfs_ready && rootfs=ready
+    if [[ "${2:-}" == check || "${2:-}" == plan ]]; then
+      for arg in "${@:3}"; do
+        case "$arg" in
+          -h|--help) probe=0; break ;;
+          --probe) probe=1 ;;
+        esac
+      done
+    fi
+    if (( probe )); then
+      if [[ -f "${CAPBOX_BWRAP:-}" && -x "$CAPBOX_BWRAP" ]]; then
+        if _doctor_probe_userns; then
+          userns=ready
+          if [[ "${CAPBOX_NET:-open}" == open ]]; then
+            netns=not_required
+          elif _doctor_probe_userns network; then
+            netns=ready
+          else
+            netns=failed
+          fi
+        else
+          userns=failed
+        fi
+      else
+        userns=dependency_missing
+      fi
+      namespace_detail="${CAPBOX_USERNS_DETAIL:-}"
+      _resources_probe_cgroup inspect || true
+      cgroup="$CAPBOX_CGROUP_STATUS"
+      cgroup_detail="$CAPBOX_CGROUP_DETAIL"
+    fi
+    context+=("CAPBOX_SETUP_ROOTFS=$rootfs" "CAPBOX_SETUP_USERNS=$userns"
+      "CAPBOX_SETUP_NETNS=$netns" "CAPBOX_SETUP_NAMESPACE_DETAIL=$namespace_detail"
+      "CAPBOX_SETUP_CGROUP=$cgroup"
+      "CAPBOX_SETUP_CGROUP_DETAIL=$cgroup_detail")
+  fi
   "${context[@]}" python3 "$lib/envkit-runtime.py" "$@"
 }
 
