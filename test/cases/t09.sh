@@ -8,13 +8,14 @@ case_begin "$1" "$CASE_TITLE" "$2"
 
 require_rootfs || { case_finish; exit 0; }
 
-# 容器内 /workspace 是宿主工作区的 bind 挂载点；本用例在 <capbox>/state/ 下交换文件。
-# 路径必须相对工作区推导，不写死 ".capbox" —— 仓库可能以任意目录名存在。
-mkdir -p "$CAPBOX_DIR/state"
-# 容器内路径 = /workspace + CAPBOX_DIR 相对工作区的部分（测试不走 common.sh，故在此推导）
-_rel="${CAPBOX_DIR#"$CAPBOX_TEST_WS"}"
-gpath="/workspace${_rel}/state"
-host_file="$CAPBOX_DIR/state/g.txt"
+# 容器内 /workspace 是宿主工作区的 bind 挂载点。
+# 注意：.capbox 整体对 guest 只读（只有 run/ 与 cache/ 例外），state/、logs/、services/
+# 都不可写——这是防改写 CLI 与配置的安全设计。所以交换文件放在工作区顶层的普通目录，
+# 这也正是文档推荐的「业务数据放 /workspace」。
+xdir="$CAPBOX_TEST_WS/.capbox-test-t09"
+mkdir -p "$xdir"
+gpath="/workspace/.capbox-test-t09"
+host_file="$xdir/g.txt"
 rm -f "$host_file"
 sentinel="capbox-ws-$RANDOM$RANDOM"
 
@@ -29,13 +30,13 @@ fi
 
 # 反向：宿主写 → 容器读
 back="host-to-guest-$RANDOM"
-printf '%s\n' "$back" >"$CAPBOX_DIR/state/h2g.txt"
+printf '%s\n' "$back" >"$xdir/h2g.txt"
 run_cmd "$CAPBOX_BIN" exec -- cat $gpath/h2g.txt
 assert_rc 0 "容器内读宿主写的文件"
 assert_stdout_eq "$back" "容器读到的宿主内容"
 
 # 清理本用例产生的文件
-rm -f "$host_file" "$CAPBOX_DIR/state/h2g.txt"
+rm -f "$host_file" "$xdir/h2g.txt"; rmdir "$xdir" 2>/dev/null || true
 
 case_finish
 exit 0
