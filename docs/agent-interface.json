@@ -9,6 +9,16 @@
     "task wait": {"output": "JSON terminal state or wait_timeout", "exit": "task exit code or client wait timeout 124"},
     "task cancel": {"output": "JSON current state; cancellation is asynchronous"},
     "task diff --json": {"output": "JSON changed_files, origin_changed and patch_base64; no apply"},
+    "task diff --json --scan-secrets": {
+      "output": "On success, workspace_diff with an additional scan object. On findings or incomplete coverage, workspace_diff_scan with task_id and scan, without a patch.",
+      "exit": "0 clean; 3 findings or incomplete coverage; 1 unreadable or over budget; 2 ineligible task",
+      "scan": {
+        "status": ["clean", "findings", "incomplete"],
+        "findings": [{"path": "relative path", "line": "1-based new-file line number", "type": "github_token or private_key"}],
+        "skipped": [{"path": "relative path", "reason": "binary"}],
+        "findings_truncated": "boolean"
+      }
+    },
     "task rm": {"output": "JSON removed acknowledgement; terminal non-lost tasks only"},
     "policy show": {"output": "JSON requested effective policy and value sources"},
     "policy check": {"output": "JSON HTTP(S) policy decision", "exit": "0 allow/conditional; 1 deny; 2 invalid input"}

@@ -11,6 +11,7 @@ import fcntl
 import fnmatch
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -237,9 +238,13 @@ def read_regular(root, name):
         os.close(directory)
 
 
-def regular_files(root):
+def regular_files(root, *, require_readable=False):
+    def unreadable(error):
+        raise error
+
     result, total = {}, 0
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    for directory, dirs, files in os.walk(
+            root, followlinks=False, onerror=unreadable if require_readable else None):
         relative = Path(directory).relative_to(root)
         dirs[:] = [d for d in dirs if not excluded((relative / d).as_posix())]
         for name in dirs + files:
@@ -654,23 +659,130 @@ def log_chunk(job, stream, offset, limit):
     return result
 
 
-def diff_task(ctx, job, as_json):
+SECRET_PATTERNS = {
+    'private_key': re.compile(
+        rb'-----BEGIN (?:(?:RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----'),
+    'github_token': re.compile(
+        rb'(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})'
+        rb'(?![A-Za-z0-9_])'),
+}
+MAX_SCAN_FINDINGS = 1000
+HUNK = re.compile(rb'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@')
+
+
+def scan_path(name):
+    for pattern in SECRET_PATTERNS.values():
+        name = pattern.sub(b'[REDACTED]', name)
+    return name.decode('utf-8', 'replace')
+
+
+def scan_patch(stats, patch):
+    # NUL-delimited numstat and patch sections share Git's file order.
+    # File names never need to be parsed from quoted patch headers.
+    paths = iter(stats.split(b'\0')[:-1])
+    sections = []
+    for record in paths:
+        added, removed, name = record.split(b'\t', 2)
+        if not name:  # rename or copy: old and new paths are separate fields
+            next(paths)
+            name = next(paths)
+        sections.append((scan_path(name), added == removed == b'-'))
+
+    sections = iter(sections)
+    findings, skipped = [], []
+    truncated = False
+    line_number, binary = None, True
+    deleted = False
+    for line in io.BytesIO(patch):
+        if line.startswith(b'diff --git '):
+            section = next(sections, None)
+            if section is None:
+                raise AgentError(i18n.t('task.scan_patch_unreadable'))
+            name, binary = section
+            line_number = None
+            deleted = False
+        elif binary:
+            if line.startswith(b'deleted file mode '):
+                deleted = True
+            elif line == b'GIT binary patch\n' and not deleted:
+                skipped.append({'path': name, 'reason': 'binary'})
+        else:
+            hunk = HUNK.match(line)
+            if hunk:
+                line_number = int(hunk[1])
+            elif line_number is not None and line.startswith(b'+'):
+                for kind, pattern in SECRET_PATTERNS.items():
+                    if pattern.search(line[1:]):
+                        if len(findings) < MAX_SCAN_FINDINGS:
+                            findings.append({'path': name, 'line': line_number,
+                                             'type': kind})
+                        else:
+                            truncated = True
+                line_number += 1
+            elif line_number is not None and line.startswith(b' '):
+                line_number += 1
+    if next(sections, None) is not None:
+        raise AgentError(i18n.t('task.scan_patch_unreadable'))
+    status = 'findings' if findings else 'incomplete' if skipped else 'clean'
+    return {'status': status, 'findings': findings, 'skipped': skipped,
+            'findings_truncated': truncated}
+
+
+def report_scan(scan):
+    for finding in scan['findings']:
+        location = json.dumps(finding['path'], ensure_ascii=True)
+        print(f"{location}:{finding['line']}: {finding['type']}", file=sys.stderr)
+    for skipped in scan['skipped']:
+        location = json.dumps(skipped['path'], ensure_ascii=True)
+        print(f"{location}: {i18n.t('task.scan_binary_skipped')}", file=sys.stderr)
+    if scan['findings_truncated']:
+        print(i18n.t('task.scan_findings_truncated', limit=MAX_SCAN_FINDINGS), file=sys.stderr)
+    print(i18n.t('task.scan_' + scan['status']), file=sys.stderr)
+
+
+def diff_task(ctx, job, as_json, scan_secrets):
     state = state_of(job)
     if not state['isolated'] or state['status'] not in FINISHED:
         raise AgentError(i18n.t('task.diff_only_finished_isolated'), 2)
     plan = read_json(job / 'plan.json')
     view, index = job / 'workspace', job / 'review.git'
-    current = regular_files(view)
+    try:
+        if scan_secrets and not stat.S_ISDIR(view.lstat().st_mode):
+            raise AgentError(i18n.t('task.scan_workspace_unreadable'))
+        current = regular_files(view, require_readable=scan_secrets)
+    except (OSError, AgentError) as exc:
+        if not scan_secrets:
+            raise
+        if isinstance(exc, AgentError):
+            raise AgentError(scan_path(str(exc).encode('utf-8', 'surrogateescape')), exc.code) from exc
+        raise AgentError(i18n.t('task.scan_workspace_unreadable')) from exc
     baseline = read_json(job / 'baseline.json')
     new = sorted(set(current) - set(baseline))
     if new:
         payload = b''.join(name.encode() + b'\0' for name in new)
         git(ctx, ['add', '--intent-to-add', '--force', '--pathspec-from-file=-',
                   '--pathspec-file-nul'], work=view, index=index, data=payload)
-    patch = git(ctx, ['diff', '--binary', '--no-ext-diff', '--no-textconv', '--', '.',
-                      ':(exclude).capbox', ':(exclude).git'], work=view, index=index)
+    diff_args = ['diff', '--binary', '--no-ext-diff', '--no-textconv']
+    if scan_secrets:
+        diff_args += ['--numstat', '-z']
+    patch = git(ctx, diff_args + ['--', '.', ':(exclude).capbox', ':(exclude).git'],
+                work=view, index=index)
+    if scan_secrets:
+        stats, separator, patch = patch.partition(b'\0\0')
+        if not separator and stats:
+            raise AgentError(i18n.t('task.scan_patch_unreadable'))
+        if separator:
+            stats += b'\0'
     if len(patch) > 16 * 1024 * 1024:
         raise AgentError(i18n.t('task.diff_exceeds_16mib'))
+    if scan_secrets:
+        scan = scan_patch(stats, patch)
+        if scan['status'] != 'clean':
+            if as_json:
+                emit({'kind': 'workspace_diff_scan', 'task_id': job.name, 'scan': scan})
+            else:
+                report_scan(scan)
+            return 3
     origin = Path(plan['origin'])
     conflicts = []
     for name in set(baseline) | set(new):
@@ -687,10 +799,15 @@ def diff_task(ctx, job, as_json):
         name for name in set(current) | set(baseline) if current.get(name) != baseline.get(name)),
         'origin_changed': conflicts, 'patch_base64': base64.b64encode(patch).decode(),
         'notes': i18n.t('task.diff_export_notes')}
+    if scan_secrets:
+        result['scan'] = scan
     if as_json:
         emit(result)
     else:
         sys.stdout.buffer.write(patch)
+        if scan_secrets:
+            report_scan(scan)
+            conflicts = [scan_path(os.fsencode(name)) for name in conflicts]
         if conflicts:
             print(i18n.t('task.host_baseline_changed', conflicts=', '.join(conflicts)), file=sys.stderr)
     return 0
@@ -728,6 +845,9 @@ def parser():
         if action == 'attach':
             cmd.add_argument('--stdout-offset', type=nonnegative, default=0)
             cmd.add_argument('--stderr-offset', type=nonnegative, default=0)
+        if action == 'diff':
+            cmd.add_argument('--scan-secrets', action='store_true',
+                             help=i18n.t('task.help_scan_secrets'))
         if action == 'logs':
             cmd.add_argument('--stream', choices=['stdout', 'stderr'], default='stdout')
             cmd.add_argument('--offset', type=nonnegative, default=0)
@@ -810,7 +930,7 @@ def main(argv=None):
                 return 124
             time.sleep(0.05)
     elif args.action == 'diff':
-        return diff_task(ctx, job, args.json)
+        return diff_task(ctx, job, args.json, args.scan_secrets)
     elif args.action == 'rm':
         state = state_of(job)
         if state['status'] not in TERMINAL:

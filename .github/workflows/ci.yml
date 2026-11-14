@@ -52,7 +52,7 @@ jobs:
           python3 test/security/test_configuration.py
           python3 test/security/test_upgrade.py
           python3 test/security/test_package_lock.py
-          python3 test/security/test_agent_workflows.py PolicyTests
+          python3 test/security/test_agent_workflows.py PolicyTests DiffScanTests
           python3 test/security/test_envkit.py SetupTests MCPTests
           python3 test/security/test_audit_report.py
           python3 test/security/test_i18n.py

@@ -65,6 +65,23 @@ capbox task rm "$task_id"
 
 MVP 导出支持二进制的 Git 补丁；**不会应用到原项目**。JSON 含 `changed_files`、`origin_changed`、`patch_base64`。读补丁、核对源基线并解决冲突后，再用你平时的 Git 审阅/应用流程。源基线被删或改、可执行位变化、或源文件与任务新建文件冲突都会报告。预览不是对未来原子应用的授权。
 
+### 导出前扫描
+
+```sh
+capbox task diff "$task_id" --scan-secrets --json
+capbox task diff "$task_id" --scan-secrets > "$patch_file"
+```
+
+`--scan-secrets` 只检查即将导出的补丁新增行。首版识别 GitHub token（`ghp_`、`gho_`、`ghu_`、`ghs_`、`ghr_`、`github_pat_`）及常见私钥起始标记。报告只给相对路径、新文件中的行号和匹配类型。二进制改动没有文本新增行，报告为 `binary` 跳过。整文件删除、上下文行和删除行不扫描。通过扫描的原始补丁仍可能在上下文或删除行中携带敏感信息。
+
+| 退出码 | 结果 |
+|---|---|
+| 0 | 扫描范围内无匹配，正常导出。JSON 附加 `scan.status=clean`。 |
+| 3 | 命中或覆盖不完整。JSON 仅返回 `kind=workspace_diff_scan` 和扫描结果，不含 `patch_base64`。普通模式仅在 stderr 写报告，stdout 为空。 |
+| 1 | 工作区不可读、不安全、超出原有预算或 Git 无法生成扫描输入，stderr 给出诊断，stdout 为空。 |
+
+`scan` 包含 `status`（`clean`、`findings` 或 `incomplete`）、`findings`、`skipped` 和 `findings_truncated`。最多显示 1,000 条命中。未启用扫描时沿用原有导出行为和 JSON 字段。
+
 支持范围与限制：
 
 - Git 根拷贝已跟踪 + 未忽略的未跟踪普通工作树文件；非 Git 项目只按 CapBox 排除规则遍历目录（无 `.gitignore`）。从不拷贝 Git 历史/配置。源路径相对钉死的目录描述符打开，不跟随链接。
@@ -76,3 +93,15 @@ MVP 导出支持二进制的 Git 补丁；**不会应用到原项目**。JSON �
 - 既有 exec/文件/绑定设置仍生效。指向原工作区的绝对绑定在私有副本中可能无效；不会静默授权访问源。
 
 补丁应用仍留给可信宿主调用方。密钥不能进 guest 时，用 [宿主凭据代理](credentials.md)。可选的 [stdio MCP 适配器](envkit.md) 暴露本 CLI 的固定子集；不开网络监听。
+
+## Python 编排接入
+
+已有 stdio MCP 适配器直接消费 CLI。仓库尚无需要独立 SDK 的 Python 编排脚本。首个调用方可用 Python 标准库按 [capbox.agent.v1](agent-interface.json) 调用 CLI，使用 argv 列表传参，并保留原始 stdout、stderr 与进程退出码供本地诊断。
+
+| 调用 | 首个编排脚本应验证的行为 |
+|---|---|
+| `task start`、`task status` | 保存 `task_id`，重启客户端后重新查询；提交成功与执行成功分别判断。 |
+| `task logs --json`、`task attach --json` | 分别持久化 stdout/stderr 的 `next_offset`，断线后按字节恢复；对 base64 解码后再处理文本。 |
+| `task wait` | 两种超时均返回 124。用 `kind=wait_timeout` 区分客户端等待超时，用终态 `status=timed_out` 识别执行超时。 |
+| `task cancel` | 取消请求后继续 wait/status，确认终态及退出码；同时覆盖任务自然完成的竞争情况。 |
+| `task diff --json` | 对已完成的隔离任务读取变更、冲突与补丁；启用扫描时处理退出码 3 和仅有扫描报告的响应。 |

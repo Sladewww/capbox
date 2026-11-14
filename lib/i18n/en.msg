@@ -1617,3 +1617,11 @@ clone3 is intentionally not denied: glibc uses it to create threads. Namespace
 creation is intercepted via unshare/setns (and bwrap --disable-userns when
 idmap is off).
 >>
+task.help_scan_secrets=Scan added patch lines for supported secret formats before export
+task.scan_patch_unreadable=Could not read scan input from the Git diff; patch withheld
+task.scan_binary_skipped=Binary change skipped
+task.scan_findings_truncated=Only the first {limit} findings are shown
+task.scan_findings=Secret scan found matches; patch withheld
+task.scan_incomplete=Secret scan coverage is incomplete; patch withheld
+task.scan_clean=Secret scan found no matches in added patch lines
+task.scan_workspace_unreadable=Could not read the isolated workspace; patch withheld
