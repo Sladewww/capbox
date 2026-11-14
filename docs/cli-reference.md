@@ -236,9 +236,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox task --help
 
 ```text
-用法: capbox task [-h]
-                {start,list,status,wait,attach,cancel,logs,diff,rm,checkpoint,restore}
-                ...
+用法: capbox task [-h] {start,list,status,wait,attach,cancel,logs,diff,rm,checkpoint,restore} ...
 
 位置参数:
   {start,list,status,wait,attach,cancel,logs,diff,rm,checkpoint,restore}
@@ -254,9 +252,8 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 
 ```text
 用法: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
-                      [--net {none,restricted,open,host}]
-                      [--profile {compat,untrusted,strict}] [--isolate]
-                      [--max-output-bytes MAX_OUTPUT_BYTES]
+                      [--net {none,restricted,open,host}] [--profile {compat,untrusted,strict}]
+                      [--isolate] [--max-output-bytes MAX_OUTPUT_BYTES]
                       ...
 
 位置参数:
@@ -313,8 +310,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 
 ```text
 用法: capbox mcp [-h] [--profile {untrusted,strict}] [--net {none,restricted}]
-               [--workspace-mode {isolated,shared}]
-               [--max-timeout MAX_TIMEOUT]
+               [--workspace-mode {isolated,shared}] [--max-timeout MAX_TIMEOUT]
                {serve}
 
 位置参数:
@@ -354,9 +350,8 @@ CAPBOX_AUDIT_CMD=summary|full|off
 ## capbox audit report --help
 
 ```text
-用法: capbox audit report [-h] --output OUTPUT [--input INPUT] [--limit LIMIT]
-                        [--since SINCE] [--until UNTIL] [--kind KIND]
-                        [--status STATUS] [--force] [--json]
+用法: capbox audit report [-h] --output OUTPUT [--input INPUT] [--limit LIMIT] [--since SINCE]
+                        [--until UNTIL] [--kind KIND] [--status STATUS] [--force] [--json]
 
 导出可搜索、筛选的离线 HTML 审计报告，不启动服务
 

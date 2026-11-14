@@ -34,8 +34,8 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('CAPBOX_', '_CAPBOX_'))}
     env.update(CAPBOX_DIR=str(workspace / '.capbox'), CAPBOX_WORKSPACE=str(workspace))
-    # 文档不随 locale 切换：cli-reference 固定以中文生成。
-    help_env = dict(env, CAPBOX_LANG='zh')
+    # 固定语言和列宽，避免 locale 或 argparse 换行差异造成文档漂移。
+    help_env = dict(env, CAPBOX_LANG='zh', COLUMNS='100')
 
     def cli(*command):
         return subprocess.check_output([str(REPO / 'bin/capbox'), '--root', str(workspace),
