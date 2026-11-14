@@ -1615,3 +1615,11 @@ seccomp.tool_description<<
 有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
 unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 >>
+task.write_dir_requires_readonly=--write-dir 需要 --workspace-readonly
+task.readonly_requires_isolate=--workspace-readonly 需要 --isolate
+task.readonly_mount_conflict=--workspace-readonly 与配置的 FS_BINDS 或 IDMAP=on 冲突
+task.write_dir_unsafe=可写路径必须是项目内现有目录，各级路径均不得为符号链接或受保护目录：{path}
+task.write_dir_hidden=可写目录与 FS_HIDE 路径重叠：{path}
+task.help_workspace_readonly=将隔离项目工作树挂载为只读
+task.help_write_dir=开放已有项目相对目录的写入权限（可重复）
+task.readonly_hide_conflict=--workspace-readonly 要求 FS_HIDE 路径位于工作区根目录之下且互不重叠

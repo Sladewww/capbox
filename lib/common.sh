@@ -745,6 +745,7 @@ _capbox_append_ro_cli_binds() {
     if [[ -n "$cap_guest" && "$cap_guest" == /workspace/* ]]; then
       _ro_arr+=(--ro-bind "$CAPBOX_DIR" "$cap_guest")
       for sub in run cache; do
+        [[ "${CAPBOX_TASK_WORKSPACE_READONLY:-}" != 1 ]] || break
         sub_host="$CAPBOX_DIR/$sub"
         mkdir -p "$sub_host" 2>/dev/null || true
         [[ -d "$sub_host" ]] || continue

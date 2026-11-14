@@ -252,6 +252,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 用法: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
                       [--net {none,restricted,open,host}]
                       [--profile {compat,untrusted,strict}] [--isolate]
+                      [--workspace-readonly] [--write-dir WRITE_DIR]
                       [--max-output-bytes MAX_OUTPUT_BYTES]
                       ...
 
@@ -266,6 +267,9 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
   --net {none,restricted,open,host}
   --profile {compat,untrusted,strict}
   --isolate             复制工作区文件与独立 rootfs（Git 脏树/非 Git/overlay 合并）；diff 后导出
+  --workspace-readonly  将隔离项目工作树挂载为只读
+  --write-dir WRITE_DIR
+                        开放已有项目相对目录的写入权限（可重复）
   --max-output-bytes MAX_OUTPUT_BYTES
 ```
 

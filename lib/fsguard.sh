@@ -150,6 +150,18 @@ _fsguard_apply_rootfs_mount() {
   fi
 }
 
+_fsguard_append_hide() {
+  local -n hide_args="$1"
+  local relative="$2" target="/workspace/$2"
+  if [[ "${CAPBOX_TASK_WORKSPACE_READONLY:-}" != 1 ]]; then
+    hide_args+=(--tmpfs "$target")
+  elif [[ -d "$CAPBOX_WORKSPACE/$relative" ]]; then
+    hide_args+=(--tmpfs "$target" --remount-ro "$target")
+  elif [[ -f "$CAPBOX_WORKSPACE/$relative" ]]; then
+    hide_args+=(--ro-bind /dev/null "$target")
+  fi
+}
+
 _fsguard_append_default_hides() {
   local -n _fh_arr="$1"
   local rel
@@ -162,7 +174,7 @@ _fsguard_append_default_hides() {
       part="${part%"${part##*[![:space:]]}"}"
       [[ -n "$part" ]] || continue
       _fsguard_validate_rel_path "$part" || continue
-      _fh_arr+=(--tmpfs "/workspace/$part")
+      _fsguard_append_hide _fh_arr "$part"
     done
   fi
   # 安全档默认 hide（若 security 已处理可重复 tmpfs，无害）
@@ -170,7 +182,7 @@ _fsguard_append_default_hides() {
     if declare -F _security_default_workspace_hides >/dev/null 2>&1; then
       while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
-        _fh_arr+=(--tmpfs "/workspace/$rel")
+        _fsguard_append_hide _fh_arr "$rel"
       done < <(_security_default_workspace_hides)
     fi
   fi

@@ -1617,3 +1617,11 @@ clone3 is intentionally not denied: glibc uses it to create threads. Namespace
 creation is intercepted via unshare/setns (and bwrap --disable-userns when
 idmap is off).
 >>
+task.write_dir_requires_readonly=--write-dir requires --workspace-readonly
+task.readonly_requires_isolate=--workspace-readonly requires --isolate
+task.readonly_mount_conflict=--workspace-readonly conflicts with configured FS_BINDS or IDMAP=on
+task.write_dir_unsafe=Writable path must be an existing project directory with no symlink or protected component: {path}
+task.write_dir_hidden=Writable directory overlaps an FS_HIDE path: {path}
+task.help_workspace_readonly=Mount the isolated project worktree read-only
+task.help_write_dir=Allow writes to an existing project-relative directory (repeatable)
+task.readonly_hide_conflict=--workspace-readonly requires non-overlapping FS_HIDE paths below the workspace root

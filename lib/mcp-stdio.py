@@ -102,6 +102,8 @@ def tools(maximum):
     specs=[
         ('capbox_execute',i18n.t('mcp.tool_execute_desc'),
          obj({'argv':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':256},
+              'workspace_readonly':{'type':'boolean'},
+              'write_dirs':{'type':'array','items':{'type':'string'},'minItems':0,'maxItems':256},
               'cwd':{'type':'string'},'timeout':{'type':'integer','minimum':1,'maximum':maximum}},['argv']),False),
         ('capbox_status',i18n.t('mcp.tool_status_desc'),obj({'task_id':task},['task_id']),True),
         ('capbox_logs',i18n.t('mcp.tool_logs_desc'),
@@ -127,6 +129,8 @@ def validate(schema, value):
             if not isinstance(item,str) or len(item)>65536 or '\0' in item:raise ProtocolError(i18n.t('mcp.invalid_string_argument'))
             if 'pattern' in spec and not re.fullmatch(spec['pattern'],item):raise ProtocolError(i18n.t('mcp.invalid_task_id'))
             if 'enum' in spec and item not in spec['enum']:raise ProtocolError(i18n.t('mcp.invalid_stream'))
+        elif kind=='boolean':
+            if type(item) is not bool:raise ProtocolError(i18n.t('mcp.invalid_tool_arguments'))
         elif kind=='integer':
             if type(item) is not int or not spec['minimum']<=item<=spec['maximum']:raise ProtocolError(i18n.t('mcp.invalid_integer_argument'))
         elif kind=='array':
@@ -153,6 +157,8 @@ class Server:
                      '--cwd',cwd,'--profile',self.args.profile,'--net',self.args.net,
                      '--max-output-bytes',str(MAX_OUTPUT_BYTES)]
             if self.args.workspace_mode=='isolated':command+=['--isolate']
+            if arguments.get('workspace_readonly'):command+=['--workspace-readonly']
+            command+=['--write-dir='+path for path in arguments.get('write_dirs', [])]
             # env + -- 即使只有单个字符串参数也保持 argv 语义。
             command+=['--','env','--',*arguments['argv']]
         elif name=='capbox_policy':command=['policy','show','--profile',self.args.profile,'--net',self.args.net]

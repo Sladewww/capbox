@@ -76,3 +76,18 @@ MVP 导出支持二进制的 Git 补丁；**不会应用到原项目**。JSON �
 - 既有 exec/文件/绑定设置仍生效。指向原工作区的绝对绑定在私有副本中可能无效；不会静默授权访问源。
 
 补丁应用仍留给可信宿主调用方。密钥不能进 guest 时，用 [宿主凭据代理](credentials.md)。可选的 [stdio MCP 适配器](envkit.md) 暴露本 CLI 的固定子集；不开网络监听。
+
+### Limit writes in an isolated worktree
+
+```bash
+capbox task start --isolate --workspace-readonly --write-dir build --write-dir output -- \
+  sh -c 'printf "%s\n" result > output/result.txt'
+capbox task diff TASK_ID --json
+```
+
+Each `--write-dir` selects an existing project-relative directory in the isolated
+copy. An ancestor grant includes its descendants. Omit all grants for a read-only
+worktree. Symlink components, protected paths, overlapping `FS_HIDE` paths, writable grants intersecting a hide, configured
+`FS_BINDS`, and explicit `IDMAP=on` are rejected. This mode uses single-UID mapping
+and drops mount administration. The MCP execute request accepts
+`workspace_readonly: true` and `write_dirs: ["build", "output"]` on an isolated server.
