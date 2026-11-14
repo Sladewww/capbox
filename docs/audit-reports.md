@@ -25,6 +25,17 @@ capbox audit report --input /path/to/archived-audit.jsonl \
 
 默认源是项目的 `logs/audit.jsonl`。默认源缺失时生成明确的空报告；显式 `--input` 缺失则失败。报告不会开启采集、不会执行已记录命令、不会收集新遥测，也不改源文件。采集仍由既有 `AUDIT` / `AUDIT_CMD` 控制。
 
+## 按任务 ID 查询与导出
+
+```sh
+capbox audit query --task-id "$task_id"
+capbox audit report --task-id "$task_id" --output "$HOME/capbox-reports/task.html"
+```
+
+查询返回 JSON。两条命令均按完整的 `task_id` 匹配，只选已关联的记录。通用报告把没有 ID 的旧记录显示为“未关联”。时间、类型、状态和条数筛选适用于事件列表。任务摘要从扫描窗口中该任务的生命周期记录生成，包含提交时的请求策略、最近观测到的状态与退出码。
+
+退出客户端后，监督器继续记录终态。任务副本仍在时，查询可读取隔离 diff 的变更路径和当前源工作区冲突。删除任务或清理宿主运行时目录后，项目审计流仍可提供已记录的策略、终态与事件。原始 stdout/stderr、完整补丁和计算 diff 所需的副本随任务运行时目录保留。突然失去监督器时可能只记录到运行中；任务目录仍在时可识别为 `lost`。归档输入（`--input`）只读取指定 JSONL。
+
 ## 采集范围
 
 默认 `CAPBOX_AUDIT=summary`（不要把这项改成 `full` 才看得到参数）。summary 会写入脱敏后的完整命令参数、`status`、退出码 `exit` 和耗时 `ms`；失败时可带截断到约 256 字的短 `detail`。默认不把命令的 stdout/stderr 写入 `audit.jsonl`。`CAPBOX_AUDIT=full` 才允许再写封顶后的脱敏 `output` 字段。`CAPBOX_AUDIT_CMD=off` 不写 `cmd`；未设置时跟随 `CAPBOX_AUDIT`。字段名和枚举保持英文。
@@ -33,7 +44,7 @@ capbox audit report --input /path/to/archived-audit.jsonl \
 
 一次命令写一条记录，覆盖 `exec`（含走常驻容器的路径）、`pkg`、`init`、`shell`、`doctor`、`upgrade`、`task`、`mcp`、`recipe`。交互式 `shell` 只记这次启动的状态、退出码和耗时，不把会话里的每一行当作审计。`help` 和 `audit` 本身不记。仓库没有单独的 `capbox net` 命令，网络模式写在对应 `exec` / `shell` 记录的 `net` 字段里。
 
-只包含选定的 JSONL。其它项目、轮转文件与私有隔离任务副本不会自动汇总。事件数不是任务数：一次执行可产生多条策略/资源/exec 记录。报告不加任务关联 ID，也不声称未记录事件成功。
+只扫描选定的 JSONL。任务监督器把生命周期和可归属的宿主执行事件写到源项目的审计流。一次执行可产生多条任务、策略、资源或 exec 记录。监督器终止子执行时可能来不及写 exec 结束事件，退出原因以已记录的任务终态为准。
 
 ## 覆盖与统计
 

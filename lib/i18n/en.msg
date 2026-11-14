@@ -61,7 +61,7 @@ Info and configuration
   image export|import|docker|lock|cache
                                     Rootfs archives, package locks, and local Docker/OCI images
   secret set|ls|rm|import           Host credentials (real keys never enter the sandbox; see docs/credentials.md)
-  audit report|tail|path|clear      Offline HTML report and JSONL audit log
+  audit report|query|tail|path|clear      Offline HTML report and JSONL audit log
   metrics [--json]                  Real resource / cgroup / disk status (no fabricated numbers)
   version                           Print the version
   help, --help, -h                  Show this help
@@ -237,9 +237,10 @@ Usage: capbox service logs NAME [-f] [-n N]
 >>
 
 help.audit<<
-Usage: capbox audit <report|tail|path|clear> [args]
+Usage: capbox audit <report|query|tail|path|clear> [args]
 
   report --output FILE  Generate an offline HTML report (the file must be outside the workspace; see report --help for filters)
+  query --task-id ID    Query a task and its events as JSON
   tail [N]   Show the last N records (default 50)
   path       Print the audit file path
   clear      Empty the audit file (running the command is the confirmation)
@@ -431,7 +432,7 @@ audit.audit_log_must_regular_file_refusing_write=Audit log must be a regular fil
 audit.unable_truncate=Unable to truncate {f}
 audit.cleared_audit_log=Cleared audit log: {f}
 audit.audit_tail_n_must_non_negative_integer=audit tail: N must be a non-negative integer
-audit.audit_unknown_subcommand_report_tail_path_clear=audit: unknown subcommand {sub} (report|tail|path|clear)
+audit.audit_unknown_subcommand_report_tail_path_clear=audit: unknown subcommand {sub} (report|query|tail|path|clear)
 audit.metrics_unknown_option=metrics: unknown option {arg}
 common.net_must_none_restricted_open_host_alias={who}: --net must be none|restricted|open (host is an alias); got: {mode}
 common.net_restricted_requires_non_empty_capbox_net={who}: --net restricted requires a non-empty CAPBOX_NET_ALLOW (config set or environment variable)
@@ -988,7 +989,6 @@ doctor.workspace_dangerous=Workspace is {home} or / ({workspace}); the entire tr
 doctor.workspace_safe=Workspace is safe ({workspace})
 doctor.audit_workspace_unsafe=workspace is unsafe
 doctor.userns_ok=full userns privileges (uid=0, CapEff={caphex})
-doctor.userns_probe_failed=full userns privilege probe failed: the container could not get uid 0 and full capabilities (check kernel unprivileged_userns_clone and the bwrap version)
 doctor.userns_not_probed=full userns privileges were not probed (bwrap is unavailable)
 doctor.idmap_module_missing=UID mapping module is not loaded (lib/idmap.sh)
 doctor.deps_complete=required commands are present (tar/curl/flock/timeout)
@@ -1625,3 +1625,28 @@ task.scan_findings=Secret scan found matches; patch withheld
 task.scan_incomplete=Secret scan coverage is incomplete; patch withheld
 task.scan_clean=Secret scan found no matches in added patch lines
 task.scan_workspace_unreadable=Could not read the isolated workspace; patch withheld
+
+doctor.userns_host_failed=User namespace launch failed: {detail}
+doctor.userns_insufficient=The probe did not obtain uid 0 and full capabilities
+doctor.userns_no_detail=bwrap failed or timed out without diagnostics
+doctor.userns_next=Check host user namespace policy and AppArmor or container restrictions for this bwrap binary.
+doctor.netns_ready=Isolated network namespace probe passed
+doctor.netns_probe_failed=Isolated network namespace launch failed: {detail}
+doctor.netns_next=Check host policy for network namespace and loopback setup from this session.
+doctor.skip_guest_host_probe=Skipping guest probe after a host namespace probe failed
+res.find_why_controller_not_delegated={controller}.max is absent or unwritable in a probe cgroup. {hint}
+res.detail_cgroup_inspected={root} (probe child has writable controller files)
+setup.next_bwrap=Install or update bubblewrap to 0.12.0 or later, then rerun setup check.
+setup.next_cgroup=Use a writable session and an empty, delegated cgroup v2 parent with the requested controllers enabled.
+setup.next_rootfs=Run capbox init --distro {distro} to prepare the rootfs, then run capbox doctor.
+audit.query_description=Query a task and its events from the project audit log as JSON
+audit.help_task_id=Match an exact task ID (32 lowercase hexadecimal characters)
+audit.html.task_heading=Task summary
+audit.html.label_task_id=Task ID
+audit.html.label_task_status=Task status
+audit.html.task_status_unavailable=Unavailable in audit records
+audit.html.task_policy=Requested policy
+audit.html.task_changed_files=Changed paths
+audit.html.task_origin_changed=Source workspace conflicts
+audit.html.task_diff_unavailable=Diff summary unavailable
+audit.html.task_unassociated=Unassociated
