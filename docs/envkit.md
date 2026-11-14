@@ -13,9 +13,9 @@ capbox setup plan --json
 capbox --root /path/to/project setup plan --from /path/to/new-template --json
 ```
 
-`setup check` 报告宿主/架构、解析到的依赖路径与最低版本、libseccomp 是否可用、模板/运行时版本与已装项目版本。`dependencies_ready` 只谈必选依赖。用户命名空间执行与 cgroup 兑现仍是 `not_probed`：初始化 guest 后用 `doctor` 与真实启动核对。读到 sysctl 不等于宿主安全策略允许执行。
+`setup check` 报告宿主、架构、依赖及最低版本。JSON 保留 `dependencies_ready`，它只衡量必选依赖。新增 `checks` 给出 bwrap 状态和 rootfs 准备情况。rootfs 缺失时，按 `capbox init --distro …` 准备，再运行 `capbox doctor`。
 
-`--probe` 会在私有临时目录用 `gcc -static` 编译一段固定的极简 C 程序。不运行产物，也不改宿主策略。strict/Landlock 配置在确认就绪前需要这次静态工具链检查。
+`--probe` 额外验证当前会话的用户命名空间、按配置需要的隔离网络命名空间，以及现有 cgroup v2 委派。宿主拒绝时显示 bwrap 的错误，便于检查 AppArmor、user namespace 或外层容器策略。cgroup 检查创建并移除临时子 cgroup，检查额度对应的控制器文件，不启用控制器；实际额度是否可兑现仍以真实启动为准。strict/Landlock 使用的静态 C 工具链也在此模式下检查，编译产物留在临时目录并销毁。
 
 `python-safe-extract` 组件检查安全导入器的 Python 能力（`tarfile.data_filter` 与 `os.path.ALLOW_MISSING`）。请保持 Python 安全更新；较旧的 3.10+ 补丁版仍可能缺这些能力，此时 bundle restore 会失败关闭。
 

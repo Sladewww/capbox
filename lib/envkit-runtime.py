@@ -139,6 +139,35 @@ def installed_version(ctx):
     return None
 
 
+def host_checks(ctx, probe, bwrap_status):
+    env = os.environ
+    userns = env['CAPBOX_SETUP_USERNS'] if probe else 'not_probed'
+    netns = env['CAPBOX_SETUP_NETNS'] if probe else 'not_probed'
+    cgroup = env['CAPBOX_SETUP_CGROUP'] if probe else 'not_probed'
+    rootfs = env['CAPBOX_SETUP_ROOTFS']
+    detail = env['CAPBOX_SETUP_NAMESPACE_DETAIL'] if probe else ''
+    checks = {
+        'bwrap': {'status': bwrap_status},
+        'userns': {'status': userns},
+        'network_namespace': {'status': netns, 'mode': ctx['config']['NET']},
+        'cgroup': {'status': cgroup, 'detail': env['CAPBOX_SETUP_CGROUP_DETAIL'] if probe else '',
+                   'limits_requested': any(ctx['config'][key] for key in ('MEMORY_MAX', 'CPU_MAX', 'PIDS_MAX')),
+                   'mode': ctx['config']['RESOURCES_MODE']},
+        'rootfs': {'status': rootfs, 'path': ctx['rootfs'], 'distro': ctx['config']['DISTRO']},
+    }
+    if bwrap_status != 'available':
+        checks['bwrap']['next_step'] = i18n.t('setup.next_bwrap')
+    if userns == 'failed':
+        checks['userns'].update(detail=detail, next_step=i18n.t('doctor.userns_next'))
+    if netns == 'failed':
+        checks['network_namespace'].update(detail=detail, next_step=i18n.t('doctor.netns_next'))
+    if cgroup in ('denied', 'missing'):
+        checks['cgroup']['next_step'] = i18n.t('setup.next_cgroup')
+    if rootfs == 'missing':
+        checks['rootfs']['next_step'] = i18n.t('setup.next_rootfs', distro=ctx['config']['DISTRO'])
+    return checks
+
+
 def readiness(ctx, probe):
     cfg = ctx['config']; items = []
     required = ['bash','python3','bwrap','tar','curl','flock']
@@ -152,7 +181,7 @@ def readiness(ctx, probe):
         required.append('gcc')
     for name in sorted(set(required+optional)):
         path = cfg['BWRAP'] if name=='bwrap' else shutil.which(name)
-        status = 'available' if path and os.access(path,os.X_OK) else 'missing'
+        status = 'available' if path and Path(path).is_file() and os.access(path,os.X_OK) else 'missing'
         detail = ''
         if status=='available' and name in ('bash','python3','bwrap'):
             try:
@@ -191,10 +220,12 @@ def readiness(ctx, probe):
         path=Path('/proc/sys/kernel')/name
         if path.is_file():
             sysctls[name]=path.read_text().strip()
+    checks = host_checks(ctx, probe, next(i['status'] for i in items if i['id'] == 'bwrap'))
     return {'kind':'host_readiness','dependencies_ready':ready,'host':dict(os_release(),architecture=platform.machine(),supported=supported),
             'runtime_version':ctx['version'],'project_version':installed_version(ctx),'components':items,'kernel_policy':sysctls,
-            'userns_execution':'not_probed; run doctor after init',
+            'userns_execution': checks['userns']['status'] if probe else 'not_probed; run doctor after init',
             'resource_enforcement':'not_probed; configured limits still require real launch/delegation',
+            'checks': checks,
             'workspace_runtime':str(Path(ctx['state'])/'lib/version.sh')}
 
 
@@ -212,6 +243,9 @@ def install_plan(ctx, report, source):
     else:
         commands=[]
     followup=[[ctx['cli'],'--root',ctx['workspace'],'setup','check','--probe','--json']]
+    if report['checks']['rootfs']['status'] == 'missing':
+        followup.append([ctx['cli'], '--root', ctx['workspace'], 'init', '--distro', ctx['config']['DISTRO']])
+    followup.append([ctx['cli'], '--root', ctx['workspace'], 'doctor'])
     if source:
         # 既有 upgrade 负责校验、停服规则、备份与恢复。
         source=str(real_directory(Path(source)))
@@ -219,6 +253,7 @@ def install_plan(ctx, report, source):
                      for action in ('check','apply')]
         followup += [[str(Path(source)/'bin/capbox'),'--root',ctx['workspace'],'upgrade','rollback']]
     return {'kind':'installation_plan','executed':False,'package_commands':commands,'followup_commands':followup,
+            'checks': report['checks'],
             'notes':[i18n.t('setup.note_distro_bwrap_may_be_old'),
                      i18n.t('setup.note_host_unchanged'),
                      i18n.t('setup.note_stop_writers_before_upgrade'),
