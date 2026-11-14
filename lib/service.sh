@@ -736,8 +736,17 @@ _service_stop() {
 _service_status() {
   local name="${1:-}"
   [[ -n "$name" ]] || i18n_die 2 svc.usage_capbox_service_status_name
-  local rd
+  local rd pid
   rd="$(_service_run_dir "$name")" || return 1
+  if [[ "${2:-}" == --json ]]; then
+    if _service_is_running "$name" &&
+        pid="$(cat "$rd/supervisor.pid" 2>/dev/null)" && [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+      printf '{"name":"%s","state":"running","supervisor_pid":%s}\n' "$name" "$pid"
+    else
+      printf '{"name":"%s","state":"stopped","supervisor_pid":null}\n' "$name"
+    fi
+    return 0
+  fi
   if _service_is_running "$name"; then
     printf 'name=%s\nstate=running\nsupervisor_pid=%s\n' "$name" "$(cat "$rd/supervisor.pid")"
     [[ -f "$rd/meta.env" ]] && cat "$rd/meta.env"

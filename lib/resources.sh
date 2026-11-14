@@ -780,13 +780,16 @@ _resources_metrics_json() {
   _resources_probe_disk || true
   printf '{'
   printf '"cgroup_status":"%s",' "${CAPBOX_CGROUP_STATUS:-unknown}"
-  printf '"cgroup_detail":"%s",' "${CAPBOX_CGROUP_DETAIL//\"/\\\"}"
+  printf '"cgroup_detail":"%s",' "$(json_escape "${CAPBOX_CGROUP_DETAIL:-}")"
   printf '"disk_status":"%s",' "${CAPBOX_DISK_STATUS:-unset}"
-  printf '"disk_detail":"%s",' "${CAPBOX_DISK_DETAIL//\"/\\\"}"
+  printf '"disk_detail":"%s",' "$(json_escape "${CAPBOX_DISK_DETAIL:-}")"
   printf '"memory_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_MEMORY:-}"
   printf '"cpu_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_CPU:-}"
   printf '"pids_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_PIDS:-}"
   printf '"disk_applied":"%s",' "${CAPBOX_RESOURCES_APPLIED_DISK:-}"
+  printf '"memory_max":"%s",' "$(json_escape "${CAPBOX_MEMORY_MAX:-}")"
+  printf '"cpu_max":"%s",' "$(json_escape "${CAPBOX_CPU_MAX:-}")"
+  printf '"pids_max":"%s",' "$(json_escape "${CAPBOX_PIDS_MAX:-}")"
   printf '"mode":"%s"' "$(_resources_mode)"
   printf '}\n'
 }

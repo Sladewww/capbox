@@ -10,6 +10,10 @@
 
 guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项目的可写视图，guest 能修改项目代码。无关密钥留在工作区外，宿主执行修改后的代码前仍需审查。[安全模型](SECURITY.md)。
 
+## 本机实时监控
+
+运行 `python3 tools/monitor.py --root /path/to/project`，在本机浏览器查看 daemon、服务、任务和审计事件。参见[本机实时监控](docs/monitor.md)。
+
 ## 环境工具（setup / bundle / MCP）
 
 `setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [环境工具](docs/envkit.md)。MCP 日常入口（`isolated` / `untrusted` / `none`）见 [外层 Linux 沙箱路径](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex)。

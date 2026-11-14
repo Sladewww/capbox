@@ -14,6 +14,10 @@ CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and
 
 Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits. MCP daily entry (`isolated` / `untrusted` / `none`) is in [outer Linux sandbox path](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex).
 
+## Local runtime monitor
+
+Use `python3 tools/monitor.py --root /path/to/project` to view daemon, service, task, and audit status in a loopback-only browser dashboard. See [local monitoring](docs/monitor.md).
+
 ## Offline audit reports
 
 `capbox audit report --output /path/outside/project/audit.html` exports a self-contained report with event trends, failure counts, filters, search and details. Open the HTML locally; no server or network is needed. See [audit reports](docs/audit-reports.md) for scope, export controls and sensitive-data handling.

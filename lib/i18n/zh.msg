@@ -215,7 +215,7 @@ help.service<<
 
   start NAME     按 .capbox/services/NAME.env 启动（独立 bwrap）
   stop NAME      停止服务
-  status NAME    查看状态与诊断
+  status NAME [--json]    查看状态与诊断
   logs NAME [-f] [-n N]
   list           列出已定义服务
 
@@ -952,7 +952,7 @@ svc.service_started_supervisor_pid_uid_gid=服务 {name} 已启动（supervisor 
 svc.usage_capbox_service_stop_name=用法: capbox service stop NAME
 svc.service_not_running=服务 {name} 未在运行
 svc.service_stopped=服务 {name} 已停止
-svc.usage_capbox_service_status_name=用法: capbox service status NAME
+svc.usage_capbox_service_status_name=用法: capbox service status NAME [--json]
 svc.service_logs_unknown_option=service logs: 未知选项 {arg}
 svc.extra_argument=多余参数 {arg}
 svc.usage_capbox_service_logs_name=用法: capbox service logs NAME

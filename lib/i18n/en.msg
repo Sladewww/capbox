@@ -216,7 +216,7 @@ Usage: capbox service <start|stop|status|logs|list> NAME [options]
 
   start NAME     Start from .capbox/services/NAME.env (its own bwrap)
   stop NAME      Stop the service
-  status NAME    Show status and diagnostics
+  status NAME [--json]    Show status and diagnostics
   logs NAME [-f] [-n N]
   list           List defined services
 
@@ -953,7 +953,7 @@ svc.service_started_supervisor_pid_uid_gid=Service {name} started (supervisor pi
 svc.usage_capbox_service_stop_name=Usage: capbox service stop NAME
 svc.service_not_running=Service {name} is not running
 svc.service_stopped=Service {name} stopped
-svc.usage_capbox_service_status_name=Usage: capbox service status NAME
+svc.usage_capbox_service_status_name=Usage: capbox service status NAME [--json]
 svc.service_logs_unknown_option=service logs: unknown option {arg}
 svc.extra_argument=Extra argument {arg}
 svc.usage_capbox_service_logs_name=Usage: capbox service logs NAME

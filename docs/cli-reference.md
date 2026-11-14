@@ -217,7 +217,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 
   start NAME     按 .capbox/services/NAME.env 启动（独立 bwrap）
   stop NAME      停止服务
-  status NAME    查看状态与诊断
+  status NAME [--json]    查看状态与诊断
   logs NAME [-f] [-n N]
   list           列出已定义服务
 
