@@ -1616,6 +1616,8 @@ seccomp.tool_description<<
 unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 >>
 
+task.help_checkpoint=归档已结束的隔离任务
+task.help_restore_checkpoint=将本地任务检查点恢复到新项目
 doctor.userns_host_failed=用户命名空间启动失败：{detail}
 doctor.userns_insufficient=探针未取得 uid 0 与全量 capability
 doctor.userns_no_detail=bwrap 失败或超时，未返回诊断信息
