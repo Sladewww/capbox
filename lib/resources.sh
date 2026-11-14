@@ -99,7 +99,7 @@ _resources_probe_cgroup() {
   fi
 
   local find_out=""
-  if find_out="$(_resources_find_cgroup_root)"; then
+  if find_out="$(_resources_find_cgroup_root "${1:-}")"; then
     if ! _resources_self_cgroup_writable; then
       CAPBOX_CGROUP_ACTIVE=""
       CAPBOX_CGROUP_STATUS=denied
@@ -108,7 +108,9 @@ _resources_probe_cgroup() {
     fi
     CAPBOX_CGROUP_ACTIVE="$find_out"
     CAPBOX_CGROUP_STATUS=ready
-    if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
+    if [[ "${1:-}" == inspect ]]; then
+      CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_cgroup_inspected root="$find_out")"
+    elif [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
       CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_cgroup_root_writable root="$find_out")"
     else
       CAPBOX_CGROUP_DETAIL="$(i18n_fmt res.detail_writable_cgroup_root root="$find_out")"
@@ -123,11 +125,13 @@ _resources_probe_cgroup() {
     return 1
   fi
 
-  local self cgpath err
+  local self cgpath err probe
   self="$(awk -F: '{print $NF; exit}' /proc/self/cgroup 2>/dev/null || true)"
   cgpath="/sys/fs/cgroup${self}"
-  err="$(mkdir "${cgpath}/.capbox-probe-$$" 2>&1 || true)"
-  rmdir "${cgpath}/.capbox-probe-$$" 2>/dev/null || true
+  probe="$cgpath/.capbox-probe-$$-$RANDOM"
+  if err="$(mkdir "$probe" 2>&1)"; then
+    rmdir "$probe" 2>/dev/null || true
+  fi
   CAPBOX_CGROUP_STATUS=denied
   local _hint _ctrls _reason
   _hint="$(_resources_cgroup_dual_hint)"
@@ -172,10 +176,14 @@ _resources_self_cgroup_writable() {
 }
 
 _resources_cgroup_root_usable() {
-  local root="$1"
+  local root="$1" mode="${2:-}"
   local probe err=""
   if [[ ! -d "$root" ]]; then
     CAPBOX_CGROUP_FIND_WHY="$(i18n_get res.find_why_not_dir)"
+    return 1
+  fi
+  if [[ "$mode" == inspect && ! -f "$root/cgroup.controllers" ]]; then
+    CAPBOX_CGROUP_FIND_WHY="$(i18n_get res.detail_not_cgroup_v2)"
     return 1
   fi
   probe="$root/.capbox-ctrl-probe-$$-$RANDOM"
@@ -183,6 +191,30 @@ _resources_cgroup_root_usable() {
     err="$(mkdir "$probe" 2>&1 || true)"
     CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_mkdir_failed err="${err:-permission denied}")"
     return 1
+  fi
+
+  # Diagnostics inspect existing delegation without enabling controllers.
+  if [[ "$mode" == inspect ]]; then
+    local controller limit
+    for controller in memory cpu pids; do
+      case "$controller" in
+        memory) limit="${CAPBOX_MEMORY_MAX:-}" ;;
+        cpu) limit="${CAPBOX_CPU_MAX:-}" ;;
+        pids) limit="${CAPBOX_PIDS_MAX:-}" ;;
+      esac
+      # With no configured limits, verify the default memory delegation.
+      if [[ -z "${CAPBOX_MEMORY_MAX:-}${CAPBOX_CPU_MAX:-}${CAPBOX_PIDS_MAX:-}" && "$controller" == memory ]]; then
+        limit=max
+      fi
+      [[ -n "$limit" ]] || continue
+      if [[ ! -w "$probe/$controller.max" ]]; then
+        rmdir "$probe" 2>/dev/null || true
+        CAPBOX_CGROUP_FIND_WHY="$(i18n_fmt res.find_why_controller_not_delegated controller="$controller" hint="$(_resources_cgroup_dual_hint)")"
+        return 1
+      fi
+    done
+    rmdir "$probe" 2>/dev/null || true
+    return 0
   fi
 
   if [[ -e "$root/cgroup.subtree_control" ]]; then
@@ -226,8 +258,9 @@ _resources_cgroup_root_usable() {
 # 成功：stdout=路径，rc=0。失败：stdout=原因，rc=1（兼容 $() 调用方）。
 _resources_find_cgroup_root() {
   CAPBOX_CGROUP_FIND_WHY=""
+  local mode="${1:-}"
   if [[ -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
-    if _resources_cgroup_root_usable "$CAPBOX_CGROUP_ROOT"; then
+    if _resources_cgroup_root_usable "$CAPBOX_CGROUP_ROOT" "$mode"; then
       printf '%s' "$CAPBOX_CGROUP_ROOT"
       return 0
     fi
@@ -247,7 +280,7 @@ _resources_find_cgroup_root() {
   local c last_why=""
   for c in "${candidates[@]}"; do
     [[ -n "$c" && -d "$c" ]] || continue
-    if _resources_cgroup_root_usable "$c"; then
+    if _resources_cgroup_root_usable "$c" "$mode"; then
       printf '%s' "$c"
       return 0
     fi
@@ -802,11 +835,18 @@ _resources_metrics_json() {
 }
 
 _resources_doctor_report() {
-  _resources_probe_cgroup || true
+  _resources_probe_cgroup inspect || true
   case "${CAPBOX_CGROUP_STATUS}" in
     ready) _doctor_pass_i18n doctor.cgroup_v2_writable detail="${CAPBOX_CGROUP_DETAIL}" ;;
-    denied) _doctor_warn_i18n doctor.cgroup_v2_no_delegate detail="${CAPBOX_CGROUP_DETAIL}" ;;
-    *) _doctor_warn_i18n doctor.cgroup_unavailable detail="$(i18n_or "${CAPBOX_CGROUP_DETAIL:-}" val.unknown)" ;;
+    *)
+      local report=_doctor_warn_i18n message=doctor.cgroup_unavailable
+      [[ "$CAPBOX_CGROUP_STATUS" == denied ]] && message=doctor.cgroup_v2_no_delegate
+      if [[ -n "${CAPBOX_MEMORY_MAX:-}${CAPBOX_CPU_MAX:-}${CAPBOX_PIDS_MAX:-}" ]] &&
+          [[ "$(_resources_mode)" == require || -n "${CAPBOX_CGROUP_ROOT:-}" ]]; then
+        report=_doctor_fail_i18n
+      fi
+      "$report" "$message" detail="$(i18n_or "${CAPBOX_CGROUP_DETAIL:-}" val.unknown)"
+      ;;
   esac
   if [[ -n "${CAPBOX_DISK_MAX:-}" ]]; then
     _resources_probe_disk || true
