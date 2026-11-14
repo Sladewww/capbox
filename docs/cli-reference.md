@@ -21,7 +21,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   init [--distro alpine|ubuntu] [--agent|--trusted] [--force] [--from URL|路径]
                                     脚手架（如需）+ 下载解包 rootfs，注入镜像源，跑首次引导
   status [--json]                   查看 distro / rootfs / daemon / 网络状态
-  doctor                            逐项自检（bwrap、userns 全权限、rootfs、镜像源…）
+  doctor [--agent --json]           逐项自检（bwrap、userns 全权限、rootfs、镜像源…）
   clean [--all]                     清理缓存与日志；--all 一并删除 rootfs
 
 执行
@@ -329,8 +329,8 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox mcp --help
 
 ```text
-用法: capbox mcp [-h] [--profile {untrusted,strict}] [--net {none,restricted}]
-               [--workspace-mode {isolated,shared}] [--max-timeout MAX_TIMEOUT]
+用法: capbox mcp [-h] [--profile {strict}] [--net {none}] [--workspace-mode {isolated}]
+               [--max-timeout MAX_TIMEOUT]
                {serve}
 
 位置参数:
@@ -338,11 +338,9 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 
 选项:
   -h, --help            显示此帮助并退出
-  --profile {untrusted,strict}
-                        安全配置档（默认: untrusted）
-  --net {none,restricted}
-                        网络模式（默认: none；拒绝 open）
-  --workspace-mode {isolated,shared}
+  --profile {strict}    安全配置档（默认: strict）
+  --net {none}          网络模式（固定: none）
+  --workspace-mode {isolated}
                         任务工作区（默认: isolated）
   --max-timeout MAX_TIMEOUT
                         任务超时上限秒数（默认: 600）

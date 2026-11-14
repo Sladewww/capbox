@@ -18,3 +18,25 @@ CI 按层检查行为。通过“能力不可用时的兜底测试”不等于�
 旧 harness 仍保留依赖能力的用例：T15/T16 需要其 daemon 选项，T19 需要 slow 选项，T27 在 multi 不可用时可测 single-UID。独立兼容性 job 覆盖成功路径，不用那些 skip 当证据。
 
 GitHub 托管 runner 标签见 [官方 runner 参考](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。更多发行版、WSL 特有行为、特权磁盘挂载以及应用层 Wiki 配方不在本矩阵内。支持某种 guest 发行版，不代表每个第三方包或服务组合都测过。
+
+### Agent 启动保护的 Linux 检查
+
+在已有 Alpine rootfs 的工作区之外，用可信安装目录中的 CapBox 运行以下命令。procfs 测试只读取 sysctl，并在每个用例结束时核对值。
+
+```sh
+uname -r
+id -u
+/usr/bin/bwrap --version
+python3 test/security/test_agent_procfs.py
+./bin/capbox --root /path/to/project doctor --agent --json
+CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.py
+```
+
+| 本地实测环境 | 观测 |
+| --- | --- |
+| Linux 6.18.57 x86_64，UID 1000，Bubblewrap 0.12.0 | Bubblewrap 对新 procfs 的 `sys`、`sysrq-trigger`、`irq`、`bus` 做条件式只读自绑定。本机实测 `sys`、`irq`、`bus` 仍在可写的 proc 挂载视图中，`sysrq-trigger` 不存在。 |
+| 同一环境，追加 `--remount-ro /proc` | guest 中的 procfs 挂载为只读。能看到的四条受检查路径均为只读。 |
+| 同一环境，外层用私有只读 tmpfs 覆盖 `/proc/irq` | 内层 fresh procfs 挂载返回 EPERM，命令未执行。测试也接受内层 Linux 允许建立只读 fresh procfs 时的成功结果。 |
+| 同一环境，实际隔离任务 | 外层阻止 Bubblewrap 建立 loopback 所需的 NETLINK_ROUTE 套接字。退出码为 5，记录 `bubblewrap_or_landlock_setup`，命令未执行。通过独立探针也确认该环境缺少 Landlock。 |
+
+CI 的 acceptance 作业会在其实际安装的 Bubblewrap 版本下复跑。若发行版自带版本低于 0.12.0，CI 使用已固定校验和的 0.13.1。

@@ -15,15 +15,79 @@ _capbox_apply_profile_rootfs_default() {
   return 0
 }
 
+# Locked launches are passed only by the host task controller.
+_agent_launch_failure() {
+  local check="$1"
+  if [[ -n "${_task_status_fd:-}" ]]; then
+    printf '{"phase":"protection_failed","check":"%s"}\n' "$check" >&"$_task_status_fd"
+  fi
+  i18n_err launch.agent_protection_failed check="$check"
+}
+
+_agent_launch_config_ok() {
+  if (( UID == 0 || EUID == 0 )); then
+    _agent_launch_failure host_uid
+    return 5
+  fi
+  if [[ "$1" != oneshot || -z "${_task_status_fd:-}" ||
+        "${CAPBOX_SECURITY_PROFILE:-}" != strict || "${CAPBOX_IDMAP:-}" != off ||
+        "${CAPBOX_NET:-}" != none || "${CAPBOX_ROOTFS_RO:-}" != 1 ||
+        "${CAPBOX_OVERLAY:-}" != off || "${CAPBOX_LANDLOCK:-}" != on ||
+        "${CAPBOX_EXEC_UID:-}" != 0 || "${CAPBOX_EXEC_GID:-}" != 0 ||
+        "${CAPBOX_BWRAP:-}" != /usr/bin/bwrap ||
+        "${CAPBOX_BWRAP_NO_PIDNS:-0}" != 0 || "${CAPBOX_BWRAP_NO_DIE_WITH_PARENT:-0}" != 0 ||
+        "${CAPBOX_ALLOW_OLD_BWRAP:-0}" != 0 || -n "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-}" ||
+        -n "${CAPBOX_BWRAP_EXTRA:-}${CAPBOX_FS_BINDS:-}${CAPBOX_NET_ALLOW:-}${CAPBOX_PROXY:-}" ||
+        -n "${CAPBOX_UID_MAP:-}${CAPBOX_GID_MAP:-}${CAPBOX_SETGROUPS:-}${CAPBOX_DISK_MAX:-}" ||
+        -n "${CAPBOX_EXEC_UID_OVERRIDE:-}${CAPBOX_EXEC_GID_OVERRIDE:-}${CAPBOX_OCI_ENV_FILE:-}" ||
+        -n "${CAPBOX_CRED_CA_CERT:-}${CAPBOX_CRED_GUEST_ENV_FILE:-}" ]]; then
+    _agent_launch_failure resolved_policy
+    return 5
+  fi
+}
+
+_agent_launch_run() {
+  local src private dir helper broker rc=0
+  src="$(dirname -- "${BASH_SOURCE[0]}")"
+  broker="$src/agent-launch.py"
+  private="$(_capbox_host_state_dir)" || {
+    _agent_launch_failure host_runtime
+    return 5
+  }
+  dir="$(mktemp -d "$private/agent-launch.XXXXXX")" || {
+    _agent_launch_failure host_runtime
+    return 5
+  }
+  helper="$dir/probe"
+  if ! /usr/bin/cc -static -O2 -o "$helper" "$src/guest/capbox-agent-probe.c"; then
+    rm -rf -- "$dir"
+    _agent_launch_failure probe_build
+    return 5
+  fi
+  /usr/bin/python3 -I "$broker" "$_task_status_fd" "$helper" "$CAPBOX_ROOTFS" "$CAPBOX_WORKSPACE" "$@" || rc=$?
+  rm -rf -- "$dir"
+  return "$rc"
+}
+
 # build_bwrap_args MODE [CWD]
 #   MODE = oneshot | daemon
-# 打印 bwrap 参数，一行一个（数组语义），不含最终的 `-- 命令` 部分。
+# 普通启动逐行输出，锁定 Agent 用 NUL 分隔。两者都不含最终的 `-- 命令`。
 build_bwrap_args() {
   local mode="${1:-oneshot}"
   local cwd="${2:-/workspace}"
   local -a a=()
 
-  _capbox_enforce_bwrap_baseline || return $?
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    _agent_launch_config_ok "$mode" || return $?
+  fi
+  local baseline_rc=0
+  _capbox_enforce_bwrap_baseline || baseline_rc=$?
+  if (( baseline_rc != 0 )); then
+    if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+      _agent_launch_failure bubblewrap_baseline
+    fi
+    return "$baseline_rc"
+  fi
 
   [[ -n "${CAPBOX_ROOTFS:-}" && -d "$CAPBOX_ROOTFS" ]] || return 4
   if declare -F _capbox_require_safe_workspace >/dev/null 2>&1; then
@@ -72,15 +136,18 @@ build_bwrap_args() {
   fi
 
   # resolv.conf：必须是普通文件（宿主上是符号链接）
-  refresh_resolv >/dev/null 2>&1 || true
-  if [[ -f "$CAPBOX_STATE_DIR/resolv.conf" ]]; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]]; then
+    refresh_resolv >/dev/null 2>&1 || true
+  fi
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 && -f "$CAPBOX_STATE_DIR/resolv.conf" ]]; then
     a+=(--ro-bind "$CAPBOX_STATE_DIR/resolv.conf" /etc/resolv.conf)
   fi
 
   # CA 证书：rootfs 内没有就借用宿主的（坑 7）
   # RHEL/CentOS 系 /etc/ssl/certs 常是指向 /etc/pki/tls/certs 的符号链接，
   # bwrap 不允许挂载到符号链接目标；这类镜像自带 ca-bundle.crt，跳过宿主 CA bind。
-  if _rootfs_lacks_ca && [[ -d /etc/ssl/certs ]] && [[ ! -L "$CAPBOX_ROOTFS/etc/ssl/certs" ]]; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] && _rootfs_lacks_ca &&
+     [[ -d /etc/ssl/certs ]] && [[ ! -L "$CAPBOX_ROOTFS/etc/ssl/certs" ]]; then
     mkdir -p "$CAPBOX_ROOTFS/etc/ssl/certs" 2>/dev/null || true
     a+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   fi
@@ -187,6 +254,12 @@ build_bwrap_args() {
     _net_append_ready_bind a || return $?
   fi
 
-  printf '%s\n' "${a[@]}"
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    # Existing bwrap proc protections are conditional. Seal the fresh proc mount.
+    a+=(--remount-ro /proc --assert-userns-disabled)
+    printf '%s\0' "${a[@]}"
+  else
+    printf '%s\n' "${a[@]}"
+  fi
 }
 

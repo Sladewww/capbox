@@ -36,6 +36,72 @@ class Fixture(unittest.TestCase):
 
 
 class PolicyTests(Fixture):
+    def test_isolated_host_policy_caps_project_and_environment(self):
+        self.run_cli('config', 'set', 'CAPBOX_ROOTFS_RO', '0', check=True)
+        self.env.update(CAPBOX_NET='open', CAPBOX_SECURITY_PROFILE='compat',
+                        CAPBOX_IDMAP='on', CAPBOX_LANDLOCK='off')
+        result = self.run_cli('policy', 'show', '--isolate', check=True)
+        values = json.loads(result.stdout)['values']
+        for key, value in {'NET': 'none', 'SECURITY_PROFILE': 'strict', 'IDMAP': 'off',
+                           'LANDLOCK': 'on', 'ROOTFS_RO': '1'}.items():
+            self.assertEqual(values[key], {'value': value, 'source': 'host'})
+        regular = json.loads(self.run_cli('policy', 'show', check=True).stdout)['values']
+        self.assertEqual(regular['NET'], {'value': 'open', 'source': 'env'})
+        self.assertEqual(regular['SECURITY_PROFILE'], {'value': 'compat', 'source': 'env'})
+
+    def test_isolated_policy_rejects_weakening_paths(self):
+        for flag, value in (('--net', 'open'), ('--profile', 'compat'),
+                            ('--net-allow', 'example.com')):
+            with self.subTest(flag=flag):
+                result = self.run_cli('policy', 'show', '--isolate', flag, value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        for key, value in (('CAPBOX_BWRAP_EXTRA', '--share-net'),
+                           ('CAPBOX_BWRAP_NO_PIDNS', '1'),
+                           ('CAPBOX_FS_BINDS', '.:/workspace/extra:rw'),
+                           ('CAPBOX_BWRAP', '/bin/true')):
+            with self.subTest(key=key):
+                self.env[key] = value
+                result = self.run_cli('policy', 'show', '--isolate')
+                self.env.pop(key)
+                self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_isolated_policy_uses_host_template(self):
+        common = self.ws / '.capbox/lib/common.sh'
+        original = common.read_bytes()
+        common.write_text('exit 82\n')
+        self.run_cli('policy', 'show', '--isolate', check=True)
+        self.assertEqual(self.run_cli('config', 'get', 'CAPBOX_NET').returncode, 82)
+        common.write_bytes(original)
+        result = subprocess.run([str(self.ws / '.capbox/bin/capbox'), '--root', str(self.ws),
+                                 'policy', 'show', '--isolate'], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    @unittest.skipIf(os.getuid() == 0, 'locked tasks require a non-root host UID')
+    def test_missing_agent_probe_fails_before_payload(self):
+        template = self.base / 'template'
+        shutil.copytree(REPO / 'bin', template / 'bin')
+        shutil.copytree(REPO / 'lib', template / 'lib')
+        (template / 'lib/guest/capbox-agent-probe.c').unlink()
+        rootfs = self.ws / '.capbox/os/alpine'
+        (rootfs / 'bin').mkdir(parents=True, exist_ok=True)
+        shutil.copy2('/bin/true', rootfs / 'bin/sh')
+        self.cli[0] = str(template / 'bin/capbox')
+        started = self.run_cli('task', 'start', '--isolate', '--', 'touch', 'sentinel', check=True)
+        task = json.loads(started.stdout)['task_id']
+        try:
+            waited = self.run_cli('task', 'wait', task, '--timeout', '20')
+            self.assertNotEqual(waited.returncode, 0)
+            state = json.loads(waited.stdout)
+            self.assertEqual(state['failure_reason'], 'launch_failed')
+            self.assertEqual(state['protection']['status'], 'failed')
+            audit = self.run_cli('audit', 'query', '--task-id', task, check=True)
+            result = json.loads(audit.stdout)['task']
+            self.assertEqual(result['protection'], state['protection'])
+            self.assertEqual(result['diff']['changed_files'], [])
+        finally:
+            self.run_cli('task', 'rm', task)
+
     def test_sources_override_without_mutation(self):
         self.run_cli('config', 'set', 'CAPBOX_NET', 'open', check=True)
         d=json.loads(self.run_cli('policy','show').stdout)
@@ -260,9 +326,9 @@ class TaskTests(Fixture):
         self.env['CAPBOX_NET'] = 'open'
         (self.ws / '.capbox/logs/audit.jsonl').write_text(
             '{"ts":"2026-11-08T00:00:00Z","kind":"exec","status":"ok","cmd":"legacy"}\n')
-        timed = self.start('--isolate', '--timeout', '4', '--net', 'open',
+        timed = self.start('--isolate', '--timeout', '8', '--net', 'none',
                            '--', 'sleep', '30')
-        done = self.start('--isolate', '--timeout', '20', '--profile', 'compat',
+        done = self.start('--isolate', '--timeout', '20', '--profile', 'strict',
                           '--', 'sh', '-c',
                           'test -z "${CAPBOX_TASK_AUDIT_ID:-}" && '
                           "printf '%s' private-output > /dev/null && echo task > hello.txt")
@@ -279,7 +345,7 @@ class TaskTests(Fixture):
             if task == done:
                 self.assertIn('exec', {event['kind'] for event in result['events']})
                 self.assertEqual(result['task']['policy']['SECURITY_PROFILE'],
-                                 {'value': 'compat', 'source': 'command'})
+                                 {'value': 'strict', 'source': 'host'})
                 self.assertEqual(result['task']['diff']['changed_files'], ['hello.txt'])
                 self.assertEqual(result['task']['diff']['origin_changed'], ['hello.txt'])
             else:

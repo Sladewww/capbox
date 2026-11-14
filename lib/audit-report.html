@@ -91,6 +91,13 @@
       const policy = Object.entries(task.policy).map(([key, item]) => key + '=' + item.value + ' [' + item.source + ']');
       field(fields, t('task_policy'), policy.join('\n') || '—');
     }
+    if (task.protection) {
+      const proof = task.protection;
+      const lines = [proof.status];
+      if (proof.check) lines.push(proof.check);
+      for (const [name, value] of Object.entries(proof.checks ?? {})) lines.push(name + '=' + value);
+      field(fields, t('task_protection'), lines.join('\n'));
+    }
     if (task.diff) {
       field(fields, t('task_changed_files'), task.diff.changed_files.join('\n') || '—');
       field(fields, t('task_origin_changed'), task.diff.origin_changed.join('\n') || '—');

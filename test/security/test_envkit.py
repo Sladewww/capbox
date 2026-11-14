@@ -162,44 +162,57 @@ class MCPTests(Fixture):
         self.assertEqual(args.net, MCP_DEFAULTS.DEFAULT_NET)
         self.assertEqual(args.workspace_mode, MCP_DEFAULTS.DEFAULT_WORKSPACE_MODE)
         self.assertEqual(args.max_timeout, MCP_DEFAULTS.DEFAULT_MAX_TIMEOUT)
-        self.assertEqual(args.profile, 'untrusted')
+        self.assertEqual(args.profile, 'strict')
         self.assertEqual(args.net, 'none')
         self.assertEqual(args.workspace_mode, 'isolated')
         self.assertEqual(args.max_timeout, 600)
         self.assertEqual(MCP_DEFAULTS.MAX_OUTPUT_BYTES, 8 * 1024 * 1024)
         import contextlib, io
-        with self.assertRaises(SystemExit):
-            with contextlib.redirect_stderr(io.StringIO()):
-                parser.parse_args(['serve', '--net', 'open'])
+        for flag, value in (('--net', 'open'), ('--net', 'restricted'),
+                            ('--profile', 'untrusted'), ('--workspace-mode', 'shared')):
+            with self.subTest(flag=flag, value=value):
+                with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                    parser.parse_args(['serve', flag, value])
+                refused = self.run_cli('mcp', 'serve', flag, value)
+                self.assertEqual(refused.returncode, 2, refused.stderr)
 
-    def test_default_execute_pins_isolate_untrusted_none_and_8mib(self):
+    def test_execute_routes_to_locked_isolated_task(self):
         calls = []
+
         class Proc:
             returncode = 0
             stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
-        def invoke(command):
-            calls.append(command)
-            return Proc()
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2'}, args, invoke).call('capbox_execute', {'argv': ['true']})
+
+        args = ENVKIT.build_mcp_parser().parse_args(['serve'])
+        server = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: calls.append(c) or Proc())
+        result = server.call('capbox_execute', {
+            'argv': ['true'], 'workspace_readonly': True, 'write_dirs': ['build'],
+        })
         self.assertFalse(result['isError'])
         command = calls[0]
-        self.assertEqual(command[:2], ['task', 'start'])
-        self.assertIn('--isolate', command)
-        self.assertEqual(command[command.index('--profile') + 1], 'untrusted')
-        self.assertEqual(command[command.index('--net') + 1], 'none')
+        self.assertEqual(command[:3], ['task', 'start', '--isolate'])
+        self.assertNotIn('--profile', command)
+        self.assertNotIn('--net', command)
+        self.assertIn('--workspace-readonly', command)
+        self.assertIn('--write-dir=build', command)
         self.assertEqual(command[command.index('--max-output-bytes') + 1], str(MCP_DEFAULTS.MAX_OUTPUT_BYTES))
-        self.assertNotIn('open', command)
 
-    def test_shared_mode_is_opt_in_and_omits_isolate(self):
-        calls = []
-        class Proc:
-            returncode = 0
-            stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='shared', max_timeout=600)
-        MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: calls.append(c) or Proc()).call(
-            'capbox_execute', {'argv': ['true']})
-        self.assertNotIn('--isolate', calls[0])
+    def test_old_bwrap_global_override_is_rejected(self):
+        proc = self.run_cli('--allow-old-bwrap', 'mcp', 'serve')
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn('--allow-old-bwrap', proc.stderr)
+
+    def test_mcp_uses_template_code_instead_of_project_modules(self):
+        marker = self.base / 'project-library-loaded'
+        project_lib = self.ws / '.capbox/lib'
+        for name in ('common.sh', 'envkit.sh', 'agent.sh'):
+            with (project_lib / name).open('a') as module:
+                module.write(f'\nprintf "unexpected" > "{marker}"\n')
+        out = self.exchange(initialization() + [request(2, 'tools/call', {
+            'name': 'capbox_policy', 'arguments': {},
+        })])
+        self.assertFalse(out[-1]['result']['isError'])
+        self.assertFalse(marker.exists())
 
     def test_tool_schema_rejects_policy_and_root_overrides(self):
         schema = next(t['inputSchema'] for t in MCP_STDIO.tools(600) if t['name'] == 'capbox_execute')
@@ -211,7 +224,7 @@ class MCPTests(Fixture):
     def test_handshake_advertises_fixed_defaults_in_instructions(self):
         out = self.exchange(initialization())
         instructions = out[0]['result']['instructions']
-        self.assertIn('isolated/untrusted/none', instructions)
+        self.assertIn('isolated/strict/none', instructions)
         self.assertIn('不能抬高策略', instructions)
 
     def test_policy_tool_reports_mcp_fixed_block(self):
@@ -219,7 +232,7 @@ class MCPTests(Fixture):
         data = out[1]['result']['structuredContent']
         self.assertEqual(data['values']['NET']['value'], 'none')
         self.assertEqual(data['mcp']['workspace_mode'], 'isolated')
-        self.assertEqual(data['mcp']['profile'], 'untrusted')
+        self.assertEqual(data['mcp']['profile'], 'strict')
         self.assertEqual(data['mcp']['net'], 'none')
         self.assertEqual(data['mcp']['max_output_bytes'], 8 * 1024 * 1024)
         self.assertTrue(data['mcp']['tools_cannot_raise_policy'])
@@ -242,7 +255,7 @@ class MCPTests(Fixture):
                 'hint': '任务执行超时',
             })
             stderr = b''
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        args = SimpleNamespace(max_timeout=600)
         result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'a' * 32})
         self.assertFalse(result['isError'])
@@ -260,7 +273,7 @@ class MCPTests(Fixture):
                 'hint': '日志游标超出文件末尾',
             })
             stderr = b''
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        args = SimpleNamespace(max_timeout=600)
         result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_logs', {'task_id': 'b' * 32, 'offset': 99})
         text = result['content'][0]['text']
@@ -273,7 +286,7 @@ class MCPTests(Fixture):
             returncode = 2
             stdout = b'not-json'
             stderr = '[capbox] 找不到 task ID\n'.encode()
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        args = SimpleNamespace(max_timeout=600)
         result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'c' * 32})
         self.assertTrue(result['isError'])
@@ -288,24 +301,32 @@ class MCPTests(Fixture):
             returncode = 2
             stdout = b''
             stderr = '[capbox] diff 只支持已结束且非 lost 的隔离任务\n'.encode()
-        args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
+        args = SimpleNamespace(max_timeout=600)
         result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_diff', {'task_id': 'd' * 32})
         self.assertTrue(result['isError'])
         self.assertIn('从不自动应用', result['content'][0]['text'])
 
-    def test_restricted_policy_mentions_unbound_credential_next_step(self):
-        class Proc:
-            returncode = 0
-            stdout = json.dumps({'schema': 'capbox.agent.v1', 'values': {'NET': {'value': 'restricted'}}})
-            stderr = b''
-        args = SimpleNamespace(profile='untrusted', net='restricted', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2', 'config': {'NET_ALLOW': 'api.openai.com'}},
-                                 args, lambda c: Proc()).call('capbox_policy', {})
-        note = result['structuredContent']['mcp']['credential_note']
-        self.assertIn('secret set', note)
-        self.assertIn('占位符', note)
+    def test_policy_cannot_open_network_with_allowlist(self):
+        for name, args in (('capbox_policy', {}), ('capbox_execute', {'argv': ['true']})):
+            with self.subTest(name=name):
+                result = self.exchange(initialization() + [request(2, 'tools/call', {
+                    'name': name, 'arguments': dict(args, net_allow='api.example.com'),
+                })])[-1]['result']
+                self.assertTrue(result['isError'])
+        self.assertEqual(json.loads(self.run_cli('task', 'list').stdout)['tasks'], [])
 
+    def test_policy_matches_direct_isolated_preview_under_conflict(self):
+        self.run_cli('config', 'set', 'CAPBOX_SECURITY_PROFILE', 'compat', check=True)
+        self.env['CAPBOX_NET'] = 'open'
+        self.env.pop('CAPBOX_SECURITY_PROFILE')
+        shown = self.run_cli('policy', 'show', '--isolate', check=True)
+        out = self.exchange(initialization() + [request(2, 'tools/call', {
+            'name': 'capbox_policy', 'arguments': {},
+        })])
+        mcp_policy = out[1]['result']['structuredContent'].copy()
+        mcp_policy.pop('mcp')
+        self.assertEqual(mcp_policy, json.loads(shown.stdout))
 
 
 @unittest.skipUnless((ROOTFS/'bin/sh').is_symlink() or (ROOTFS/'bin/sh').exists(),'real rootfs required')
@@ -377,9 +398,8 @@ class BundleTests(Fixture):
 
 
     def test_mcp_execution_and_log_readback(self):
-        # The fixed shared mode avoids requiring a Git fixture; policy remains untrusted/none.
         self.env['CAPBOX_PROXY']='http://proxy-user:fixture-proxy-secret@127.0.0.1:9'
-        proc=subprocess.Popen(self.cli+['mcp','serve','--workspace-mode','shared'],env=self.env,
+        proc=subprocess.Popen(self.cli+['mcp','serve'],env=self.env,
                               stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         def send(message,response=True):
             proc.stdin.write(json.dumps(message)+'\n');proc.stdin.flush()
@@ -400,7 +420,7 @@ class BundleTests(Fixture):
 
 
     def test_default_mcp_entry_runs_bounded_guest_task(self):
-        """P0 cut 3: bare mcp serve (isolated/untrusted/none) runs a trivial agent task end-to-end."""
+        """Bare mcp serve runs a locked isolated task end-to-end."""
         (self.ws/'probe.txt').write_text('host-side\n')
         proc=subprocess.Popen(self.cli+['mcp','serve'],env=self.env,
                               stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -413,7 +433,7 @@ class BundleTests(Fixture):
             policy=send(request(2,'tools/call',{'name':'capbox_policy','arguments':{}}))
             mcp=policy['result']['structuredContent']['mcp']
             self.assertEqual(mcp['workspace_mode'],'isolated')
-            self.assertEqual(mcp['profile'],'untrusted')
+            self.assertEqual(mcp['profile'],'strict')
             self.assertEqual(mcp['net'],'none')
             self.assertTrue(mcp['tools_cannot_raise_policy'])
             started=send(request(3,'tools/call',{'name':'capbox_execute','arguments':{
@@ -422,7 +442,10 @@ class BundleTests(Fixture):
             task=started['result']['structuredContent']['task_id']
             waited=self.run_cli('task','wait',task,'--timeout','20','--json')
             self.assertEqual(waited.returncode,0,waited.stdout+waited.stderr)
-            self.assertEqual(json.loads(waited.stdout)['status'],'succeeded')
+            state = json.loads(waited.stdout)
+            self.assertEqual(state['status'],'succeeded')
+            self.assertEqual(state['protection']['status'], 'verified')
+            self.assertEqual(state['protection']['checks']['procfs'], 'read-only')
             status=send(request(4,'tools/call',{'name':'capbox_status','arguments':{'task_id':task}}))
             self.assertEqual(status['result']['structuredContent']['status'],'succeeded')
             logs=send(request(5,'tools/call',{'name':'capbox_logs','arguments':{'task_id':task}}))

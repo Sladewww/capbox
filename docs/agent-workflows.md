@@ -49,6 +49,10 @@ capbox policy check --net restricted --resolve https://example.com/
 
 ## 隔离工作区与可审阅 diff
 
+`task start --isolate` 和 `mcp serve` 使用项目外可信 CapBox 模板的宿主策略。请用模板的绝对路径调用，传入 `--root` 选择项目。首版锁定 `strict`、单 UID、无网、只读 rootfs 和 Landlock。工作区副本可写，也可用 `--workspace-readonly` 和 `--write-dir` 收窄。项目中的 rootfs 可写设置、网络和安全档不会放宽宿主策略。任务显式请求更宽策略、配置额外 bind、指定自定义 bwrap，或传入关闭 PID namespace 的低层参数时会被拒绝。
+
+`capbox policy show --isolate --json` 显示解析后的宿主策略。`capbox doctor --agent --json` 用同一启动路径检查已初始化的项目。提交成功仅表示监督器接受任务。终态 `protection` 字段记录请求、验证状态和已验证的策略。验证失败会在执行用户命令前停止；`audit query --task-id` 可从持久日志查询结果。
+
 `--isolate` 把当前工作区视图拷进私有任务树，并做独立 rootfs 副本（不硬链到活动镜像）。对 Git 仓库根，包含已跟踪工作树内容**以及**仍被 `.gitignore` 允许的未跟踪文件；CapBox 凭据排除规则始终优先。对非 Git 目录只遍历普通文件（无 `.gitignore`）。非空 overlay upper 合并进私有 rootfs（copy-up + whiteout），而不是拒绝。拷贝活动 rootfs 前请停其它写入方、服务与 daemon；不做在线数据库一致性保证。
 
 ```sh
@@ -116,7 +120,7 @@ capbox task diff TASK_ID --json
 
 每个 `--write-dir` 指定隔离副本中一个已存在的目录，路径相对于项目根目录。允许写入某个目录时，其后代目录也可写。省略所有 `--write-dir` 时，整个工作树只读。
 
-任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围、已配置的 `FS_BINDS` 和显式的 `IDMAP=on`。此模式使用单 UID 映射，并移除挂载管理权限。处于隔离模式的 MCP 服务接受 `execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
+任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围，以及配置了 `FS_BINDS` 的请求。MCP 服务接受 `capbox_execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
 
 ### 查看任务失败证据
 
@@ -142,7 +146,7 @@ CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
 
 任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
 
-省略 `--net-allow` 时沿用现有配置的范围。MCP 服务采用 `restricted` 网络模式时，客户端可用 `net_allow` 向 `execute` 或 `policy` 传入同样的逗号分隔规则。
+共享任务省略 `--net-allow` 时沿用现有配置的范围。隔离任务与 MCP 使用无网宿主策略。
 
 ## 冷检查点
 
@@ -167,15 +171,14 @@ CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
 项目之外，父目录须已存在，目标路径须尚不存在。普通恢复失败返回非零状态，
 新项目在检查及解包均成功后才以原子重命名发布，已有目录不会被覆盖。
 
-以下命令在已初始化、rootfs 可写的测试项目中运行。恢复后通过 `task start` 继续工作。
+以下命令在已初始化的测试项目中运行。恢复后通过 `task start` 继续工作。
 
 ```sh
 set -eu
 base=$(mktemp -d)
 capbox config set CAPBOX_HOSTNAME checkpoint-demo
-id=$(capbox task start --isolate --net none --profile untrusted -- sh -ec '
+id=$(capbox task start --isolate -- sh -ec '
   printf "step 1\n" > /workspace/progress
-  printf "installed state\n" > /etc/checkpoint-demo
 ' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 capbox task wait "$id" --timeout 30
 pin=$(capbox task checkpoint "$id" "$base/checkpoint" |
@@ -185,7 +188,6 @@ capbox task restore "$base/checkpoint" "$base/resumed" --manifest-sha256 "$pin"
 next=$(capbox --root "$base/resumed" task start --isolate -- sh -ec '
   test "$(hostname)" = checkpoint-demo
   test "$(cat /workspace/progress)" = "step 1"
-  test "$(cat /etc/checkpoint-demo)" = "installed state"
   printf "step 2\n" >> /workspace/progress
 ' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 capbox --root "$base/resumed" task wait "$next" --timeout 30

@@ -12,7 +12,7 @@ guest root 不等于宿主 root；两者共用内核。`/workspace` 是宿主项
 
 ## 环境工具（setup / bundle / MCP）
 
-`setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [环境工具](docs/envkit.md)。MCP 日常入口（`isolated` / `untrusted` / `none`）见 [外层 Linux 沙箱路径](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex)。
+`setup check/plan` 生成宿主依赖和升级计划；`bundle pack/verify/check/restore` 保存并校验可携带的 rootfs、包锁和配方；`mcp serve` 在固定工作区与权限内提供 stdio 工具。用法和范围见 [环境工具](docs/envkit.md)。MCP 日常入口（`isolated` / `strict` / `none`）见 [外层 Linux 沙箱路径](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex)。
 
 ## 离线审计可视化
 
@@ -166,4 +166,4 @@ MIT — [LICENSE](LICENSE)。
 
 ### 宿主凭据代理
 
-真实 API key 留在宿主私有目录；guest 只看到 `capbox-sec-…` 占位符。`restricted` 网络下由宿主代理按 `NET_ALLOW` 授权域名改写请求头（不含 body/query）。详见 [docs/credentials.md](docs/credentials.md)。日常 MCP 入口是 `mcp serve`（默认 isolated/untrusted/none）；需要凭据时代理时显式加 `--net restricted`，见 [docs/envkit.md](docs/envkit.md) 与 [examples/](examples/)。
+真实 API key 留在宿主私有目录；guest 只看到 `capbox-sec-…` 占位符。`restricted` 网络下由宿主代理按 `NET_ALLOW` 授权域名改写请求头（不含 body/query）。详见 [docs/credentials.md](docs/credentials.md)。MCP 入口及其宿主网络策略见 [docs/envkit.md](docs/envkit.md)。

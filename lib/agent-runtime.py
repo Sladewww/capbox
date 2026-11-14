@@ -43,6 +43,19 @@ MAX_FILES = 10000
 MAX_COPY = 100 * 1024 * 1024
 EXCLUDED = {'.git', '.capbox', '.env', '.secrets', '.ssh', '.aws', '.azure',
             '.gnupg', '.kube', '.docker'}
+# 宿主模板拥有这些值。项目配置和请求均不能替换它们。
+AGENT_POLICY = {
+    'SECURITY_PROFILE': 'strict', 'NET': 'none', 'NET_ALLOW': '', 'PROXY': '',
+    'IDMAP': 'off', 'UID_MAP': '', 'GID_MAP': '', 'SETGROUPS': '',
+    'EXEC_UID': '0', 'EXEC_GID': '0', 'LANDLOCK': 'on', 'ROOTFS_RO': '1',
+    'FS_BINDS': '', 'OVERLAY': 'off', 'DISK_MAX': '',
+    'ALLOW_OLD_BWRAP': '0', 'BWRAP': '/usr/bin/bwrap',
+}
+AGENT_RAW_CONTROLS = (
+    'BWRAP_EXTRA', 'BWRAP_NO_PIDNS', 'BWRAP_NO_DIE_WITH_PARENT',
+    'EXEC_UID_OVERRIDE', 'EXEC_GID_OVERRIDE', 'OCI_ENV_FILE',
+    'TASK_WORKSPACE_READONLY', 'TASK_WRITE_DIRS',
+)
 
 
 class AgentError(Exception):
@@ -116,17 +129,48 @@ def context():
             'allow_once': env.get('CAPBOX_AGENT_ALLOW_ONCE') == '1'}
 
 
+def locked_context(ctx, args):
+    workspace = Path(ctx['workspace'])
+    cli = Path(ctx['cli']).resolve()
+    lib = Path(ctx['lib']).resolve()
+    if (cli.is_relative_to(workspace) or lib.is_relative_to(workspace)
+            or lib != cli.parent.parent / 'lib'):
+        raise AgentError(i18n.t('task.agent_external_template'), 2)
+    if ctx['config'].get('DISTRO') not in ('alpine', 'ubuntu'):
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='DISTRO'), 2)
+    for key, value in (('SECURITY_PROFILE', getattr(args, 'profile', None)),
+                       ('NET', getattr(args, 'net', None)),
+                       ('NET_ALLOW', getattr(args, 'net_allow', None))):
+        if value is not None and value != AGENT_POLICY[key]:
+            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    config = ctx['config']
+    for key in ('FS_BINDS', 'UID_MAP', 'GID_MAP', 'SETGROUPS', 'DISK_MAX', 'ALLOW_OLD_BWRAP'):
+        if config.get(key) not in (None, '', AGENT_POLICY[key]):
+            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    if ctx['allow_once']:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='ALLOW_OLD_BWRAP'), 2)
+    configured_bwrap = config.get('BWRAP', '')
+    if configured_bwrap and Path(configured_bwrap).resolve() != Path(AGENT_POLICY['BWRAP']).resolve():
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='BWRAP'), 2)
+    for key in AGENT_RAW_CONTROLS:
+        neutral = ('', '0') if key in ('BWRAP_NO_PIDNS', 'BWRAP_NO_DIE_WITH_PARENT') else ('',)
+        if os.environ.get('CAPBOX_' + key, '') not in neutral:
+            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    return dict(ctx, locked=True, config={**config, **AGENT_POLICY},
+                sources={**ctx['sources'], **dict.fromkeys(AGENT_POLICY, 'host')})
+
+
 def effective(ctx, args):
     cfg, sources = ctx['config'].copy(), ctx['sources'].copy()
     for key in ('NET', 'SECURITY_PROFILE'):
         attr = 'net' if key == 'NET' else 'profile'
         value = getattr(args, attr, None)
-        if value is not None:
+        if value is not None and not ctx.get('locked'):
             cfg[key], sources[key] = value, 'command'
     if cfg.get('NET') == 'host':
         cfg['NET'] = 'open'
     requested = getattr(args, 'net_allow', None)
-    if requested is not None:
+    if requested is not None and not ctx.get('locked'):
         if cfg.get('NET') != 'restricted':
             raise AgentError(i18n.t('task.net_allow_requires_restricted'), 2)
         module = net_module(ctx)
@@ -148,7 +192,7 @@ def effective(ctx, args):
     return {'kind': 'policy', 'values': values,
             'scope': i18n.t('policy.scope_new_oneshot'),
             'limits': i18n.t('policy.limits_checked_at_exec'),
-            'notes': [i18n.t('policy.note_net_none_pkg'),
+            'notes': [] if ctx.get('locked') else [i18n.t('policy.note_net_none_pkg'),
                       i18n.t('policy.note_idmap_auto_on'),
                       i18n.t('policy.note_readonly_rootfs_overlay')]}
 
@@ -206,8 +250,11 @@ def clean_environment(ctx):
             continue
         env['CAPBOX_' + k] = value
     # 显式 cgroup 委托在现有启动器中不走 config.env。
-    if 'CAPBOX_CGROUP_ROOT' in os.environ:
+    if 'CAPBOX_CGROUP_ROOT' in os.environ and not ctx.get('locked'):
         env['CAPBOX_CGROUP_ROOT'] = os.environ['CAPBOX_CGROUP_ROOT']
+    if ctx.get('locked'):
+        env['CAPBOX_AGENT_LOCKED'] = '1'
+        env['PATH'] = '/usr/bin:/bin'
     return env
 
 
@@ -282,6 +329,8 @@ def git(ctx, args, *, work=None, index=None, data=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'CAPBOX_'))}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_ATTR_NOSYSTEM='1',
                GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+    if ctx.get('locked'):
+        env['PATH'] = '/usr/bin:/bin'
     cmd = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
            '-c', 'core.attributesFile=/dev/null', '-c', 'core.quotePath=true']
     if index:
@@ -503,6 +552,8 @@ def state_of(job):
     state = read_json(job / 'state.json')
     if state['status'] not in TERMINAL and not alive(state.get('worker')):
         state = dict(state, status='lost', exit_code=125)
+        if 'protection' in state:
+            state['protection'] = {**state['protection'], **protection_outcome(job)}
     return state
 
 
@@ -528,6 +579,15 @@ def start_task(ctx, root, args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise AgentError(i18n.t('task.start_missing_command'), 2)
+    requested = None
+    if args.isolate:
+        if os.getuid() == 0 or os.geteuid() == 0:
+            raise AgentError(i18n.t('task.agent_root_uid'), 2)
+        requested = effective(ctx, argparse.Namespace())['values']
+        for key, name in (('NET', 'net'), ('SECURITY_PROFILE', 'profile'), ('NET_ALLOW', 'net_allow')):
+            if getattr(args, name, None) is not None:
+                requested[key] = {'value': getattr(args, name), 'source': 'command'}
+        ctx = locked_context(ctx, args)
     write_dirs = writable_directories(ctx, args)
     policy = effective(ctx, args)
     if not Path(ctx['rootfs']).is_dir():
@@ -545,16 +605,21 @@ def start_task(ctx, root, args):
         state['policy']['values'].update({
             'WORKSPACE_READONLY': {'value': '1', 'source': 'command'},
             'WRITE_DIRS': {'value': '\n'.join(write_dirs), 'source': 'command'},
-            'IDMAP': {'value': 'off', 'source': 'profile'},
         })
+    if requested is not None:
+        if write_dirs is not None:
+            requested.update({key: state['policy']['values'][key]
+                              for key in ('WORKSPACE_READONLY', 'WRITE_DIRS')})
+        state['protection'] = {'status': 'pending', 'requested': policy_summary(requested)}
     write_json(job / 'state.json', state)
     config = ctx['config']
-    audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
+    audit_path = None if getattr(args, 'diagnostic', False) else os.environ['CAPBOX_AGENT_AUDIT_PATH']
     audit_command = os.environ.get('CAPBOX_AGENT_AUDIT_CMD')
     submission = {'policy': policy_summary(state['policy']['values']), 'isolated': args.isolate}
     if audit_command:
         submission['cmd'] = audit_command
-    task_event(audit_path, config, state, 'start', **submission)
+    if audit_path:
+        task_event(audit_path, config, state, 'start', **submission)
     origin = ctx['workspace']
     launched = None
     try:
@@ -572,16 +637,16 @@ def start_task(ctx, root, args):
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
         env['CAPBOX_TASK_LAUNCH_STATUS'] = str(job / 'launch.jsonl')
         env['CAPBOX_TASK_AUDIT_ID'] = task_id
-        env['CAPBOX_TASK_AUDIT_PATH'] = audit_path
+        env['CAPBOX_TASK_AUDIT_PATH'] = audit_path or str(job / 'logs/audit.jsonl')
         argv = [ctx['cli'], '--root', ctx['workspace']]
         if ctx['allow_once']:
             argv += ['--allow-old-bwrap']
         # 截止时间由本控制器掌握。GNU timeout 会另建进程组，
         # 否则取消 CLI 进程组时它会漏网。
         argv += ['exec', '--timeout', '0', '--cwd', args.cwd]
-        if args.net:
+        if args.net and not ctx.get('locked'):
             argv += ['--net', args.net]
-        if args.profile:
+        if args.profile and not ctx.get('locked'):
             argv += ['--profile', args.profile]
         argv += ['--'] + command
         write_json(job / 'plan.json', {'argv': argv, 'env': env, 'timeout': args.timeout,
@@ -604,8 +669,7 @@ def start_task(ctx, root, args):
         while time.monotonic() < deadline:
             observed = read_json(job / 'state.json')
             if observed['status'] != 'preparing':
-                emit(public_state(job))
-                return 0
+                return job
             if worker.poll() is not None:
                 raise AgentError(i18n.t('task.supervisor_did_not_start'))
             time.sleep(0.02)
@@ -615,7 +679,10 @@ def start_task(ctx, root, args):
             launched.kill()
             launched.wait()
         state.update(status='failed', exit_code=1, finished_at=time.time(), failure_reason='launch_failed')
-        task_event(audit_path, config, state, 'fail')
+        if 'protection' in state:
+            state['protection'].update(status='failed', check='prepare')
+        if audit_path:
+            task_event(audit_path, config, state, 'fail')
         write_json(job / 'state.json', state)
         raise
 
@@ -642,6 +709,22 @@ def launch_outcome(job, code):
             return 'launch_failed'
     except (OSError, ValueError):
         return None
+
+
+def protection_outcome(job):
+    try:
+        with (job / 'launch.jsonl').open() as stream:
+            for line in stream:
+                if not line.startswith('{'):
+                    continue
+                record = json.loads(line)
+                if record.get('phase') == 'protection_verified':
+                    return {'status': 'verified', 'checks': record['checks']}
+                if record.get('phase') == 'protection_failed':
+                    return {'status': 'failed', 'check': record['check']}
+    except (OSError, ValueError, KeyError):
+        pass
+    return {'status': 'failed', 'check': 'launch'}
 
 
 def worker(root, task_id):
@@ -729,6 +812,16 @@ def worker(root, task_id):
     finally:
         for output, _size in streams.values():
             output.close()
+        if 'protection' in state:
+            state['protection'].update(protection_outcome(job))
+            if state['protection']['status'] == 'verified':
+                enforced = AGENT_POLICY.keys() | {'WORKSPACE_READONLY', 'WRITE_DIRS'}
+                state['protection']['effective'] = policy_summary(
+                    {key: value for key, value in state['policy']['values'].items() if key in enforced})
+            elif not reason:
+                if state['exit_code'] == 0:
+                    state.update(status='failed', exit_code=5)
+                state['failure_reason'] = 'launch_failed'
         state.update(finished_at=time.time(), dropped_bytes=dropped)
         if audit_path:
             task_event(audit_path, plan['config'], state,
@@ -933,9 +1026,32 @@ def nonnegative(value):
     return number
 
 
+def doctor_agent(ctx, root):
+    args = argparse.Namespace(command=['--', ':'], isolate=True,
+                              workspace_readonly=True, write_dir=[], net=None,
+                              profile=None, net_allow=None, cwd='/workspace',
+                              timeout=30, max_output_bytes=65536, diagnostic=True)
+    job = start_task(ctx, root, args)
+    try:
+        while True:
+            state = state_of(job)
+            if state['status'] in TERMINAL:
+                break
+            time.sleep(0.05)
+        protection = state['protection']
+        if protection['status'] == 'pending':
+            protection = {**protection, 'status': 'failed', 'check': 'supervisor'}
+        emit({'kind': 'agent_doctor', 'policy': state['policy'], 'protection': protection})
+        return 0 if protection['status'] == 'verified' else (return_code(state) or 5)
+    finally:
+        shutil.rmtree(job)
+
+
 def parser():
     p = i18n.I18nArgumentParser(prog='capbox', description=i18n.t('task.parser_description'))
     families = p.add_subparsers(dest='family', required=True)
+    doctor = families.add_parser('doctor')
+    doctor.add_argument('--json', action='store_true')
     task = families.add_parser('task', help=i18n.t('task.help_family'))
     commands = task.add_subparsers(dest='action', required=True)
     start = commands.add_parser('start', help=i18n.t('task.help_start'))
@@ -983,6 +1099,7 @@ def parser():
         cmd.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
         cmd.add_argument('--net-allow', help=i18n.t('task.help_net_allow'))
         cmd.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
+        cmd.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
         if action == 'check':
             cmd.add_argument('target')
             cmd.add_argument('--resolve', action='store_true', help=i18n.t('policy.help_resolve'))
@@ -996,14 +1113,25 @@ def main(argv=None):
     args = parser().parse_args(argv)
     ctx = context()
     if args.family == 'policy':
+        if args.isolate:
+            ctx = locked_context(ctx, args)
         result = network_check(ctx, args) if args.action == 'check' else effective(ctx, args)
         emit(result)
         return 1 if result.get('decision') == 'deny' else 0
     root = private_dir(private_dir(Path(os.environ['CAPBOX_AGENT_PRIVATE'])) / 'tasks', create=True)
+    if args.family == 'doctor':
+        try:
+            return doctor_agent(ctx, root)
+        except AgentError as exc:
+            emit({'kind': 'agent_doctor',
+                  'protection': {'status': 'failed', 'check': 'prepare',
+                                 'detail': str(exc)}})
+            return exc.code
     if args.action == 'start':
         if args.max_output_bytes > 64 * 1024 * 1024:
             raise AgentError(i18n.t('task.log_limit_exceeds_64mib'), 2)
-        return start_task(ctx, root, args)
+        emit(public_state(start_task(ctx, root, args)))
+        return 0
     if args.action == 'list':
         jobs = [public_state(job_path(root, d.name)) for d in sorted(root.iterdir())
                 if re.fullmatch('[0-9a-f]{32}', d.name)]
