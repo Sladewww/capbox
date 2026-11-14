@@ -181,7 +181,7 @@ class MCPTests(Fixture):
             calls.append(command)
             return Proc()
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1'}, args, invoke).call('capbox_execute', {'argv': ['true']})
+        result = MCP_STDIO.Server({'version': '0.5.2'}, args, invoke).call('capbox_execute', {'argv': ['true']})
         self.assertFalse(result['isError'])
         command = calls[0]
         self.assertEqual(command[:2], ['task', 'start'])
@@ -197,7 +197,7 @@ class MCPTests(Fixture):
             returncode = 0
             stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='shared', max_timeout=600)
-        MCP_STDIO.Server({'version': '0.5.1'}, args, lambda c: calls.append(c) or Proc()).call(
+        MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: calls.append(c) or Proc()).call(
             'capbox_execute', {'argv': ['true']})
         self.assertNotIn('--isolate', calls[0])
 
@@ -243,7 +243,7 @@ class MCPTests(Fixture):
             })
             stderr = b''
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'a' * 32})
         self.assertFalse(result['isError'])
         text = result['content'][0]['text']
@@ -261,7 +261,7 @@ class MCPTests(Fixture):
             })
             stderr = b''
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_logs', {'task_id': 'b' * 32, 'offset': 99})
         text = result['content'][0]['text']
         self.assertIn('文件末尾', text)
@@ -274,7 +274,7 @@ class MCPTests(Fixture):
             stdout = b'not-json'
             stderr = '[capbox] 找不到 task ID\n'.encode()
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'c' * 32})
         self.assertTrue(result['isError'])
         text = result['content'][0]['text']
@@ -289,7 +289,7 @@ class MCPTests(Fixture):
             stdout = b''
             stderr = '[capbox] diff 只支持已结束且非 lost 的隔离任务\n'.encode()
         args = SimpleNamespace(profile='untrusted', net='none', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
             'capbox_diff', {'task_id': 'd' * 32})
         self.assertTrue(result['isError'])
         self.assertIn('从不自动应用', result['content'][0]['text'])
@@ -300,7 +300,7 @@ class MCPTests(Fixture):
             stdout = json.dumps({'schema': 'capbox.agent.v1', 'values': {'NET': {'value': 'restricted'}}})
             stderr = b''
         args = SimpleNamespace(profile='untrusted', net='restricted', workspace_mode='isolated', max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.1', 'config': {'NET_ALLOW': 'api.openai.com'}},
+        result = MCP_STDIO.Server({'version': '0.5.2', 'config': {'NET_ALLOW': 'api.openai.com'}},
                                  args, lambda c: Proc()).call('capbox_policy', {})
         note = result['structuredContent']['mcp']['credential_note']
         self.assertIn('secret set', note)
