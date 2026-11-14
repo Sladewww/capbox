@@ -76,3 +76,19 @@ MVP 导出支持二进制的 Git 补丁；**不会应用到原项目**。JSON �
 - 既有 exec/文件/绑定设置仍生效。指向原工作区的绝对绑定在私有副本中可能无效；不会静默授权访问源。
 
 补丁应用仍留给可信宿主调用方。密钥不能进 guest 时，用 [宿主凭据代理](credentials.md)。可选的 [stdio MCP 适配器](envkit.md) 暴露本 CLI 的固定子集；不开网络监听。
+
+### Narrow restricted egress for one task
+
+```bash
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox policy check --net restricted --net-allow 'build.example.com:443' https://build.example.com
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox task start --net restricted --net-allow 'build.example.com:443' -- \
+  wget https://build.example.com/
+```
+
+The task proxy uses the requested rules after validating them against the host
+allowlist. Bare hosts allow ports 80 and 443. Wildcards cover subdomains.
+Omitting `--net-allow` uses the existing configured scope. MCP clients can
+pass the same comma-separated string as `net_allow` to execute or policy on a
+restricted server.

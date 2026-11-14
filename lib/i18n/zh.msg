@@ -1615,3 +1615,6 @@ seccomp.tool_description<<
 有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
 unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 >>
+task.net_allow_requires_restricted=--net-allow 仅适用于 restricted 网络
+task.net_allow_outside_host=--net-allow 须填写宿主 NET_ALLOW 覆盖的有效规则，且不能为空
+task.help_net_allow=任务出站规则，以逗号分隔，须在宿主 restricted 白名单范围内
