@@ -61,6 +61,22 @@ class PolicyTests(Fixture):
         d=json.loads(self.run_cli('policy','check','--net','restricted','--resolve','http://127.0.0.1/').stdout)
         self.assertEqual(d['decision'],'allow')
 
+    def test_per_task_egress_preview(self):
+        self.env['CAPBOX_NET_ALLOW'] = '*.example.com,example.org:80,example.org:443,192.0.2.0/24'
+        for rule in ('api.example.com:443', '*.team.example.com', 'example.org', '192.0.2.48/28'):
+            with self.subTest(rule=rule):
+                shown = self.run_cli('policy', 'show', '--net', 'restricted', '--net-allow', rule, check=True)
+                self.assertEqual(json.loads(shown.stdout)['values']['NET_ALLOW'],
+                                 {'value': rule, 'source': 'command'})
+        for rule in ('example.com', 'api.example.com:8443', 'example.org:*', '*.com', '', '192.0.0.0/16'):
+            with self.subTest(rule=rule):
+                rejected = self.run_cli('task', 'start', '--net', 'restricted', '--net-allow', rule, '--', 'true')
+                self.assertEqual(rejected.returncode, 2, rejected.stderr)
+        blocked = self.run_cli('policy', 'check', '--net', 'restricted',
+                               '--net-allow', 'api.example.com:443', 'http://api.example.com')
+        self.assertEqual(blocked.returncode, 1, blocked.stderr)
+        self.assertEqual(self.run_cli('policy', 'show', '--net-allow', 'api.example.com').returncode, 2)
+
     def test_bad_ids_and_secret_urls(self):
         r=self.run_cli('policy','check','https://user:fixture-secret@example.com/')
         self.assertEqual(r.returncode,2)
@@ -298,6 +314,35 @@ class TaskTests(Fixture):
         self.assertNotEqual(r.returncode,0)
         self.assertIn('task',r.stderr)
         self.run_cli('task','cancel',task,check=True);self.wait(task,143)
+
+    def test_parallel_restricted_tasks_apply_independent_rules(self):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            port = server.server_port
+            self.env['CAPBOX_NET_ALLOW'] = f'localhost:{port},127.0.0.1:{port}'
+            command = ('env -u no_proxy -u NO_PROXY wget -O /dev/null '
+                       f'http://127.0.0.1:{port}/')
+            poll = threading.Thread(target=server.serve_forever, daemon=True)
+            poll.start()
+            try:
+                tasks = [self.start('--net', 'restricted', '--net-allow', f'{host}:{port}',
+                                    '--', 'sh', '-c', command)
+                         for host in ('127.0.0.1', 'localhost')]
+                self.wait(tasks[0])
+                self.assertEqual(self.wait(tasks[1], 1)['status'], 'failed')
+                self.assertIn('403', self.run_cli('task', 'logs', tasks[1], '--stream', 'stderr').stdout)
+            finally:
+                server.shutdown()
+                poll.join()
 
     def test_parallel_restricted_tasks_have_private_network_sessions(self):
         import time

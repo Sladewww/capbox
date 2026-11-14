@@ -89,6 +89,20 @@ capbox task diff TASK_ID --json
 
 任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围、已配置的 `FS_BINDS` 和显式的 `IDMAP=on`。此模式使用单 UID 映射，并移除挂载管理权限。处于隔离模式的 MCP 服务接受 `execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
 
+### 收窄单个任务的受限出站范围
+
+```bash
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox policy check --net restricted --net-allow 'build.example.com:443' https://build.example.com
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox task start --net restricted --net-allow 'build.example.com:443' -- \
+  wget https://build.example.com/
+```
+
+任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
+
+省略 `--net-allow` 时沿用现有配置的范围。MCP 服务采用 `restricted` 网络模式时，客户端可用 `net_allow` 向 `execute` 或 `policy` 传入同样的逗号分隔规则。
+
 ## 冷检查点
 
 `task checkpoint` 读取仍保留在宿主运行时目录里的已结束隔离任务。先用

@@ -1623,6 +1623,9 @@ task.write_dir_hidden=可写目录与 FS_HIDE 路径重叠：{path}
 task.help_workspace_readonly=将隔离项目工作树挂载为只读
 task.help_write_dir=开放已有项目相对目录的写入权限（可重复）
 task.readonly_hide_conflict=--workspace-readonly 要求 FS_HIDE 路径位于工作区根目录之下且互不重叠
+task.net_allow_requires_restricted=--net-allow 仅适用于 restricted 网络
+task.net_allow_outside_host=--net-allow 须填写宿主 NET_ALLOW 覆盖的有效规则，且不能为空
+task.help_net_allow=任务出站规则，以逗号分隔，须在宿主 restricted 白名单范围内
 
 task.help_checkpoint=归档已结束的隔离任务
 task.help_restore_checkpoint=将本地任务检查点恢复到新项目

@@ -107,6 +107,56 @@ def _host_pattern_match(host: str, pattern: str) -> bool:
     return host == pattern
 
 
+def _rule_network(host):
+    try:
+        return ipaddress.ip_network(host, strict=False)
+    except ValueError:
+        return None
+
+
+def _valid_task_rule(raw):
+    host, port, _ = _parse_rule(raw)
+    if not re.fullmatch(r'[a-zA-Z0-9._:/*-]+', raw) or (port is not None and not 1 <= port <= 65535):
+        return False
+    if _rule_network(host) is not None:
+        return True
+    if host.startswith('*.'):
+        host = host[2:]
+        if '.' not in host:
+            return False
+    return bool(re.fullmatch(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)*', host))
+
+
+def allowlist_subset(requested, allowed):
+    """Check the same host and port sets that the proxy uses."""
+    parents = [_parse_rule(raw) for raw in allowed]
+    for raw in requested:
+        if not _valid_task_rule(raw):
+            return False
+        host, port, any_port = _parse_rule(raw)
+        network = _rule_network(host)
+        ports = (None,) if any_port else ((80, 443) if port is None else (port,))
+        for requested_port in ports:
+            candidates = [parent for parent, parent_port, parent_any in parents
+                          if (parent_any if requested_port is None
+                              else _port_ok(requested_port, parent_port, parent_any))]
+            if network is not None:
+                networks = [subnet for candidate in candidates
+                            if (subnet := _rule_network(candidate)) is not None
+                            and subnet.version == network.version]
+                if not any(network.subnet_of(parent) for parent in ipaddress.collapse_addresses(networks)):
+                    return False
+            elif host.startswith('*.'):
+                if not any(parent.startswith('*.') and
+                           (parent == host or _host_pattern_match(host[2:], parent))
+                           for parent in candidates):
+                    return False
+            elif not any(_rule_network(parent) is None and _host_pattern_match(host, parent)
+                         for parent in candidates):
+                return False
+    return bool(requested)
+
+
 def _ip_for_policy(ip: "ipaddress._BaseAddress") -> "ipaddress._BaseAddress":
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None:

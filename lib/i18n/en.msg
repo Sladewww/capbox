@@ -1625,6 +1625,9 @@ task.write_dir_hidden=Writable directory overlaps an FS_HIDE path: {path}
 task.help_workspace_readonly=Mount the isolated project worktree read-only
 task.help_write_dir=Allow writes to an existing project-relative directory (repeatable)
 task.readonly_hide_conflict=--workspace-readonly requires non-overlapping FS_HIDE paths below the workspace root
+task.net_allow_requires_restricted=--net-allow requires restricted networking
+task.net_allow_outside_host=--net-allow must be a non-empty set of valid rules covered by the host NET_ALLOW
+task.help_net_allow=Comma-separated task rules within the host restricted allowlist
 
 task.help_checkpoint=Archive a finished isolated task
 task.help_restore_checkpoint=Restore a local task checkpoint into a new project
