@@ -9,12 +9,12 @@ function time(seconds) {
 const size = bytes => bytes == null ? "—" : `${(bytes / 1048576).toFixed(1)} MiB`;
 const labels = {
   running: "运行中", stopped: "已停止", preparing: "准备中", succeeded: "成功",
-  failed: "失败", cancelled: "已取消", timed_out: "超时", lost: "任务失联",
+  fail: "失败", failed: "失败", start: "开始", cancelled: "已取消", timed_out: "超时", lost: "任务失联",
   unavailable: "采集失败", ok: "成功", ready: "可用", denied: "权限不足",
   missing: "不可用", unset: "未配置", warn: "告警", require: "要求生效",
   capable: "可用", unsupported: "不支持"
 };
-const label = status => labels[status] ?? status;
+const label = status => Object.hasOwn(labels, status) ? labels[status] : status;
 let snapshot = {};
 let hasSnapshot = false;
 const renderedTables = new Map();
@@ -31,13 +31,40 @@ function details(id, entries) {
     [element("dt", name), element("dd", value)]));
 }
 
+const statusTones = {
+  ok: "ok", running: "ok", succeeded: "ok", start: "ok",
+  warn: "warn", preparing: "warn", cancelled: "warn",
+  fail: "error", failed: "error", timed_out: "error", lost: "error", unavailable: "error"
+};
+const tableStyles = {
+  services: {status: 1},
+  tasks: {status: 1, mono: [0, 2, 3]},
+  audit: {status: 2, kind: 1, mono: [0, 3, 4]}
+};
+
 function table(id, rows, columns, message) {
   const signature = JSON.stringify([rows, message]);
   if (renderedTables.get(id) === signature) return;
   renderedTables.set(id, signature);
+  const style = tableStyles[id];
   const rendered = rows.map(values => {
     const row = document.createElement("tr");
-    row.append(...values.map(value => element("td", value)));
+    row.append(...values.map((value, index) => {
+      const cell = element("td", value);
+      if (style.mono?.includes(index)) cell.className = "mono";
+      if (value != null && index === style.kind) {
+        const pill = element("span", value);
+        pill.className = "kind-pill";
+        cell.replaceChildren(pill);
+      }
+      if (value != null && index === style.status) {
+        const pill = element("span", label(value));
+        pill.className = "status-pill";
+        pill.dataset.tone = Object.hasOwn(statusTones, value) ? statusTones[value] : "";
+        cell.replaceChildren(pill);
+      }
+      return cell;
+    }));
     return row;
   });
   if (!rendered.length) {
@@ -71,13 +98,13 @@ function render() {
     ["内存", size(usage?.memory_bytes)], ["PID 数", usage?.pids]
   ]);
   const empty = (id, message) => snapshot[id]?.error ? "采集失败" : snapshot[id] ? message : "等待采样";
-  table("services", (snapshot.services?.data ?? []).map(row => [row.name, label(row.state)]),
+  table("services", (snapshot.services?.data ?? []).map(row => [row.name, row.state]),
     2, empty("services", "暂无已配置的服务"));
   table("tasks", (snapshot.tasks?.data ?? []).map(row =>
-    [row.task_id, label(row.status), time(row.created_at), row.exit_code]),
+    [row.task_id, row.status, time(row.created_at), row.exit_code]),
     4, empty("tasks", "暂无任务"));
   table("audit", (snapshot.audit?.data ?? []).map(row =>
-    [row.ts, row.kind ?? row.event, label(row.status), row.exit, row.ms == null ? null : `${row.ms} ms`]),
+    [row.ts, row.kind ?? row.event, row.status, row.exit, row.ms == null ? null : `${row.ms} ms`]),
     5, empty("audit", "暂无审计事件"));
   renderStatus();
 }
