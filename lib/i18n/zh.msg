@@ -1624,6 +1624,8 @@ task.scan_incomplete=敏感信息扫描覆盖不完整，未导出补丁
 task.scan_clean=补丁新增行未命中已支持的密钥格式
 task.scan_workspace_unreadable=无法读取隔离工作区，未导出补丁
 
+task.help_checkpoint=归档已结束的隔离任务
+task.help_restore_checkpoint=将本地任务检查点恢复到新项目
 doctor.userns_host_failed=用户命名空间启动失败：{detail}
 doctor.userns_insufficient=探针未取得 uid 0 与全量 capability
 doctor.userns_no_detail=bwrap 失败或超时，未返回诊断信息

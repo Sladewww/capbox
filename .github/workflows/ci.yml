@@ -130,6 +130,7 @@ jobs:
         run: |
           python3 test/security/test_integration.py
           python3 test/security/test_agent_workflows.py
+          python3 test/security/test_task_checkpoint.py
           python3 test/security/test_envkit.py
 
       - name: Make failure logs readable

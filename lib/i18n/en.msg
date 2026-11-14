@@ -1626,6 +1626,8 @@ task.scan_incomplete=Secret scan coverage is incomplete; patch withheld
 task.scan_clean=Secret scan found no matches in added patch lines
 task.scan_workspace_unreadable=Could not read the isolated workspace; patch withheld
 
+task.help_checkpoint=Archive a finished isolated task
+task.help_restore_checkpoint=Restore a local task checkpoint into a new project
 doctor.userns_host_failed=User namespace launch failed: {detail}
 doctor.userns_insufficient=The probe did not obtain uid 0 and full capabilities
 doctor.userns_no_detail=bwrap failed or timed out without diagnostics

@@ -19,6 +19,8 @@
         "findings_truncated": "boolean"
       }
     },
+    "task checkpoint": {"output": "JSON checkpoint_created with manifest SHA256; finished isolated task only"},
+    "task restore": {"output": "JSON checkpoint_restored with new workspace path"},
     "task rm": {"output": "JSON removed acknowledgement; terminal non-lost tasks only"},
     "policy show": {"output": "JSON requested effective policy and value sources"},
     "policy check": {"output": "JSON HTTP(S) policy decision", "exit": "0 allow/conditional; 1 deny; 2 invalid input"}
