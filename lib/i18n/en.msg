@@ -1626,6 +1626,8 @@ task.help_workspace_readonly=Mount the isolated project worktree read-only
 task.help_write_dir=Allow writes to an existing project-relative directory (repeatable)
 task.readonly_hide_conflict=--workspace-readonly requires non-overlapping FS_HIDE paths below the workspace root
 
+task.help_checkpoint=Archive a finished isolated task
+task.help_restore_checkpoint=Restore a local task checkpoint into a new project
 doctor.userns_host_failed=User namespace launch failed: {detail}
 doctor.userns_insufficient=The probe did not obtain uid 0 and full capabilities
 doctor.userns_no_detail=bwrap failed or timed out without diagnostics

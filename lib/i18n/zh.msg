@@ -1624,6 +1624,8 @@ task.help_workspace_readonly=将隔离项目工作树挂载为只读
 task.help_write_dir=开放已有项目相对目录的写入权限（可重复）
 task.readonly_hide_conflict=--workspace-readonly 要求 FS_HIDE 路径位于工作区根目录之下且互不重叠
 
+task.help_checkpoint=归档已结束的隔离任务
+task.help_restore_checkpoint=将本地任务检查点恢复到新项目
 doctor.userns_host_failed=用户命名空间启动失败：{detail}
 doctor.userns_insufficient=探针未取得 uid 0 与全量 capability
 doctor.userns_no_detail=bwrap 失败或超时，未返回诊断信息

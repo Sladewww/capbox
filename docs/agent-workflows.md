@@ -22,7 +22,7 @@ capbox task rm TASK_ID
 
 任务执行截止从监督器启动算起，含 CLI 启动。准备/拷贝隔离工作区在该截止之前。超时会取消 CLI 进程组，宽限期后升为 SIGKILL。子 CLI 有父进程死亡处理；监督器死亡记为 `lost`，绝不当成功。运行时目录或外层宿主会话被删仍可能结束任务。分离运行逃不出外层工具/容器监督器。这不是重启存活，也不是内存检查点。
 
-任务元数据、原始命令参数与日志是工作区外的私有宿主数据，与其它控制记录同属经验证的运行时层级。其中可能含敏感命令输出。不会自动发布。第一版在 `task rm` 前保留已完成任务；若原始输出或补丁需在宿主运行时清理后保留，请显式导出。已记录的任务终态与请求策略可用 [audit query](audit-reports.md#按任务-id-查询与导出) 从项目审计流查询。`lost` 记录需人工确认宿主会话，不会自动删除。
+任务元数据、原始命令参数与日志是工作区外的私有宿主数据，与其它控制记录同属经验证的运行时层级。其中可能含敏感命令输出。不会自动发布。第一版在 `task rm` 前保留已完成任务；若原始输出或补丁需在宿主运行时清理后保留，请显式导出。已记录的任务终态与请求策略可用 [audit query](audit-reports.md#按任务-id-查询与导出) 从项目审计流查询。`lost` 记录需人工确认宿主会话，不会自动删除。 需要保留隔离任务的工作树和 rootfs 时，请先创建冷检查点。
 
 ### 输出约定
 
@@ -88,3 +88,58 @@ capbox task diff TASK_ID --json
 每个 `--write-dir` 指定隔离副本中一个已存在的目录，路径相对于项目根目录。允许写入某个目录时，其后代目录也可写。省略所有 `--write-dir` 时，整个工作树只读。
 
 任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围、已配置的 `FS_BINDS` 和显式的 `IDMAP=on`。此模式使用单 UID 映射，并移除挂载管理权限。处于隔离模式的 MCP 服务接受 `execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
+
+## 冷检查点
+
+`task checkpoint` 读取仍保留在宿主运行时目录里的已结束隔离任务。先用
+`task wait` 确认终态，再归档，最后可用 `task rm` 释放任务副本。归档期间
+请保持任务私有工作树、rootfs 和 upper 静止。任务提交、归档和删除使用同一把锁。
+直接操作私有目录的宿主进程也必须停止写入。
+
+归档包括任务工作树中的普通文件、当前私有 rootfs（含可合并的 overlay 变更）
+和任务提交时的可移植策略。工作树使用与任务 diff 相同的排除规则及
+10,000 文件 / 100 MiB 上限，文件权限按可执行位归一化。rootfs 通过
+与 bundle 相同的归档检查，限制 8 GiB 展开体积和 200,000 个条目。恢复所用
+宿主 Python 须提供 `tarfile.data_filter` 和 `os.path.ALLOW_MISSING`。工作树
+只保存文件及其父目录。Git 历史、主机凭据配置、进程与临时挂载均在归档范围外。
+额外文件系统绑定、独立磁盘配额挂载和无法合并的 upper 条目会使归档失败。
+任务数据和 rootfs 文件本身可能含敏感内容，请将归档保存在受信任的目录。
+
+恢复从归档构建同架构的新项目，使用本地 CLI 初始化脚手架，并用
+`recipe apply` 写入经过检查的策略。rootfs 复用镜像的受限解包器。
+每个文件均用清单中的 SHA-256 校验，可用 `--manifest-sha256` 固定创建时
+返回的清单摘要。只恢复来源可信、配置已审阅的归档。归档及恢复目标都应在当前
+项目之外，父目录须已存在，目标路径须尚不存在。普通恢复失败返回非零状态，
+新项目在检查及解包均成功后才以原子重命名发布，已有目录不会被覆盖。
+
+以下命令在已初始化、rootfs 可写的测试项目中运行。恢复后通过 `task start` 继续工作。
+
+```sh
+set -eu
+base=$(mktemp -d)
+capbox config set CAPBOX_HOSTNAME checkpoint-demo
+id=$(capbox task start --isolate --net none --profile untrusted -- sh -ec '
+  printf "step 1\n" > /workspace/progress
+  printf "installed state\n" > /etc/checkpoint-demo
+' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
+capbox task wait "$id" --timeout 30
+pin=$(capbox task checkpoint "$id" "$base/checkpoint" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["manifest_sha256"])')
+capbox task rm "$id"
+capbox task restore "$base/checkpoint" "$base/resumed" --manifest-sha256 "$pin"
+next=$(capbox --root "$base/resumed" task start --isolate -- sh -ec '
+  test "$(hostname)" = checkpoint-demo
+  test "$(cat /workspace/progress)" = "step 1"
+  test "$(cat /etc/checkpoint-demo)" = "installed state"
+  printf "step 2\n" >> /workspace/progress
+' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
+capbox --root "$base/resumed" task wait "$next" --timeout 30
+capbox --root "$base/resumed" task diff "$next"
+capbox --root "$base/resumed" task rm "$next"
+
+printf 'corrupt' >> "$base/checkpoint/rootfs.tar.gz"
+if capbox task restore "$base/checkpoint" "$base/rejected" --manifest-sha256 "$pin"; then
+  exit 1
+fi
+test ! -e "$base/rejected"
+```
