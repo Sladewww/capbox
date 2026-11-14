@@ -73,13 +73,7 @@ capbox secret set github --command 'gh auth token'
 
 ## MCP 日常路径
 
-`capbox mcp serve` 默认 isolated / untrusted / **无网络**。要让 Agent 调用已批准的 HTTPS API、又不把真实密钥放进 guest：
-
-1. 在宿主执行 `secret set` / `secret import`（见上文快速开始）。
-2. 把提供商主机写入 `CAPBOX_NET_ALLOW`（不要指望静默扩白名单）。
-3. 启动 MCP 时显式加 `--net restricted`。工作区模式保持默认（`isolated`）。
-
-不要把密钥写进 MCP 客户端 JSON，也不要为了方便改成 `--workspace-mode shared` 或开放网络。客户端参数示例与完整说明：[envkit.md](envkit.md#host-secrets-with-mcp-restricted-only)。
+MCP 的宿主 Agent 策略将网络固定为 `none`。宿主凭据代理适用于本页介绍的普通 CLI restricted 入口。MCP 客户端配置和工具参数中不要填写密钥。
 
 ## 相关
 

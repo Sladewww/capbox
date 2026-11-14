@@ -15,6 +15,7 @@ POLICY_FIELDS = (
     'SECURITY_PROFILE', 'NET', 'NET_ALLOW', 'IDMAP', 'EXEC_UID', 'EXEC_GID',
     'MEMORY_MAX', 'CPU_MAX', 'PIDS_MAX', 'DISK_MAX', 'RESOURCES_MODE',
     'FS_HIDE', 'FS_BINDS', 'OVERLAY', 'ROOTFS_RO', 'LANDLOCK',
+    'WORKSPACE_READONLY', 'WRITE_DIRS',
 )
 SENSITIVE = (r'(?:[A-Za-z][A-Za-z0-9_-]{0,80}[_-])?'
              r'(?:password|passwd|pwd|token|secret|api[_-]?key|authorization|access[_-]?token|'
@@ -55,7 +56,7 @@ def policy_summary(values):
         item = values.get(key)
         if isinstance(item, dict) and isinstance(item.get('value'), str):
             source = item.get('source')
-            if source in ('default', 'env', 'file', 'user', 'command', 'profile'):
+            if source in ('default', 'env', 'file', 'user', 'command', 'profile', 'host'):
                 result[key] = {'value': redact(item['value'])[:512], 'source': source}
     return result
 
@@ -101,6 +102,8 @@ def task_event(path, config, state, status, **fields):
     elif state.get('failure_reason'):
         event['failure_reason'] = state['failure_reason']
         event['detail'] = state['failure_reason']
+    if 'protection' in state:
+        event['protection'] = state['protection']
     if 'observation' not in fields and state['exit_code'] is not None:
         event['exit'] = state['exit_code']
     append_event(path, event)

@@ -14,10 +14,7 @@ _DEFAULTS = Path(__file__).with_name('mcp-defaults.py')
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('capbox_mcp_defaults', _DEFAULTS)
 _mod = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_mod)
-DEFAULT_PROFILE = _mod.DEFAULT_PROFILE
-DEFAULT_NET = _mod.DEFAULT_NET
 DEFAULT_WORKSPACE_MODE = _mod.DEFAULT_WORKSPACE_MODE
-DEFAULT_MAX_TIMEOUT = _mod.DEFAULT_MAX_TIMEOUT
 MAX_OUTPUT_BYTES = _mod.MAX_OUTPUT_BYTES
 
 PROTOCOLS = ('2025-11-25', '2025-06-18')
@@ -154,17 +151,16 @@ class Server:
             cwd=arguments.get('cwd','/workspace')
             if not (cwd=='/workspace' or cwd.startswith('/workspace/')) or '..' in cwd.split('/'):
                 raise ProtocolError(i18n.t('mcp.cwd_must_be_under_workspace'))
-            command=['task','start','--timeout',str(arguments.get('timeout',self.args.max_timeout)),
-                     '--cwd',cwd,'--profile',self.args.profile,'--net',self.args.net,
+            command=['task','start','--isolate','--timeout',str(arguments.get('timeout',self.args.max_timeout)),
+                     '--cwd',cwd,
                      '--max-output-bytes',str(MAX_OUTPUT_BYTES)]
-            if self.args.workspace_mode=='isolated':command+=['--isolate']
             if arguments.get('workspace_readonly'):command+=['--workspace-readonly']
             command+=['--write-dir='+path for path in arguments.get('write_dirs', [])]
             if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
             # env + -- 即使只有单个字符串参数也保持 argv 语义。
             command+=['--','env','--',*arguments['argv']]
         elif name=='capbox_policy':
-            command=['policy','show','--profile',self.args.profile,'--net',self.args.net]
+            command=['policy','show','--isolate']
             if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
         else:
             action={'capbox_status':'status','capbox_logs':'logs','capbox_cancel':'cancel','capbox_diff':'diff'}[name]
@@ -181,17 +177,16 @@ class Server:
             # 不回显原始 argv / 宿主路径；只给出净化后的 CapBox 错误与下一步。
             return {'content':[{'type':'text','text':tool_error_text(name,proc)}],'isError':True}
         if name=='capbox_policy' and isinstance(data,dict) and not proc.returncode:
+            values = data['values']
             data=dict(data)
             data['mcp']={
-                'workspace_mode':self.args.workspace_mode,
-                'profile':self.args.profile,
-                'net':self.args.net,
+                'workspace_mode':DEFAULT_WORKSPACE_MODE,
+                'profile':values['SECURITY_PROFILE']['value'],
+                'net':values['NET']['value'],
                 'max_timeout':self.args.max_timeout,
                 'max_output_bytes':MAX_OUTPUT_BYTES,
                 'tools_cannot_raise_policy':True,
             }
-            if self.args.net=='restricted':
-                data['mcp']['credential_note']=i18n.t('mcp.credential_note_restricted')
         body=json.dumps(data,ensure_ascii=True)
         if name=='capbox_logs' and not proc.returncode:
             body=base64.b64decode(data['data_base64']).decode('utf-8','replace')
@@ -260,8 +255,6 @@ def unique_pairs(pairs):
 
 def serve(ctx,args,invoke):
     if not 1<=args.max_timeout<=3600:raise ValueError(i18n.t('mcp.max_timeout_range'))
-    if args.net=='restricted' and not ctx['config']['NET_ALLOW']:
-        raise ValueError(i18n.t('mcp.restricted_requires_net_allow'))
     server=Server(ctx,args,invoke)
     incoming=sys.stdin.buffer
     while True:

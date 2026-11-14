@@ -216,6 +216,12 @@ cmd_exec() {
     esac
   fi
 
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]] &&
+     [[ "$use_daemon" == 1 || "$timeout_s" != 0 || -n "$image_name$uid_override$gid_override$user_override" ]]; then
+    _agent_launch_failure exec_entry
+    return 5
+  fi
+
   # --image 只替换这一次的 rootfs，不改 DISTRO / config.env，也不能套进已启动的守护容器。
   # 放在 --user / --cwd 之前，让 passwd 和工作目录都按该镜像解释。
   if [[ -n "$image_name" ]]; then

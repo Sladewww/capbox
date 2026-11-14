@@ -89,18 +89,15 @@ bundle 使用既有安全镜像解压语义（含权限/属主净化）；不承
 
 ## 4. 固定范围的 stdio MCP 适配器
 
-启动服务前先初始化/预构建工作区。日常 Agent 入口是裸 `mcp serve` — 默认已钉死信任边界：
+先初始化并准备项目 rootfs。以非 root 用户从工作区外的可信模板启动 MCP：
 
 ```sh
-capbox --root /path/to/project mcp serve
-# 仅显式 opt-in（会放宽边界；不要当日常默认）：
-capbox --root /path/to/project mcp serve --workspace-mode shared
-capbox --root /path/to/project mcp serve --net restricted
+/path/to/template/bin/capbox --root /path/to/project mcp serve
 ```
 
-默认：**isolated** 任务工作区（与 CLI 的 `--isolate` 规则相同：Git 脏树、非 Git 遍历、overlay 合并）、**`untrusted`** 配置、**`none`** 网络、最长执行超时 **600** 秒、每路流保留输出 **8MiB**。启动时可显式接受 `strict` 与 `restricted`；restricted 需要 `NET_ALLOW`。任何工具调用都不能改工作区 root、配置、网络模式、输出预算或最大超时。适配器会清掉已配置的上游 PROXY；restricted 模式用自己的白名单桥。资源限额由宿主配置提供；适配器不发明或声称 cgroup 委派。
+MCP 执行与 CLI `task start --isolate` 共用宿主策略。工作区副本沿用 Git 脏树、非 Git 遍历和 overlay 合并规则。每个任务默认至多运行 600 秒，每路流保留 8 MiB。服务端可配置 `--max-timeout`，工具请求只可在这个上限内选择任务超时。
 
-把 MCP 客户端配成用模板可执行文件的绝对路径启动 CLI。日常路径用裸 `mcp serve` 即可（isolated / untrusted / 无网络）。使用 `mcpServers` 块的客户端示例：
+使用 `mcpServers` 块的客户端示例：
 
 ```json
 {
@@ -113,42 +110,9 @@ capbox --root /path/to/project mcp serve --net restricted
 }
 ```
 
-仓库内副本：[`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)（日常默认）与 [`examples/mcpServers.capbox.restricted.json`](../examples/mcpServers.capbox.restricted.json)（宿主凭据代理）。
+仓库内副本见 [examples/mcpServers.capbox.json](../examples/mcpServers.capbox.json)。
 
-<a id="host-secrets-with-mcp-restricted-only"></a>
-### 宿主密钥与 MCP（restricted 专用）
-
-真实 API key 留在宿主。启动 MCP 前设置；不要把密钥写进客户端配置、工具 argv 或 guest 环境。受限网络是显式 opt-in — 这条路径**不要**用 `open` 或 shared：
-
-```sh
-# 1) 密钥存宿主（stdin / import；不要在 argv 上用 --value）
-printf '%s' "$OPENAI_API_KEY" | capbox --root /path/to/project secret set openai --value-stdin
-
-# 2) 只放行提供商主机；CapBox 不会替你扩大 NET_ALLOW
-capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.openai.com
-
-# 3) 用 restricted 网络启动 MCP（默认仍是 isolated + untrusted）
-capbox --root /path/to/project mcp serve --net restricted
-```
-
-带凭据入口的客户端配置（固定 root；无开放网络；无共享工作区）：
-
-```json
-{
-  "mcpServers": {
-    "capbox": {
-      "command": "/absolute/path/to/template/bin/capbox",
-      "args": [
-        "--root", "/absolute/path/to/project",
-        "mcp", "serve",
-        "--net", "restricted"
-      ]
-    }
-  }
-}
-```
-
-guest 任务只看到 `capbox-sec-…` 占位符；宿主白名单代理改写匹配的请求头。细节与信任模型：[credentials.md](credentials.md)。`capbox_policy` 报告固定 MCP 策略，含 `mcp.workspace_mode` / `mcp.net` / `mcp.tools_cannot_raise_policy`。
+`capbox_policy` 显示启动预览。以 `capbox_status` 和任务审计记录查看启动结果。MCP 参数 `--profile`、`--net`、`--workspace-mode` 只接受 `strict`、`none`、`isolated`；旧客户端配置中的 `untrusted`、`restricted`、`shared` 参数需移除。工具参数 `net_allow` 在无网策略下返回错误。
 
 客户端配置格式各异。本服务器实现 [stdio 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[初始化/版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。支持协议版本 `2025-11-25` 与 `2025-06-18`；未知版本协商到已支持的最新版。不宣告 MCP 可选的 task 增强协议：task ID 是 CapBox 工具结果。
 
@@ -161,7 +125,7 @@ guest 任务只看到 `capbox-sec-…` 占位符；宿主白名单代理改写�
 | `capbox_diff` | 导出已完成隔离任务的补丁；不应用 |
 | `capbox_policy` | 服务器固定的请求启动策略 |
 
-只接受 `/workspace` 及其子路径作为 cwd。服务器不暴露宿主装包、升级、配置变更、任意宿主文件或 shell 命令。任务 argv 经普通沙箱启动器、按固定策略执行。默认 `isolated` 工作区模式与 CLI `--isolate` 规则相同（Git 脏树、非 Git 遍历、overlay 合并）；不会静默退回 shared。
+只接受 `/workspace` 及其子路径作为 cwd。服务器不暴露宿主装包、升级、配置变更、任意宿主文件或 shell 命令。status、logs、cancel 和 diff 沿用项目的任务 ID 范围，包括此项目由本地 CLI 管理的既有任务。
 
 消息是 UTF-8 JSON-RPC 行，单条输入最多 1MiB。非法 JSON、过大消息、未知工具/参数、坏 ID 与策略覆盖尝试会被拒绝。stdout 只含协议消息；诊断走 stderr。工具侧失败用 `isError`；日志游标仍是字节偏移。超出 MCP 结果预算的大 diff 请用本地 CLI 导出。请求串行处理，带有界 CLI 调用超时；服务器不另维护执行引擎。
 
@@ -171,14 +135,6 @@ guest 任务只看到 `capbox-sec-…` 占位符；宿主白名单代理改写�
 ## 5. 外层 Linux 沙箱路径（Claude Code / Codex）
 
 把 CapBox 接到 Claude Code / Codex 这类 Agent 前面，作为外层 Linux 沙箱。不需要 Docker 或 KVM。guest 使用固定 MCP 默认；补丁先导出，再在宿主侧审阅应用。
-
-日常默认：
-
-- 工作区 **isolated**（与 CLI `--isolate` 相同）
-- 配置 **untrusted**
-- 网络 **none**（默认建议不用开放网络）
-- 工具不能抬高策略或改 root
-- 真实 API key 留在宿主（`secret set`）；guest 只见占位符
 
 ### 步骤（约 5 分钟）
 
@@ -194,23 +150,13 @@ capbox doctor
 # 例如 recipe apply，或把已知 Alpine rootfs 拷进 .capbox/os/alpine 做本地冒烟。
 ```
 
-3. **接入 MCP 客户端**：复制仓库内日常入口 [`examples/mcpServers.capbox.json`](../examples/mcpServers.capbox.json)，换成两处绝对路径，指向 Claude Code / Codex / 其它 stdio MCP 客户端。裸 `mcp serve` 即可。这条路径不要加 `--net open` 或 `--workspace-mode shared`。
+3. **接入 MCP 客户端**：复制 [examples/mcpServers.capbox.json](../examples/mcpServers.capbox.json)，填入模板可执行文件与项目的绝对路径。
 
-4. **可选宿主密钥**（仅当 Agent 必须调用白名单 HTTPS API）。密钥留宿主；用 restricted 示例与 [credentials.md](credentials.md)：
+4. **从客户端运行 guest 任务**：
 
-```sh
-printf '%s' "$PROVIDER_API_KEY" | capbox --root /path/to/project secret set provider --value-stdin
-capbox --root /path/to/project config set CAPBOX_NET_ALLOW api.example.com
-# 客户端参数：mcp serve --net restricted  （仍是 isolated + untrusted）
-```
-
-5. **从客户端跑一条极简 guest 任务**（或任意 MCP tools/call UI）：
-
-- `capbox_policy` → 确认 `mcp.workspace_mode=isolated`、`profile=untrusted`、`net=none`
-- `capbox_execute`，argv 如 `["sh","-c","printf ok"]`，配较短 `timeout`
-- `capbox_status` / `capbox_logs` 直到成功
-- 长任务可用 `capbox_cancel`；`capbox_diff` 只导出隔离补丁，不自动应用
-
-6. 更宽网络或 `--workspace-mode shared` 只能按第 4 节在启动参数里显式打开。不支持 nsjail、macOS、托管运行时。
+   - 用 `capbox_policy` 查看 `mcp.workspace_mode=isolated`、`profile=strict`、`net=none`。
+   - 用 `capbox_execute` 运行 argv，例如 `["sh","-c","printf ok"]`，并设置较短的 `timeout`。
+   - 用 `capbox_status` 查询结果，通过 `capbox_logs` 查看输出。
+   - 用 `capbox_cancel` 取消任务，通过 `capbox_diff` 导出补丁到宿主侧审阅并应用。
 
 回归锁：`test/security/test_envkit.py` 里的 `test_default_mcp_entry_runs_bounded_guest_task` 启动裸 `mcp serve`，断言固定策略块，执行有界 guest 命令，并检查 status/logs 成功。
