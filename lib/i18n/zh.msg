@@ -61,7 +61,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   image export|import|docker|lock|cache
                                     rootfs 归档、包锁，以及本地 Docker/OCI 镜像
   secret set|ls|rm|import           宿主凭据（真实 key 不进沙箱；见 docs/credentials.md）
-  audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
+  audit report|query|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
   help, --help, -h                  显示本帮助
@@ -236,9 +236,10 @@ help.service.logs<<
 >>
 
 help.audit<<
-用法: capbox audit <report|tail|path|clear> [参数]
+用法: capbox audit <report|query|tail|path|clear> [参数]
 
   report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
+  query --task-id ID    以 JSON 查询任务及关联事件
   tail [N]   显示最近 N 条（默认 50）
   path       打印审计文件路径
   clear      清空审计文件（需确认意图：直接执行即清空）
@@ -430,7 +431,7 @@ audit.audit_log_must_regular_file_refusing_write=审计日志必须是普通文�
 audit.unable_truncate=无法清空 {f}
 audit.cleared_audit_log=已清空审计日志: {f}
 audit.audit_tail_n_must_non_negative_integer=audit tail: N 必须是非负整数
-audit.audit_unknown_subcommand_report_tail_path_clear=audit: 未知子命令 {sub}（report|tail|path|clear）
+audit.audit_unknown_subcommand_report_tail_path_clear=audit: 未知子命令 {sub}（report|query|tail|path|clear）
 audit.metrics_unknown_option=metrics: 未知选项 {arg}
 common.net_must_none_restricted_open_host_alias={who}: --net 必须是 none|restricted|open（host 别名）；当前: {mode}
 common.net_restricted_requires_non_empty_capbox_net={who}: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）
@@ -1615,3 +1616,15 @@ seccomp.tool_description<<
 有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
 unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 >>
+
+audit.query_description=从项目审计日志查询任务及其事件，输出 JSON
+audit.help_task_id=精确匹配任务 ID（32 位小写十六进制字符）
+audit.html.task_heading=任务摘要
+audit.html.label_task_id=任务 ID
+audit.html.label_task_status=任务状态
+audit.html.task_status_unavailable=审计记录无任务状态
+audit.html.task_policy=请求策略
+audit.html.task_changed_files=变更路径
+audit.html.task_origin_changed=源工作区冲突
+audit.html.task_diff_unavailable=无可用 diff 摘要
+audit.html.task_unassociated=未关联

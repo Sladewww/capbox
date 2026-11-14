@@ -61,7 +61,7 @@ Info and configuration
   image export|import|docker|lock|cache
                                     Rootfs archives, package locks, and local Docker/OCI images
   secret set|ls|rm|import           Host credentials (real keys never enter the sandbox; see docs/credentials.md)
-  audit report|tail|path|clear      Offline HTML report and JSONL audit log
+  audit report|query|tail|path|clear      Offline HTML report and JSONL audit log
   metrics [--json]                  Real resource / cgroup / disk status (no fabricated numbers)
   version                           Print the version
   help, --help, -h                  Show this help
@@ -237,9 +237,10 @@ Usage: capbox service logs NAME [-f] [-n N]
 >>
 
 help.audit<<
-Usage: capbox audit <report|tail|path|clear> [args]
+Usage: capbox audit <report|query|tail|path|clear> [args]
 
   report --output FILE  Generate an offline HTML report (the file must be outside the workspace; see report --help for filters)
+  query --task-id ID    Query a task and its events as JSON
   tail [N]   Show the last N records (default 50)
   path       Print the audit file path
   clear      Empty the audit file (running the command is the confirmation)
@@ -431,7 +432,7 @@ audit.audit_log_must_regular_file_refusing_write=Audit log must be a regular fil
 audit.unable_truncate=Unable to truncate {f}
 audit.cleared_audit_log=Cleared audit log: {f}
 audit.audit_tail_n_must_non_negative_integer=audit tail: N must be a non-negative integer
-audit.audit_unknown_subcommand_report_tail_path_clear=audit: unknown subcommand {sub} (report|tail|path|clear)
+audit.audit_unknown_subcommand_report_tail_path_clear=audit: unknown subcommand {sub} (report|query|tail|path|clear)
 audit.metrics_unknown_option=metrics: unknown option {arg}
 common.net_must_none_restricted_open_host_alias={who}: --net must be none|restricted|open (host is an alias); got: {mode}
 common.net_restricted_requires_non_empty_capbox_net={who}: --net restricted requires a non-empty CAPBOX_NET_ALLOW (config set or environment variable)
@@ -1617,3 +1618,15 @@ clone3 is intentionally not denied: glibc uses it to create threads. Namespace
 creation is intercepted via unshare/setns (and bwrap --disable-userns when
 idmap is off).
 >>
+
+audit.query_description=Query a task and its events from the project audit log as JSON
+audit.help_task_id=Match an exact task ID (32 lowercase hexadecimal characters)
+audit.html.task_heading=Task summary
+audit.html.label_task_id=Task ID
+audit.html.label_task_status=Task status
+audit.html.task_status_unavailable=Unavailable in audit records
+audit.html.task_policy=Requested policy
+audit.html.task_changed_files=Changed paths
+audit.html.task_origin_changed=Source workspace conflicts
+audit.html.task_diff_unavailable=Diff summary unavailable
+audit.html.task_unassociated=Unassociated
