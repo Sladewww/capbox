@@ -49,6 +49,42 @@ class SetupTests(Fixture):
         self.assertEqual(before,list(self.ws.rglob('config.env')))
         self.assertNotIn('rootfs', [p.name for p in self.ws.iterdir()])
 
+    def test_probe_distinguishes_host_denial_and_missing_rootfs(self):
+        bwrap = self.base / 'bwrap'
+        bwrap.write_text('#!/bin/sh\n'
+                         'if [ "$1" = --version ]; then echo "bubblewrap 0.12.0"; exit 0; fi\n'
+                         'echo "bwrap: Creating new namespace: Operation not permitted" >&2\n'
+                         'exit 1\n')
+        bwrap.chmod(0o755)
+        self.env['CAPBOX_BWRAP'] = str(bwrap)
+        before = (self.ws / '.capbox/config.env').exists()
+        probe = self.run_cli('setup', 'check', '--probe', '--json')
+        data = json.loads(probe.stdout)
+        checks = data['checks']
+        self.assertEqual(data['schema'], 'capbox.envkit.v1')
+        self.assertEqual(checks['bwrap']['status'], 'available')
+        self.assertEqual(checks['userns']['status'], 'failed')
+        self.assertIn('Operation not permitted', checks['userns']['detail'])
+        self.assertEqual(checks['rootfs']['status'], 'missing')
+        self.assertIn('capbox init', checks['rootfs']['next_step'])
+        self.assertEqual((self.ws / '.capbox/config.env').exists(), before)
+        self.env['CAPBOX_MIRROR'] = 'none'
+        doctor = self.run_cli('doctor')
+        self.assertNotEqual(doctor.returncode, 0)
+        self.assertIn('Operation not permitted', doctor.stdout)
+
+    def test_plan_reports_old_bwrap_and_preparation_steps(self):
+        bwrap = self.base / 'bwrap'
+        bwrap.write_text('#!/bin/sh\necho "bubblewrap 0.11.0"\n')
+        bwrap.chmod(0o755)
+        self.env['CAPBOX_BWRAP'] = str(bwrap)
+        data = json.loads(self.run_cli('setup', 'plan', '--json', check=True).stdout)
+        self.assertEqual(data['checks']['bwrap']['status'], 'unsupported')
+        self.assertIn('0.12.0', data['checks']['bwrap']['next_step'])
+        self.assertTrue(any(command[-3:] == ['init', '--distro', 'alpine']
+                            for command in data['followup_commands']))
+        self.assertTrue(any(command[-1] == 'doctor' for command in data['followup_commands']))
+
     def test_plan_never_executes_host_installers(self):
         r=self.run_cli('setup','plan','--from',str(REPO),'--json')
         self.assertEqual(r.returncode,0,r.stderr)
