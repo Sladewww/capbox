@@ -198,6 +198,9 @@ _net_start_host_proxy() {
   fi
   # 后台代理（inject map 仅宿主可读，不挂进 guest）
   local inject_args=()
+  if [[ -n "${_audit_task_id:-}" ]] && _audit_enabled; then
+    inject_args+=(--audit-path "$_audit_task_path" --task-id "$_audit_task_id")
+  fi
   if [[ -n "${CAPBOX_CRED_INJECT_MAP:-}" && -f "${CAPBOX_CRED_INJECT_MAP}" ]]; then
     inject_args+=(--inject-map "${CAPBOX_CRED_INJECT_MAP}")
   fi

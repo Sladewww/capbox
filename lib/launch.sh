@@ -37,6 +37,13 @@ build_bwrap_args() {
   else
     a+=(--bind "$CAPBOX_ROOTFS" /)
   fi
+  if [[ -n "${_task_status_fd:-}" ]]; then
+    if "$CAPBOX_BWRAP" --help | grep -F -- '--json-status-fd' >/dev/null; then
+      a+=(--json-status-fd "$_task_status_fd")
+    else
+      printf 'unsupported\n' >&"$_task_status_fd"
+    fi
+  fi
   a+=(--proc /proc)
   a+=(--dev /dev)
   if [[ "$mode" == "daemon" ]]; then

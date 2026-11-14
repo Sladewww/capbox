@@ -750,11 +750,21 @@ _resources_wrap_argv() {
     # 在宿主上译好文案再嵌入 bash -c；子脚本内不得调用 i18n_*。
     local procs_fail
     procs_fail="$(i18n_get res.cgroup_procs_write_failed)"
+    local -a confirmed=()
+    if [[ -n "${_audit_task_id:-}" ]] && _audit_enabled; then
+      confirmed=(python3 "$CAPBOX_LIB_DIR/audit_store.py" "$_audit_task_path"
+        "$_audit_task_id" "cgroup_joined memory=$CAPBOX_RESOURCES_APPLIED_MEMORY cpu=$CAPBOX_RESOURCES_APPLIED_CPU pids=$CAPBOX_RESOURCES_APPLIED_PIDS")
+    fi
     _rw_cmd=(
       /bin/bash -c
-      'if ! echo $$ >"$1/cgroup.procs"; then printf "%s\n" '"$(printf '%q' "$procs_fail")"' >&2; exit 1; fi; shift; exec "$@"'
+      'if ! echo $$ >"$1/cgroup.procs"; then printf "%s\n" '"$(printf '%q' "$procs_fail")"' >&2; exit 1; fi
+       shift
+       count=$1; shift
+       if (( count )); then "${@:1:count}" 2>/dev/null || true; shift "$count"; fi
+       exec "$@"'
       bash
       "$cg"
+      "${#confirmed[@]}" "${confirmed[@]}"
       "${inner[@]}"
     )
     log_debug "resource limits applied via cgroup: $cg (mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-})"
@@ -802,7 +812,7 @@ _resources_wrap_argv() {
 
   if (( cgroup_ok == 1 )) || [[ "${CAPBOX_RESOURCES_APPLIED_DISK:-}" == loop:* ]]; then
     if declare -F audit_event >/dev/null 2>&1; then
-      audit_event resources ok "detail=cgroup:${CAPBOX_RESOURCES_CGROUP_LEAF:-} mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-} disk=${CAPBOX_RESOURCES_APPLIED_DISK:-}" "exit=0" "ms=0"
+      audit_event resources ok "detail=limits_prepared cgroup:${CAPBOX_RESOURCES_CGROUP_LEAF:-} mem=${CAPBOX_RESOURCES_APPLIED_MEMORY:-} cpu=${CAPBOX_RESOURCES_APPLIED_CPU:-} pids=${CAPBOX_RESOURCES_APPLIED_PIDS:-} disk=${CAPBOX_RESOURCES_APPLIED_DISK:-}" "exit=0" "ms=0"
     fi
   fi
   return 0

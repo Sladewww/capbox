@@ -92,6 +92,34 @@ class SecretStoreTests(Fixture):
 
 
 class ProxyRewriteTests(unittest.TestCase):
+    def test_parallel_proxy_denials_record_only_target_port_and_reason(self):
+        from argparse import Namespace
+        from concurrent.futures import ThreadPoolExecutor
+
+        def request(audit, task, host):
+            observe = net_proxy.deny_observer(Namespace(audit_path=audit, task_id=task))
+            client, server = socket.socketpair()
+            with client, server:
+                client.sendall((f'GET http://{host}/?token=hidden HTTP/1.1\r\n'
+                                'Authorization: Bearer private\r\n\r\n').encode())
+                net_proxy.handle_client(server, ['allowed.test'], False, on_deny=observe)
+                self.assertIn(b'403 Forbidden', client.recv(4096))
+
+        with tempfile.TemporaryDirectory() as directory:
+            audit = Path(directory) / 'audit.jsonl'
+            cases = [('a' * 32, 'first.test'), ('b' * 32, 'second.test:81')]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                list(pool.map(lambda pair: request(audit, *pair), cases))
+            raw = audit.read_text()
+            self.assertNotIn('hidden', raw)
+            self.assertNotIn('private', raw)
+            details = {event['task_id']: event['detail']
+                       for event in map(json.loads, raw.splitlines())}
+            self.assertEqual(details, {
+                'a' * 32: 'target=first.test port=80 reason=allowlist_denied',
+                'b' * 32: 'target=second.test port=81 reason=allowlist_denied',
+            })
+
     def test_http_header_rewrite_and_unauthorized(self):
         token = 'capbox-sec-' + ('11' * 16)
         inject = {'entries': [{

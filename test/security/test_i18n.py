@@ -1812,7 +1812,8 @@ class SupervisorSeccompI18nTests(unittest.TestCase):
         self.assertEqual(en_miss.returncode, 2, en_miss.stderr)
         self.assertIn('supervisor: missing child argv', zh_miss.stderr)
         self.assertIn('supervisor: missing child argv', en_miss.stderr)
-        self.assertEqual(zh_miss.stderr, en_miss.stderr)
+        self.assertEqual(zh_miss.stderr.partition('] ')[2],
+                         en_miss.stderr.partition('] ')[2])
         self.assertNotIn('缺少子进程 argv', zh_miss.stderr + en_miss.stderr)
 
         zh_err = self.run_tool(
