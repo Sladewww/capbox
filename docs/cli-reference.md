@@ -236,11 +236,15 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox task --help
 
 ```text
-用法: capbox task [-h] {start,list,status,wait,attach,cancel,logs,diff,rm} ...
+用法: capbox task [-h]
+                {start,list,status,wait,attach,cancel,logs,diff,rm,checkpoint,restore}
+                ...
 
 位置参数:
-  {start,list,status,wait,attach,cancel,logs,diff,rm}
+  {start,list,status,wait,attach,cancel,logs,diff,rm,checkpoint,restore}
     start               启动独立监督的 exec 任务
+    checkpoint          归档已结束的隔离任务
+    restore             将本地任务检查点恢复到新项目
 
 选项:
   -h, --help            显示此帮助并退出

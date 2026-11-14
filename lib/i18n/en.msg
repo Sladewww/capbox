@@ -1617,3 +1617,6 @@ clone3 is intentionally not denied: glibc uses it to create threads. Namespace
 creation is intercepted via unshare/setns (and bwrap --disable-userns when
 idmap is off).
 >>
+
+task.help_checkpoint=Archive a finished isolated task
+task.help_restore_checkpoint=Restore a local task checkpoint into a new project

@@ -21,8 +21,8 @@ cmd_task() {
   esac
   local t0 rc=0
   t0=$(date +%s%3N 2>/dev/null || date +%s)
-  # 与运行时升级串行化提交；读端与 worker 使用私有记录。
-  if [[ "${1:-}" == start ]]; then
+  # 串行化任务提交、归档和删除；归档期间保留私有工作树。
+  if [[ "${1:-}" == start || "${1:-}" == checkpoint || "${1:-}" == rm ]]; then
     need_cmd flock
     with_lock upgrade -- _agent_command task "$@"
     rc=$?
