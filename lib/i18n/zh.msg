@@ -1615,6 +1615,14 @@ seccomp.tool_description<<
 有意不拒绝 clone3：glibc 用它创建线程。命名空间创建通过
 unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 >>
+task.help_scan_secrets=导出前检查补丁新增行中的已支持密钥格式
+task.scan_patch_unreadable=无法读取 Git diff 扫描输入，未导出补丁
+task.scan_binary_skipped=已跳过二进制变更
+task.scan_findings_truncated=仅显示前 {limit} 条命中
+task.scan_findings=敏感信息扫描有命中，未导出补丁
+task.scan_incomplete=敏感信息扫描覆盖不完整，未导出补丁
+task.scan_clean=补丁新增行未命中已支持的密钥格式
+task.scan_workspace_unreadable=无法读取隔离工作区，未导出补丁
 task.write_dir_requires_readonly=--write-dir 需要 --workspace-readonly
 task.readonly_requires_isolate=--workspace-readonly 需要 --isolate
 task.readonly_mount_conflict=--workspace-readonly 与配置的 FS_BINDS 或 IDMAP=on 冲突

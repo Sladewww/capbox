@@ -276,6 +276,20 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
   --max-output-bytes MAX_OUTPUT_BYTES
 ```
 
+## capbox task diff --help
+
+```text
+用法: capbox task diff [-h] [--json] [--scan-secrets] task_id
+
+位置参数:
+  task_id
+
+选项:
+  -h, --help      显示此帮助并退出
+  --json          输出 JSON（attach 为 JSONL；logs/diff 的二进制用 base64）
+  --scan-secrets  导出前检查补丁新增行中的已支持密钥格式
+```
+
 ## capbox policy --help
 
 ```text

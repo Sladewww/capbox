@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Public CLI contracts, including real guest execution when a rootfs is supplied."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,139 @@ class PolicyTests(Fixture):
         self.assertEqual(r.returncode,2)
         self.assertNotIn('fixture-secret',r.stdout+r.stderr)
         self.assertEqual(self.run_cli('task','status','../../etc/passwd').returncode,2)
+
+
+class DiffScanTests(Fixture):
+    TOKEN = 'gh' + 'p_' + 'X' * 36
+    KEY_HEADER = '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----'
+
+    def setUp(self):
+        super().setUp()
+        private = subprocess.check_output(
+            ['bash', '-c', 'export CAPBOX_DIR="$1/.capbox" CAPBOX_WORKSPACE="$1"; '
+             'source "$2/lib/common.sh"; _capbox_host_state_dir',
+             'test', str(self.ws), str(REPO)], env=self.env, text=True).strip()
+        self.task = 'a' * 32
+        root = Path(private) / 'tasks'
+        root.mkdir(mode=0o700)
+        self.addCleanup(shutil.rmtree, root)
+        self.job = root / self.task
+        self.job.mkdir(mode=0o700)
+        self.view = self.job / 'workspace'
+        self.view.mkdir()
+        self.index = self.job / 'review.git'
+        subprocess.run(['git', 'init', '--bare', str(self.index)],
+                       env=self.env, capture_output=True, check=True)
+        (self.job / 'state.json').write_text(json.dumps({'isolated': True, 'status': 'succeeded'}))
+        (self.job / 'plan.json').write_text(json.dumps({'origin': str(self.ws)}))
+
+    def git(self, *args):
+        subprocess.run(['git', '--git-dir=' + str(self.index), '--work-tree=' + str(self.view),
+                        *args], env=self.env, capture_output=True, check=True)
+
+    def baseline(self, files):
+        baseline = {}
+        for name, data in files.items():
+            (self.view / name).write_bytes(data)
+            (self.ws / name).write_bytes(data)
+            baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'executable': False}
+        self.git('add', '--all')
+        (self.job / 'baseline.json').write_text(json.dumps(baseline))
+
+    def diff(self, *args):
+        return self.run_cli('task', 'diff', self.task, *args)
+
+    def test_findings_hold_patch_and_report_path_line_and_type(self):
+        name = 'with tabs\tand newline\n.txt'
+        self.baseline({name: b'first\nsecond\nthird\n'})
+        (self.view / name).write_text(f'first\n{self.TOKEN}\nthird\n{self.KEY_HEADER}\n')
+        result = self.diff('--scan-secrets', '--json')
+        self.assertEqual(result.returncode, 3, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['schema'], 'capbox.agent.v1')
+        self.assertNotIn('patch_base64', payload)
+        self.assertEqual(payload['scan']['status'], 'findings')
+        self.assertEqual(payload['scan']['findings'], [
+            {'path': name, 'line': 2, 'type': 'github_token'},
+            {'path': name, 'line': 4, 'type': 'private_key'},
+        ])
+        text = self.diff('--scan-secrets')
+        self.assertEqual(text.returncode, 3)
+        self.assertEqual(text.stdout, '')
+        self.assertIn('github_token', text.stderr)
+        self.assertNotIn(self.TOKEN, result.stdout + result.stderr + text.stderr)
+        self.assertNotIn(self.KEY_HEADER, result.stdout + result.stderr + text.stderr)
+        audit = self.run_cli('audit', 'tail', check=True)
+        self.assertIn('--scan-secrets', audit.stdout)
+        self.assertNotIn(self.TOKEN, audit.stdout + audit.stderr)
+        self.assertNotIn(self.KEY_HEADER, audit.stdout + audit.stderr)
+        plain = self.diff('--json')
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        export = json.loads(plain.stdout)
+        self.assertNotIn('scan', export)
+        self.assertIn(self.TOKEN.encode(), base64.b64decode(export['patch_base64']))
+
+    def test_scan_redacts_supported_tokens_in_report_paths(self):
+        self.baseline({})
+        (self.view / (self.TOKEN + '.txt')).write_text(self.TOKEN + '\n')
+        structured = self.diff('--scan-secrets', '--json')
+        human = self.diff('--scan-secrets')
+        self.assertEqual(structured.returncode, 3, structured.stderr)
+        self.assertEqual(human.returncode, 3, human.stderr)
+        self.assertEqual(json.loads(structured.stdout)['scan']['findings'], [
+            {'path': '[REDACTED].txt', 'line': 1, 'type': 'github_token'},
+        ])
+        self.assertIn('"[REDACTED].txt":1: github_token', human.stderr)
+        self.assertNotIn(self.TOKEN, structured.stdout + structured.stderr + human.stderr)
+
+    def test_clean_patch_is_unchanged_and_removed_or_context_lines_are_ignored(self):
+        self.baseline({'plain': f'{self.TOKEN}\n{self.KEY_HEADER}\nold\n'.encode(),
+                       'removed.bin': b'\0old'})
+        (self.view / 'plain').write_text(f'{self.TOKEN}\nordinary text\n')
+        (self.view / 'removed.bin').unlink()
+        plain = self.diff()
+        scanned = self.diff('--scan-secrets')
+        self.assertEqual(scanned.returncode, 0, scanned.stderr)
+        self.assertEqual(scanned.stdout, plain.stdout)
+        self.assertIn('-' + self.KEY_HEADER, scanned.stdout)
+        report = json.loads(self.diff('--scan-secrets', '--json').stdout)['scan']
+        self.assertEqual(report, {'status': 'clean', 'findings': [], 'skipped': [],
+                                  'findings_truncated': False})
+
+    def test_binary_change_withholds_patch(self):
+        self.baseline({})
+        (self.view / 'new.bin').write_bytes(b'\0new')
+        result = self.diff('--scan-secrets', '--json')
+        self.assertEqual(result.returncode, 3, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn('patch_base64', payload)
+        self.assertEqual(payload['scan']['status'], 'incomplete')
+        self.assertEqual(payload['scan']['skipped'], [{'path': 'new.bin', 'reason': 'binary'}])
+
+    def test_limits_and_unsafe_files_withhold_patch(self):
+        self.baseline({})
+        large = self.view / 'large.txt'
+        large.write_bytes(b'x' * (16 * 1024 * 1024) + b'\n')
+        result = self.diff('--scan-secrets', '--json')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('16MiB', result.stderr)
+        self.assertEqual(result.stdout, '')
+        large.unlink()
+        (self.view / self.TOKEN).symlink_to(self.ws / 'outside')
+        result = self.diff('--scan-secrets', '--json')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('[REDACTED]', result.stderr)
+        self.assertNotIn(self.TOKEN, result.stderr)
+        self.assertEqual(result.stdout, '')
+
+
+    def test_missing_workspace_withholds_patch(self):
+        self.baseline({})
+        self.view.rmdir()
+        result = self.diff('--scan-secrets', '--json')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('无法读取隔离工作区', result.stderr)
+        self.assertEqual(result.stdout, '')
 
 
 @unittest.skipUnless((ROOTFS/'bin/sh').is_symlink() or (ROOTFS/'bin/sh').exists(),

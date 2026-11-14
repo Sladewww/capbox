@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='capbox-docs-') as temporary:
                  '（仓库文档政策：README.md 英文，README.zh-CN.md 与 docs/ 中文）。\n')]
     for command in [('--help',), ('init', '--help'), ('upgrade', '--help'),
                     ('recipe', '--help'), ('image', '--help'), ('image', 'docker', '--help'), ('service', '--help'),
-                    ('task', '--help'), ('task', 'start', '--help'),
+                    ('task', '--help'), ('task', 'start', '--help'), ('task', 'diff', '--help'),
                     ('policy', '--help'), ('setup', '--help'), ('bundle', '--help'), ('mcp', '--help'),
                     ('audit', '--help'), ('audit', 'report', '--help'), ('audit', 'query', '--help'), ('pkg', '--help')]:
         sections.append('\n## capbox ' + ' '.join(command) + '\n\n```text\n' +
