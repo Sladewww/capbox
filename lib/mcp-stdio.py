@@ -99,9 +99,10 @@ def obj(properties=None, required=()):
 def tools(maximum):
     task={'type':'string','pattern':'^[0-9a-f]{32}$'}
     integer=lambda maximum: {'type':'integer','minimum':0,'maximum':maximum}
+    scope = {'net_allow': {'type': 'string'}}
     specs=[
         ('capbox_execute',i18n.t('mcp.tool_execute_desc'),
-         obj({'argv':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':256},
+         obj({**scope,'argv':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':256},
               'cwd':{'type':'string'},'timeout':{'type':'integer','minimum':1,'maximum':maximum}},['argv']),False),
         ('capbox_status',i18n.t('mcp.tool_status_desc'),obj({'task_id':task},['task_id']),True),
         ('capbox_logs',i18n.t('mcp.tool_logs_desc'),
@@ -109,7 +110,7 @@ def tools(maximum):
               'offset':integer(64*1024*1024),'limit':integer(65536)},['task_id']),True),
         ('capbox_cancel',i18n.t('mcp.tool_cancel_desc'),obj({'task_id':task},['task_id']),False),
         ('capbox_diff',i18n.t('mcp.tool_diff_desc'),obj({'task_id':task},['task_id']),True),
-        ('capbox_policy',i18n.t('mcp.tool_policy_desc'),obj(),True),
+        ('capbox_policy',i18n.t('mcp.tool_policy_desc'),obj(scope),True),
     ]
     return [{'name':name,'description':description,'inputSchema':schema,
              'annotations':{'readOnlyHint':readonly,'destructiveHint':name=='capbox_cancel',
@@ -153,9 +154,12 @@ class Server:
                      '--cwd',cwd,'--profile',self.args.profile,'--net',self.args.net,
                      '--max-output-bytes',str(MAX_OUTPUT_BYTES)]
             if self.args.workspace_mode=='isolated':command+=['--isolate']
+            if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
             # env + -- 即使只有单个字符串参数也保持 argv 语义。
             command+=['--','env','--',*arguments['argv']]
-        elif name=='capbox_policy':command=['policy','show','--profile',self.args.profile,'--net',self.args.net]
+        elif name=='capbox_policy':
+            command=['policy','show','--profile',self.args.profile,'--net',self.args.net]
+            if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
         else:
             action={'capbox_status':'status','capbox_logs':'logs','capbox_cancel':'cancel','capbox_diff':'diff'}[name]
             command=['task',action,arguments['task_id'],'--json']

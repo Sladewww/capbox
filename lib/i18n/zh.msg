@@ -1623,6 +1623,9 @@ task.scan_findings=敏感信息扫描有命中，未导出补丁
 task.scan_incomplete=敏感信息扫描覆盖不完整，未导出补丁
 task.scan_clean=补丁新增行未命中已支持的密钥格式
 task.scan_workspace_unreadable=无法读取隔离工作区，未导出补丁
+task.net_allow_requires_restricted=--net-allow 仅适用于 restricted 网络
+task.net_allow_outside_host=--net-allow 须填写宿主 NET_ALLOW 覆盖的有效规则，且不能为空
+task.help_net_allow=任务出站规则，以逗号分隔，须在宿主 restricted 白名单范围内
 
 task.help_checkpoint=归档已结束的隔离任务
 task.help_restore_checkpoint=将本地任务检查点恢复到新项目

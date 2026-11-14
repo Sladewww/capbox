@@ -1625,6 +1625,9 @@ task.scan_findings=Secret scan found matches; patch withheld
 task.scan_incomplete=Secret scan coverage is incomplete; patch withheld
 task.scan_clean=Secret scan found no matches in added patch lines
 task.scan_workspace_unreadable=Could not read the isolated workspace; patch withheld
+task.net_allow_requires_restricted=--net-allow requires restricted networking
+task.net_allow_outside_host=--net-allow must be a non-empty set of valid rules covered by the host NET_ALLOW
+task.help_net_allow=Comma-separated task rules within the host restricted allowlist
 
 task.help_checkpoint=Archive a finished isolated task
 task.help_restore_checkpoint=Restore a local task checkpoint into a new project

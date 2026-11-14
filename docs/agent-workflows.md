@@ -106,6 +106,20 @@ capbox task diff "$task_id" --scan-secrets > "$patch_file"
 | `task cancel` | 取消请求后继续 wait/status，确认终态及退出码；同时覆盖任务自然完成的竞争情况。 |
 | `task diff --json` | 对已完成的隔离任务读取变更、冲突与补丁；启用扫描时处理退出码 3 和仅有扫描报告的响应。 |
 
+### 收窄单个任务的受限出站范围
+
+```bash
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox policy check --net restricted --net-allow 'build.example.com:443' https://build.example.com
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox task start --net restricted --net-allow 'build.example.com:443' -- \
+  wget https://build.example.com/
+```
+
+任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
+
+省略 `--net-allow` 时沿用现有配置的范围。MCP 服务采用 `restricted` 网络模式时，客户端可用 `net_allow` 向 `execute` 或 `policy` 传入同样的逗号分隔规则。
+
 ## 冷检查点
 
 `task checkpoint` 读取仍保留在宿主运行时目录里的已结束隔离任务。先用
