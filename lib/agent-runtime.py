@@ -7,6 +7,7 @@
 import argparse
 import base64
 import ctypes
+import errno
 import fcntl
 import fnmatch
 import hashlib
@@ -22,6 +23,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -324,68 +326,66 @@ def list_isolate_names(ctx, source):
     return sorted(set(names)), 'fs'
 
 
-def is_overlay_whiteout(path):
-    try:
-        st = path.lstat()
-    except OSError:
-        return False
-    if stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) == 0 and os.minor(st.st_rdev) == 0:
-        return True
-    return path.name.startswith('.wh.') and path.name != '.wh..wh..opq'
+def is_overlay_whiteout(st):
+    return stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) == 0 and os.minor(st.st_rdev) == 0
+
+
+def overlay_attribute(path, name):
+    for namespace in ('user', 'trusted'):
+        try:
+            return os.getxattr(path, f'{namespace}.overlay.{name}', follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno not in (errno.ENODATA, errno.ENOTSUP):
+                raise
+    return None
+
+
+def remove_overlay_target(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def merge_overlay_upper(upper, dest_rootfs):
-    """把 overlay upper 应用到独立 rootfs 副本（copy-up + whiteout）。"""
+    """Apply the supported copy-up and whiteout entries to a private rootfs."""
     if upper.is_symlink() or not upper.is_dir():
         raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
-    for directory, dirs, files in os.walk(upper, followlinks=False, topdown=True):
-        rel_dir = Path(directory).relative_to(upper)
-        # 部分 overlay 实现使用的不透明目录标记。
-        opaque = Path(directory) / '.wh..wh..opq'
-        if opaque.exists() or opaque.is_symlink():
-            target_dir = dest_rootfs / rel_dir if str(rel_dir) != '.' else dest_rootfs
-            if target_dir.exists():
-                for child in list(target_dir.iterdir()):
-                    if child.is_dir() and not child.is_symlink():
-                        shutil.rmtree(child)
-                    else:
-                        child.unlink(missing_ok=True)
-        for name in list(dirs) + list(files):
-            src = Path(directory) / name
-            rel = (rel_dir / name).as_posix() if str(rel_dir) != '.' else name
+
+    for directory, dirs, files in os.walk(upper, followlinks=False):
+        source = Path(directory)
+        relative = source.relative_to(upper)
+        target = dest_rootfs / relative
+        if target.is_symlink() or (target.exists() and not target.is_dir()):
+            remove_overlay_target(target)
+        target.mkdir(exist_ok=True)
+        if overlay_attribute(source, 'redirect') is not None:
+            raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=relative))
+        opaque_marker = source / '.wh..wh..opq'
+        if ('.wh..wh..opq' in files and not opaque_marker.is_symlink()) or overlay_attribute(source, 'opaque') == b'y':
+            for child in target.iterdir():
+                remove_overlay_target(child)
+        for name in dirs + files:
+            src = source / name
+            rel = relative / name
             if src.is_symlink():
                 raise AgentError(i18n.t('task.isolate_overlay_upper_symlink', rel=rel))
-            if name == '.wh..wh..opq':
-                continue
-            if name.startswith('.wh.'):
-                target_name = name[4:]
-                target = dest_rootfs / rel_dir / target_name if str(rel_dir) != '.' else dest_rootfs / target_name
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                elif target.exists() or target.is_symlink():
-                    target.unlink()
-                continue
-            if is_overlay_whiteout(src):
-                target = dest_rootfs / rel
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                elif target.exists() or target.is_symlink():
-                    target.unlink()
+            if name == '.wh..wh..opq' and name in files:
                 continue
             st = src.lstat()
-            dst = dest_rootfs / rel
-            if stat.S_ISDIR(st.st_mode):
-                dst.mkdir(parents=True, exist_ok=True)
-                continue
-            if not stat.S_ISREG(st.st_mode):
+            if name.startswith('.wh.') and name in files:
+                target_name = name[4:]
+                if target_name in ('', '.', '..'):
+                    raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=rel))
+                remove_overlay_target(target / target_name)
+            elif is_overlay_whiteout(st) or overlay_attribute(src, 'whiteout') is not None:
+                remove_overlay_target(target / name)
+            elif stat.S_ISREG(st.st_mode) and overlay_attribute(src, 'metacopy') is None:
+                dst = target / name
+                remove_overlay_target(dst)
+                shutil.copy2(src, dst)
+            elif not stat.S_ISDIR(st.st_mode) or name.startswith('.wh.'):
                 raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=rel))
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if dst.exists() or dst.is_symlink():
-                if dst.is_dir() and not dst.is_symlink():
-                    shutil.rmtree(dst)
-                else:
-                    dst.unlink()
-            shutil.copy2(src, dst)
 
 
 def isolate(ctx, job):
@@ -393,8 +393,10 @@ def isolate(ctx, job):
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_needs_readable_workspace'), 2)
     upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
-    if upper.exists() and upper.is_symlink():
+    if any(path.is_symlink() for path in (upper, *upper.parents[:3])):
         raise AgentError(i18n.t('task.isolate_rejects_symlink_overlay_upper'))
+    if upper.exists() and not upper.is_dir():
+        raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
     try:
         names, mode = list_isolate_names(ctx, source)
     except AgentError:
@@ -769,6 +771,13 @@ def parser():
             cmd.add_argument('--stream', choices=['stdout', 'stderr'], default='stdout')
             cmd.add_argument('--offset', type=nonnegative, default=0)
             cmd.add_argument('--limit', type=nonnegative, default=65536)
+    checkpoint = commands.add_parser('checkpoint', help=i18n.t('task.help_checkpoint'))
+    checkpoint.add_argument('task_id')
+    checkpoint.add_argument('output')
+    restore = commands.add_parser('restore', help=i18n.t('task.help_restore_checkpoint'))
+    restore.add_argument('source')
+    restore.add_argument('destination')
+    restore.add_argument('--manifest-sha256')
     policy = families.add_parser('policy', help=i18n.t('policy.help_family'))
     policies = policy.add_subparsers(dest='action', required=True)
     for action in ('show', 'check'):
@@ -802,6 +811,26 @@ def main(argv=None):
         jobs = [public_state(job_path(root, d.name)) for d in sorted(root.iterdir())
                 if re.fullmatch('[0-9a-f]{32}', d.name)]
         emit({'kind': 'tasks', 'tasks': jobs})
+        return 0
+    if args.action in ('checkpoint', 'restore'):
+        # Resolve modules from the running controller, never from archived data.
+        def load(name):
+            spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        envkit, checkpoint = load('envkit-runtime'), load('task-checkpoint')
+        try:
+            if args.action == 'checkpoint':
+                result = checkpoint.capture(sys.modules[__name__], envkit, ctx,
+                                            job_path(root, args.task_id), args.output)
+            else:
+                result = checkpoint.restore(sys.modules[__name__], envkit, ctx, args.source,
+                                            args.destination, args.manifest_sha256)
+        except (envkit.Failure, tarfile.TarError) as exc:
+            raise AgentError(str(exc)) from exc
+        emit(result)
         return 0
     job = job_path(root, args.task_id)
     if args.action == 'status':
@@ -868,6 +897,6 @@ if __name__ == '__main__':
     except AgentError as exc:
         print('[capbox] ' + str(exc), file=sys.stderr)
         sys.exit(exc.code)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+    except (OSError, EOFError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         print(i18n.t('task.operation_failed', type=type(exc).__name__, exc=exc), file=sys.stderr)
         sys.exit(1)

@@ -1,0 +1,24 @@
+[capbox] Creating .capbox in the current workspace … (template: /workspace/scratch/322baab71e4a/capbox → /tmp/tmp.Pv2FlRy7aa/source/.capbox)
+[capbox] Workspace is ready: /tmp/tmp.Pv2FlRy7aa/source/.capbox
+[capbox] Next: capbox init --distro alpine
+[capbox] Creating .capbox in the current workspace … (template: /workspace/scratch/322baab71e4a/capbox → /tmp/tmp.Pv2FlRy7aa/snapshot-target/.capbox)
+[capbox] Workspace is ready: /tmp/tmp.Pv2FlRy7aa/snapshot-target/.capbox
+[capbox] Next: capbox init --distro alpine
+[capbox] Creating .capbox in the current workspace … (template: /workspace/scratch/322baab71e4a/capbox → /tmp/tmp.Pv2FlRy7aa/bundle-target/.capbox)
+[capbox] Workspace is ready: /tmp/tmp.Pv2FlRy7aa/bundle-target/.capbox
+[capbox] Next: capbox init --distro alpine
+[capbox] Set CAPBOX_HOSTNAME = reuse-source
+jq-1.8.2
+{"schema": "capbox.envkit.v1", "kind": "bundle_packed", "path": "/tmp/tmp.Pv2FlRy7aa/package-bundle", "manifest_sha256": "65bf0c7068772a6919f5fdcfad24b071fd077c7767fafc419ae71ae4a0b49995", "files": {"rootfs.tar.gz": "8ce9dbc292ae6a1810047aad80e27a6488176bf200af869eb9aee15bcd93d6f3", "package.lock": "09c4229c74535593e66434953c7a807d5b4a64ebd1c1c9033ba804dfd92f104a", "recipe.env": "42c7547cf2fac3c3fb4793abccf537cadf4180eabd0401a5a8e064d4b660b9d4"}}
+{"schema": "capbox.envkit.v1", "kind": "bundle_verify", "integrity": "verified", "package_count": 18, "configuration_drift": {}, "packages_match": null}
+package_lock_jq 1.8.2-r0
+[capbox] package inventory does not match after restore (exit code 1)
+bundle_restore=failed_target_rootfs_removed
+[capbox] Snapshot created: /tmp/tmp.Pv2FlRy7aa/source/.capbox/snapshots/deps.tar.zst (sha256=5817923cede20f990944aaf33b4d6b929a1ea6dcfdfe8c2b344b5e0ae258eb07)
+[capbox] Restored from snapshot: deps
+{"schema": "capbox.agent.v1", "type": "exit", "task_id": "0d39ebdeef15496a8f2ac4678df2892b", "status": "succeeded", "created_at": 1794656016.1955323, "exit_code": 0, "isolated": true, "policy": {"kind": "policy", "values": {"SECURITY_PROFILE": {"value": "untrusted", "source": "env"}, "NET": {"value": "open", "source": "env"}, "NET_ALLOW": {"value": "", "source": "default"}, "IDMAP": {"value": "off", "source": "env"}, "EXEC_UID": {"value": "0", "source": "default"}, "EXEC_GID": {"value": "0", "source": "default"}, "MEMORY_MAX": {"value": "", "source": "default"}, "CPU_MAX": {"value": "", "source": "default"}, "PIDS_MAX": {"value": "", "source": "default"}, "DISK_MAX": {"value": "", "source": "default"}, "RESOURCES_MODE": {"value": "warn", "source": "default"}, "FS_HIDE": {"value": "", "source": "default"}, "FS_BINDS": {"value": "", "source": "default"}, "OVERLAY": {"value": "0", "source": "env"}, "ROOTFS_RO": {"value": "0", "source": "default"}, "LANDLOCK": {"value": "off", "source": "profile"}}, "scope": "a new oneshot launch; not an existing daemon", "limits": "set from the request and checked by the exec launcher at start", "notes": ["with NET=none, pkg install/update temporarily uses the network", "IDMAP auto/on may relax nested userns limits; see doctor", "a read-only rootfs may use an overlay; /workspace is writable by default"]}, "output_limit_per_stream": 8388608, "started_at": 1794656016.255883, "finished_at": 1794656016.9601448, "dropped_bytes": {"stdout": 0, "stderr": 0}, "output_bytes": {"stdout": 9, "stderr": 0}}
+jq-1.8.2
+{"schema": "capbox.agent.v1", "kind": "removed", "task_id": "0d39ebdeef15496a8f2ac4678df2892b"}
+snapshot_restore_jq=passed; workspace_overlay_config=absent
+[capbox] the first edition of environment packs does not support an existing non-empty overlay upper
+bundle_nonempty_real_overlay=refused

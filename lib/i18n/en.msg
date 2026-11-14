@@ -1621,6 +1621,8 @@ task.net_allow_requires_restricted=--net-allow requires restricted networking
 task.net_allow_outside_host=--net-allow must be a non-empty set of valid rules covered by the host NET_ALLOW
 task.help_net_allow=Comma-separated task rules within the host restricted allowlist
 
+task.help_checkpoint=Archive a finished isolated task
+task.help_restore_checkpoint=Restore a local task checkpoint into a new project
 doctor.userns_host_failed=User namespace launch failed: {detail}
 doctor.userns_insufficient=The probe did not obtain uid 0 and full capabilities
 doctor.userns_no_detail=bwrap failed or timed out without diagnostics
