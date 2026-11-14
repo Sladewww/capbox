@@ -393,6 +393,40 @@ def merge_overlay_upper(upper, dest_rootfs):
                 raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=rel))
 
 
+def writable_directories(ctx, args):
+    requested = args.write_dir
+    if not args.workspace_readonly:
+        if requested:
+            raise AgentError(i18n.t('task.write_dir_requires_readonly'), 2)
+        return None
+    if not args.isolate:
+        raise AgentError(i18n.t('task.readonly_requires_isolate'), 2)
+    config = ctx['config']
+    if config.get('FS_BINDS') or config.get('IDMAP') == 'on':
+        raise AgentError(i18n.t('task.readonly_mount_conflict'), 2)
+    hidden = {PurePosixPath(p.strip()) for p in config.get('FS_HIDE', '').split(',') if p.strip()}
+    if any(str(path) == '.' or not hidden.isdisjoint(path.parents) for path in hidden):
+        raise AgentError(i18n.t('task.readonly_hide_conflict'), 2)
+    paths = set()
+    root = Path(ctx['workspace'])
+    for raw in requested:
+        try:
+            path = safe_relative(raw)
+        except AgentError as exc:
+            raise AgentError(i18n.t('task.write_dir_unsafe', path=repr(raw)), 2) from exc
+        if any(ord(char) < 32 or ord(char) == 127 for char in raw) or excluded(raw):
+            raise AgentError(i18n.t('task.write_dir_unsafe', path=repr(raw)), 2)
+        target = root
+        for part in path.parts:
+            target /= part
+            if target.is_symlink() or not target.is_dir():
+                raise AgentError(i18n.t('task.write_dir_unsafe', path=repr(raw)), 2)
+        if any(path == h or path in h.parents or h in path.parents for h in hidden):
+            raise AgentError(i18n.t('task.write_dir_hidden', path=repr(raw)), 2)
+        paths.add(path)
+    return sorted(str(path) for path in paths if paths.isdisjoint(path.parents))
+
+
 def isolate(ctx, job):
     source = Path(ctx['workspace']).resolve()
     if not source.is_dir() or source.is_symlink():
@@ -494,6 +528,7 @@ def start_task(ctx, root, args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise AgentError(i18n.t('task.start_missing_command'), 2)
+    write_dirs = writable_directories(ctx, args)
     policy = effective(ctx, args)
     if not Path(ctx['rootfs']).is_dir():
         raise AgentError(i18n.t('task.rootfs_missing_run_init'), 4)
@@ -506,6 +541,12 @@ def start_task(ctx, root, args):
     state = {'task_id': task_id, 'status': 'preparing', 'created_at': time.time(),
              'exit_code': None, 'worker': identity(os.getpid()), 'isolated': args.isolate,
              'policy': policy, 'output_limit_per_stream': args.max_output_bytes}
+    if write_dirs is not None:
+        state['policy']['values'].update({
+            'WORKSPACE_READONLY': {'value': '1', 'source': 'command'},
+            'WRITE_DIRS': {'value': '\n'.join(write_dirs), 'source': 'command'},
+            'IDMAP': {'value': 'off', 'source': 'profile'},
+        })
     write_json(job / 'state.json', state)
     config = ctx['config']
     audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
@@ -521,6 +562,12 @@ def start_task(ctx, root, args):
         if args.isolate:
             ctx, skipped = isolate(ctx, job)
         env = clean_environment(ctx)
+        if write_dirs is not None:
+            for name in args.write_dir:
+                (Path(ctx['workspace']) / name).mkdir(parents=True, exist_ok=True)
+            env['CAPBOX_IDMAP'] = 'off'
+            env['CAPBOX_TASK_WORKSPACE_READONLY'] = '1'
+            env['CAPBOX_TASK_WRITE_DIRS'] = '\n'.join(write_dirs)
         env['CAPBOX_NET_ALLOW'] = policy['values']['NET_ALLOW']['value']
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
         env['CAPBOX_TASK_LAUNCH_STATUS'] = str(job / 'launch.jsonl')
@@ -899,6 +946,8 @@ def parser():
     start.add_argument('--net-allow', help=i18n.t('task.help_net_allow'))
     start.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
     start.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
+    start.add_argument('--workspace-readonly', action='store_true', help=i18n.t('task.help_workspace_readonly'))
+    start.add_argument('--write-dir', action='append', default=[], help=i18n.t('task.help_write_dir'))
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
     start.add_argument('command', nargs=argparse.REMAINDER)
     listing = commands.add_parser('list')

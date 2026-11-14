@@ -106,6 +106,18 @@ capbox task diff "$task_id" --scan-secrets > "$patch_file"
 | `task cancel` | 取消请求后继续 wait/status，确认终态及退出码；同时覆盖任务自然完成的竞争情况。 |
 | `task diff --json` | 对已完成的隔离任务读取变更、冲突与补丁；启用扫描时处理退出码 3 和仅有扫描报告的响应。 |
 
+### 限制隔离工作树的写入范围
+
+```bash
+capbox task start --isolate --workspace-readonly --write-dir build --write-dir output -- \
+  sh -c 'printf "%s\n" result > output/result.txt'
+capbox task diff TASK_ID --json
+```
+
+每个 `--write-dir` 指定隔离副本中一个已存在的目录，路径相对于项目根目录。允许写入某个目录时，其后代目录也可写。省略所有 `--write-dir` 时，整个工作树只读。
+
+任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围、已配置的 `FS_BINDS` 和显式的 `IDMAP=on`。此模式使用单 UID 映射，并移除挂载管理权限。处于隔离模式的 MCP 服务接受 `execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
+
 ### 查看任务失败证据
 
 ```bash

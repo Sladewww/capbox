@@ -1623,6 +1623,14 @@ task.scan_findings=敏感信息扫描有命中，未导出补丁
 task.scan_incomplete=敏感信息扫描覆盖不完整，未导出补丁
 task.scan_clean=补丁新增行未命中已支持的密钥格式
 task.scan_workspace_unreadable=无法读取隔离工作区，未导出补丁
+task.write_dir_requires_readonly=--write-dir 需要 --workspace-readonly
+task.readonly_requires_isolate=--workspace-readonly 需要 --isolate
+task.readonly_mount_conflict=--workspace-readonly 与配置的 FS_BINDS 或 IDMAP=on 冲突
+task.write_dir_unsafe=可写路径必须是项目内现有目录，各级路径均不得为符号链接或受保护目录：{path}
+task.write_dir_hidden=可写目录与 FS_HIDE 路径重叠：{path}
+task.help_workspace_readonly=将隔离项目工作树挂载为只读
+task.help_write_dir=开放已有项目相对目录的写入权限（可重复）
+task.readonly_hide_conflict=--workspace-readonly 要求 FS_HIDE 路径位于工作区根目录之下且互不重叠
 task.net_allow_requires_restricted=--net-allow 仅适用于 restricted 网络
 task.net_allow_outside_host=--net-allow 须填写宿主 NET_ALLOW 覆盖的有效规则，且不能为空
 task.help_net_allow=任务出站规则，以逗号分隔，须在宿主 restricted 白名单范围内
