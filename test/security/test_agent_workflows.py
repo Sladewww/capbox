@@ -350,6 +350,30 @@ class TaskTests(Fixture):
         self.assertEqual(d['dropped_bytes']['stdout'],5)
         self.assertEqual(self.run_cli('task','logs',task).stdout,'12345')
 
+    def test_failure_evidence_keeps_client_wait_separate(self):
+        running = self.start('--', 'sleep', '20')
+        deadline = self.start('--timeout', '2', '--', 'sleep', '20')
+        wait = self.run_cli('task', 'wait', running, '--timeout', '1')
+        self.assertEqual(wait.returncode, 124, wait.stderr)
+        self.assertEqual(json.loads(wait.stdout)['failure_reason'], 'client_wait_timeout')
+        self.assertEqual(self.wait(deadline, 124)['failure_reason'], 'execution_timeout')
+        self.run_cli('task', 'cancel', running, check=True)
+        self.assertEqual(self.wait(running, 143)['failure_reason'], 'cancelled')
+        for task, reason in ((running, 'cancelled'), (deadline, 'execution_timeout')):
+            report = json.loads(self.run_cli('audit', 'query', '--task-id', task, check=True).stdout)
+            self.assertEqual(report['task']['failure_reason'], reason)
+            self.assertTrue(all(event.get('task_id') == task for event in report['events']))
+            waits = [event for event in report['events'] if event.get('detail') == 'client_wait_timeout']
+            self.assertEqual(len(waits), int(task == running))
+
+    def test_command_exit_124_and_launch_failure_have_distinct_reasons(self):
+        command = self.start('--', 'sh', '-c', 'exit 124')
+        failure = self.start('--cwd', '/missing-directory', '--', 'true')
+        status = self.wait(command, 124)
+        self.assertEqual(status['status'], 'failed')
+        self.assertEqual(status['failure_reason'], 'nonzero_exit')
+        self.assertEqual(self.wait(failure, 2)['failure_reason'], 'launch_failed')
+
     def test_launch_failure_is_nonzero(self):
         task=self.start('--','/no-such-command')
         r=self.run_cli('task','wait',task,'--timeout','10')

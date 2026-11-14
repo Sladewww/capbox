@@ -79,25 +79,39 @@ def append(path, line):
         os.close(parent)
 
 
+def append_event(path, event):
+    event = dict(ts=datetime.now(timezone.utc).isoformat(timespec='milliseconds'), **event)
+    if 'detail' in event:
+        event['detail'] = redact(event['detail'])
+    try:
+        append(path, (json.dumps(event, ensure_ascii=True) + '\n').encode())
+    except (OSError, ValueError):
+        pass  # Audit is best effort.
+
+
 def task_event(path, config, state, status, **fields):
     if config.get('AUDIT', 'summary') in ('0', 'off', 'false', 'no', 'NONE', 'none'):
         return
     if 'cmd' in fields:
         fields['cmd'] = redact(fields['cmd'])
-    event = dict(ts=datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
-                 kind='task', status=status, task_id=state['task_id'],
+    event = dict(kind='task', status=status, task_id=state['task_id'],
                  task_status=state['status'], distro=config['DISTRO'], **fields)
-    if state['exit_code'] is not None:
+    if 'observation' in fields:
+        event.pop('task_status')
+    elif state.get('failure_reason'):
+        event['failure_reason'] = state['failure_reason']
+        event['detail'] = state['failure_reason']
+    if 'observation' not in fields and state['exit_code'] is not None:
         event['exit'] = state['exit_code']
-    try:
-        append(path, (json.dumps(event, ensure_ascii=True) + '\n').encode())
-    except (OSError, ValueError):
-        # Audit is best effort, as on the existing exec path.
-        pass
+    append_event(path, event)
 
 
 if __name__ == '__main__':
     try:
-        append(sys.argv[1], sys.stdin.buffer.read())
+        if len(sys.argv) == 4 and TASK_ID.fullmatch(sys.argv[2]):
+            append_event(sys.argv[1], dict(kind='resources', status='ok',
+                                          task_id=sys.argv[2], detail=sys.argv[3]))
+        else:
+            append(sys.argv[1], sys.stdin.buffer.read())
     except (OSError, ValueError):
         sys.exit(1)

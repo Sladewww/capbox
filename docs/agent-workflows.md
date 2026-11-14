@@ -106,6 +106,18 @@ capbox task diff "$task_id" --scan-secrets > "$patch_file"
 | `task cancel` | 取消请求后继续 wait/status，确认终态及退出码；同时覆盖任务自然完成的竞争情况。 |
 | `task diff --json` | 对已完成的隔离任务读取变更、冲突与补丁；启用扫描时处理退出码 3 和仅有扫描报告的响应。 |
 
+### 查看任务失败证据
+
+```bash
+capbox task wait TASK_ID --timeout 2 --json
+capbox audit query --task-id TASK_ID
+capbox audit report --task-id TASK_ID --output "$HOME/capbox-reports/task.html"
+```
+
+客户端等待超时时可返回 124，并给出 `failure_reason: client_wait_timeout`，任务仍会继续运行。任务结果可能包含 `execution_timeout`、`cancelled`、`launch_failed` 或 `nonzero_exit`。命令自行以 124 退出时，保留该退出码。
+
+启动器无法可靠判定原因时，仍可查看原始状态和退出码。代理拒绝会记录在时间线中，任务最终成功时也可能出现这类记录。资源准备与成功进入 cgroup 分别记录。
+
 ### 收窄单个任务的受限出站范围
 
 ```bash

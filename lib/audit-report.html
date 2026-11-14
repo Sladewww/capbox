@@ -85,6 +85,7 @@
     const fields = $('task-fields');
     field(fields, t('label_task_id'), task.task_id);
     field(fields, t('label_task_status'), task.status ?? t('task_status_unavailable'));
+    if (task.failure_reason) field(fields, t('label_detail'), task.failure_reason);
     field(fields, t('label_exit'), task.exit_code ?? '—');
     if (task.policy) {
       const policy = Object.entries(task.policy).map(([key, item]) => key + '=' + item.value + ' [' + item.source + ']');
