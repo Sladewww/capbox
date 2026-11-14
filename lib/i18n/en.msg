@@ -1617,6 +1617,9 @@ clone3 is intentionally not denied: glibc uses it to create threads. Namespace
 creation is intercepted via unshare/setns (and bwrap --disable-userns when
 idmap is off).
 >>
+task.net_allow_requires_restricted=--net-allow requires restricted networking
+task.net_allow_outside_host=--net-allow must be a non-empty set of valid rules covered by the host NET_ALLOW
+task.help_net_allow=Comma-separated task rules within the host restricted allowlist
 
 task.help_checkpoint=Archive a finished isolated task
 task.help_restore_checkpoint=Restore a local task checkpoint into a new project

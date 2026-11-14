@@ -89,6 +89,20 @@ capbox audit report --task-id TASK_ID --output "$HOME/capbox-reports/task.html"
 
 启动器无法可靠判定原因时，仍可查看原始状态和退出码。代理拒绝会记录在时间线中，任务最终成功时也可能出现这类记录。资源准备与成功进入 cgroup 分别记录。
 
+### 收窄单个任务的受限出站范围
+
+```bash
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox policy check --net restricted --net-allow 'build.example.com:443' https://build.example.com
+CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
+  capbox task start --net restricted --net-allow 'build.example.com:443' -- \
+  wget https://build.example.com/
+```
+
+任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
+
+省略 `--net-allow` 时沿用现有配置的范围。MCP 服务采用 `restricted` 网络模式时，客户端可用 `net_allow` 向 `execute` 或 `policy` 传入同样的逗号分隔规则。
+
 ## 冷检查点
 
 `task checkpoint` 读取仍保留在宿主运行时目录里的已结束隔离任务。先用

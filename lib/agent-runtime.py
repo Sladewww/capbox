@@ -124,6 +124,15 @@ def effective(ctx, args):
             cfg[key], sources[key] = value, 'command'
     if cfg.get('NET') == 'host':
         cfg['NET'] = 'open'
+    requested = getattr(args, 'net_allow', None)
+    if requested is not None:
+        if cfg.get('NET') != 'restricted':
+            raise AgentError(i18n.t('task.net_allow_requires_restricted'), 2)
+        module = net_module(ctx)
+        rules = module.parse_allowlist(requested)
+        if not module.allowlist_subset(rules, module.parse_allowlist(cfg.get('NET_ALLOW', ''))):
+            raise AgentError(i18n.t('task.net_allow_outside_host'), 2)
+        cfg['NET_ALLOW'], sources['NET_ALLOW'] = ','.join(rules), 'command'
     profile = cfg.get('SECURITY_PROFILE', 'compat')
     ro = cfg.get('ROOTFS_RO', '0')
     if profile == 'strict' and sources.get('ROOTFS_RO', 'default') == 'default':
@@ -166,7 +175,7 @@ def network_check(ctx, args):
         result.update(decision='allow', reason='shared_host_network')
     elif mode == 'restricted':
         module = net_module(ctx)
-        rules = module.parse_allowlist(ctx['config'].get('NET_ALLOW', ''))
+        rules = module.parse_allowlist(policy['values']['NET_ALLOW']['value'])
         matches = [rule for rule in rules if module.host_allowed(host, [rule], port)]
         result.update(matched_rules=matches, reason='no_matching_host_port_rule')
         if matches:
@@ -480,6 +489,7 @@ def start_task(ctx, root, args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise AgentError(i18n.t('task.start_missing_command'), 2)
+    policy = effective(ctx, args)
     if not Path(ctx['rootfs']).is_dir():
         raise AgentError(i18n.t('task.rootfs_missing_run_init'), 4)
     active = [d for d in root.iterdir() if d.is_dir() and not d.is_symlink()
@@ -490,7 +500,7 @@ def start_task(ctx, root, args):
     job = private_dir(root / task_id, create=True)
     state = {'task_id': task_id, 'status': 'preparing', 'created_at': time.time(),
              'exit_code': None, 'worker': identity(os.getpid()), 'isolated': args.isolate,
-             'policy': effective(ctx, args), 'output_limit_per_stream': args.max_output_bytes}
+             'policy': policy, 'output_limit_per_stream': args.max_output_bytes}
     write_json(job / 'state.json', state)
     config = ctx['config']
     audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
@@ -506,6 +516,7 @@ def start_task(ctx, root, args):
         if args.isolate:
             ctx, skipped = isolate(ctx, job)
         env = clean_environment(ctx)
+        env['CAPBOX_NET_ALLOW'] = policy['values']['NET_ALLOW']['value']
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
         env['CAPBOX_TASK_LAUNCH_STATUS'] = str(job / 'launch.jsonl')
         env['CAPBOX_TASK_AUDIT_ID'] = task_id
@@ -766,6 +777,7 @@ def parser():
     start.add_argument('--timeout', type=nonnegative, default=600)
     start.add_argument('--cwd', default='/workspace')
     start.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
+    start.add_argument('--net-allow', help=i18n.t('task.help_net_allow'))
     start.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
     start.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
@@ -798,6 +810,7 @@ def parser():
         cmd = policies.add_parser(action)
         cmd.add_argument('--json', action='store_true')
         cmd.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
+        cmd.add_argument('--net-allow', help=i18n.t('task.help_net_allow'))
         cmd.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
         if action == 'check':
             cmd.add_argument('target')
