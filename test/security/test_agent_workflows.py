@@ -139,6 +139,19 @@ class DiffScanTests(Fixture):
         self.assertNotIn('scan', export)
         self.assertIn(self.TOKEN.encode(), base64.b64decode(export['patch_base64']))
 
+    def test_scan_redacts_supported_tokens_in_report_paths(self):
+        self.baseline({})
+        (self.view / (self.TOKEN + '.txt')).write_text(self.TOKEN + '\n')
+        structured = self.diff('--scan-secrets', '--json')
+        human = self.diff('--scan-secrets')
+        self.assertEqual(structured.returncode, 3, structured.stderr)
+        self.assertEqual(human.returncode, 3, human.stderr)
+        self.assertEqual(json.loads(structured.stdout)['scan']['findings'], [
+            {'path': '[REDACTED].txt', 'line': 1, 'type': 'github_token'},
+        ])
+        self.assertIn('"[REDACTED].txt":1: github_token', human.stderr)
+        self.assertNotIn(self.TOKEN, structured.stdout + structured.stderr + human.stderr)
+
     def test_clean_patch_is_unchanged_and_removed_or_context_lines_are_ignored(self):
         self.baseline({'plain': f'{self.TOKEN}\n{self.KEY_HEADER}\nold\n'.encode(),
                        'removed.bin': b'\0old'})

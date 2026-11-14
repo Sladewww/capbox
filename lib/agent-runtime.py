@@ -666,6 +666,8 @@ SECRET_PATTERNS = {
         rb'(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})'
         rb'(?![A-Za-z0-9_])'),
 }
+# Public report labels are independent of the pattern objects and input bytes.
+SCAN_TYPES = ('private_key', 'github_token')
 MAX_SCAN_FINDINGS = 1000
 HUNK = re.compile(rb'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@')
 
@@ -711,8 +713,8 @@ def scan_patch(stats, patch):
             if hunk:
                 line_number = int(hunk[1])
             elif line_number is not None and line.startswith(b'+'):
-                for kind, pattern in SECRET_PATTERNS.items():
-                    if pattern.search(line[1:]):
+                for kind in SCAN_TYPES:
+                    if SECRET_PATTERNS[kind].search(line[1:]):
                         if len(findings) < MAX_SCAN_FINDINGS:
                             findings.append({'path': name, 'line': line_number,
                                              'type': kind})
@@ -731,7 +733,8 @@ def scan_patch(stats, patch):
 def report_scan(scan):
     for finding in scan['findings']:
         location = json.dumps(finding['path'], ensure_ascii=True)
-        print(f"{location}:{finding['line']}: {finding['type']}", file=sys.stderr)
+        kind = 'private_key' if finding['type'] == 'private_key' else 'github_token'
+        print(f"{location}:{finding['line']}: {kind}", file=sys.stderr)
     for skipped in scan['skipped']:
         location = json.dumps(skipped['path'], ensure_ascii=True)
         print(f"{location}: {i18n.t('task.scan_binary_skipped')}", file=sys.stderr)
