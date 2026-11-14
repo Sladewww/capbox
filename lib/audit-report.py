@@ -85,6 +85,9 @@ def normalise(data, number, counters):
         event['task_id'] = task_id
         if event['kind'] == 'task' and isinstance(task_status, str) and task_status in TASK_STATES:
             event['task_status'] = task_status
+            reason = data.get('failure_reason')
+            if reason in ('launch_failed', 'execution_timeout', 'cancelled', 'nonzero_exit'):
+                event['failure_reason'] = reason
             if task_status == 'preparing':
                 event['policy'] = policy_summary(data.get('policy'))
                 if type(data.get('isolated')) is bool:
@@ -178,6 +181,8 @@ def snapshot(path, args):
                 if 'task_status' in event:
                     task['status'] = event['task_status']
                     task['exit_code'] = event.get('exit')
+                    if 'failure_reason' in event:
+                        task['failure_reason'] = event['failure_reason']
                     for key in ('policy', 'isolated'):
                         if key in event:
                             task[key] = event[key]

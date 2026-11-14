@@ -76,3 +76,19 @@ MVP 导出支持二进制的 Git 补丁；**不会应用到原项目**。JSON �
 - 既有 exec/文件/绑定设置仍生效。指向原工作区的绝对绑定在私有副本中可能无效；不会静默授权访问源。
 
 补丁应用仍留给可信宿主调用方。密钥不能进 guest 时，用 [宿主凭据代理](credentials.md)。可选的 [stdio MCP 适配器](envkit.md) 暴露本 CLI 的固定子集；不开网络监听。
+
+### Read task failure evidence
+
+```bash
+capbox task wait TASK_ID --timeout 2 --json
+capbox audit query --task-id TASK_ID
+capbox audit report --task-id TASK_ID --output task.html
+```
+
+A client wait can return 124 with `failure_reason: client_wait_timeout` while
+the task keeps running. Task results can add `execution_timeout`, `cancelled`,
+`launch_failed`, or `nonzero_exit`. A command that exits 124 keeps that code.
+When the launcher cannot report a reliable reason, the original status and
+exit code remain available. Proxy denials are timeline observations. They may
+occur even when a task succeeds. Resource preparation and successful cgroup
+entry are separate timeline observations.

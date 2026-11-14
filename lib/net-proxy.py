@@ -182,7 +182,7 @@ def host_allowed(host: str, allow: Iterable[str], port: Optional[int] = None) ->
     return False
 
 
-def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
+def _dial(host: str, port: int, allow: Iterable[str], on_deny=None) -> socket.socket:
     """白名单校验通过后再连接。若解析结果仅为回环 / 链路本地 /
     私网 / 元数据地址，则拒绝，除非该地址本身也在白名单中。
     """
@@ -201,6 +201,7 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
     except socket.gaierror as exc:
         raise OSError(str(exc)) from exc
     last = i18n.t('proxy.no_usable_address')
+    blocked_address = usable_address = False
     for _fam, _type, _proto, _canon, sockaddr in infos:
         ip_s = sockaddr[0].split("%", 1)[0]
         try:
@@ -208,12 +209,16 @@ def _dial(host: str, port: int, allow: Iterable[str]) -> socket.socket:
         except ValueError:
             continue
         if _ip_forbidden(ip) and not host_allowed(ip_s, allow, port):
+            blocked_address = True
             last = i18n.t('proxy.blocked_resolved', ip=ip_s)
             continue
+        usable_address = True
         try:
             return socket.create_connection((ip_s, sockaddr[1]), timeout=20)
         except OSError as exc:
             last = str(exc)
+    if blocked_address and not usable_address and on_deny:
+        on_deny(host, port, 'resolved_addresses_blocked')
     raise OSError(last)
 
 
@@ -425,7 +430,7 @@ def host_needs_mitm(host: str, inject: Dict[str, Any]) -> bool:
     return False
 
 
-def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Optional[Dict[str, Any]] = None, cache: Optional[Dict[str, Tuple[str, float]]] = None) -> None:
+def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Optional[Dict[str, Any]] = None, cache: Optional[Dict[str, Tuple[str, float]]] = None, on_deny=None) -> None:
     inject = inject or {"entries": []}
     cache = cache if cache is not None else {}
     try:
@@ -459,6 +464,8 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
         if method == "CONNECT":
             host, port = _split_hostport(target, 443)
             if not host_allowed(host, allow, port):
+                if on_deny:
+                    on_deny(host, port, 'allowlist_denied')
                 if log:
                     print(f"capbox-net DENY CONNECT {host}:{port}", file=sys.stderr)
                 conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
@@ -469,7 +476,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
             # 绑定了凭据的主机：TLS MITM，以便改写 Authorization 头。
             if host_needs_mitm(host, inject) and inject.get("ca_key") and inject.get("ca_cert"):
                 try:
-                    upstream_tcp = _dial(host, port, allow)
+                    upstream_tcp = _dial(host, port, allow, on_deny)
                 except OSError:
                     conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                     conn.close()
@@ -510,6 +517,8 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                     lines = header_blob.decode("iso-8859-1", "replace").split("\r\n")
                     rebuilt, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
                     if violation:
+                        if on_deny:
+                            on_deny(host, port, 'credential_denied')
                         client_tls.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
                         client_tls.close(); upstream.close(); return
                     # 首行是请求行；重建不含 absolute-form 的请求。
@@ -525,7 +534,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
                         pass
                 return
             try:
-                upstream = _dial(host, port, allow)
+                upstream = _dial(host, port, allow, on_deny)
             except OSError:
                 conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 conn.close()
@@ -555,6 +564,8 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
             return
 
         if not host_allowed(host, allow, port):
+            if on_deny:
+                on_deny(host, port, 'allowlist_denied')
             if log:
                 print(f"capbox-net DENY {method} {host}", file=sys.stderr)
             conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
@@ -563,7 +574,7 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
         if log:
             print(f"capbox-net ALLOW {method} {host}:{port}", file=sys.stderr)
         try:
-            upstream = _dial(host, port, allow)
+            upstream = _dial(host, port, allow, on_deny)
         except OSError:
             conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
             conn.close()
@@ -573,6 +584,8 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
         # 凭据占位符改写（仅 header 值）。
         rewritten, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
         if violation:
+            if on_deny:
+                on_deny(host, port, 'credential_denied')
             conn.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
             conn.close()
             return
@@ -614,6 +627,27 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
             print(f"capbox-net error: {exc}", file=sys.stderr)
 
 
+def deny_observer(args):
+    if not args.audit_path:
+        return None
+    from audit_store import TASK_ID, append_event
+    if not TASK_ID.fullmatch(args.task_id or ''):
+        return None
+
+    def observe(host, port, reason):
+        # A malformed authority may contain credentials or URL segments.
+        try:
+            ipaddress.ip_address(host)
+            target = host if '%' not in host and len(host) <= 253 else '[invalid-host]'
+        except ValueError:
+            target = host if re.fullmatch(r'[a-zA-Z0-9._-]{1,253}', host) else '[invalid-host]'
+        port = port if 1 <= port <= 65535 else 'invalid'
+        append_event(args.audit_path, dict(kind='net', status='warn', task_id=args.task_id,
+                                          detail=f'target={target} port={port} reason={reason}'))
+
+    return observe
+
+
 def cmd_proxy(args: argparse.Namespace) -> int:
     allow = parse_allowlist(args.allow)
     if not allow:
@@ -621,6 +655,7 @@ def cmd_proxy(args: argparse.Namespace) -> int:
         return 2
     inject = load_inject_map(getattr(args, "inject_map", None))
     cache: Dict[str, Tuple[str, float]] = {}
+    on_deny = deny_observer(args)
     sock_path = args.sock
     if os.path.exists(sock_path):
         os.unlink(sock_path)
@@ -636,7 +671,7 @@ def cmd_proxy(args: argparse.Namespace) -> int:
     try:
         while True:
             conn, _ = server.accept()
-            t = threading.Thread(target=handle_client, args=(conn, allow, args.log, inject, cache), daemon=True)
+            t = threading.Thread(target=handle_client, args=(conn, allow, args.log, inject, cache, on_deny), daemon=True)
             t.start()
     except KeyboardInterrupt:
         return 0
@@ -715,6 +750,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_proxy.add_argument("--ready")
     p_proxy.add_argument("--log", action="store_true")
     p_proxy.add_argument("--inject-map", help=i18n.t("proxy.help_inject_map"))
+    p_proxy.add_argument("--audit-path", help=argparse.SUPPRESS)
+    p_proxy.add_argument("--task-id", help=argparse.SUPPRESS)
     p_proxy.set_defaults(func=cmd_proxy)
 
     p_br = sub.add_parser("bridge")
