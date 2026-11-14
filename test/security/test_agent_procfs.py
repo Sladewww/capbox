@@ -62,15 +62,22 @@ class ProcfsTests(unittest.TestCase):
                     '--', sys.executable, '-c', '''
 import os, subprocess, sys
 assert os.statvfs('/proc/irq').f_flag & os.ST_RDONLY
+print('outer procfs mask verified', file=sys.stderr, flush=True)
 inner = subprocess.run(sys.argv[1:], text=True, capture_output=True)
 print(inner.stdout, end='')
 print(inner.stderr, end='', file=sys.stderr)
 sys.exit(inner.returncode)
 ''', *BASE, '--remount-ro', '/proc', '--', sys.executable, '-c', INSPECT)
+        marker, separator, diagnostic = outer.stderr.partition('\n')
+        self.assertEqual(marker, 'outer procfs mask verified', outer.stderr)
+        self.assertTrue(separator)
         if outer.returncode:
             self.assertEqual(outer.stdout, '')
-            self.assertIn("Can't mount proc on /proc", outer.stderr)
-            print(f'nested procfs mount refused: {outer.stderr.strip()}', file=sys.stderr)
+            self.assertTrue(diagnostic.startswith((
+                "bwrap: Can't mount proc on /proc: Operation not permitted",
+                "bwrap: No permissions to create a new namespace,",
+            )), diagnostic)
+            print(f'nested sandbox refused: {diagnostic.strip()}', file=sys.stderr)
         else:
             self.check_sealed(outer)
 
