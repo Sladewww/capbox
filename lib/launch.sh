@@ -54,7 +54,16 @@ build_bwrap_args() {
     a+=(--tmpfs /tmp)
   fi
   a+=(--tmpfs /run)
-  a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
+  if [[ "$mode" == oneshot && "${CAPBOX_TASK_WORKSPACE_READONLY:-}" == 1 ]]; then
+    a+=(--ro-bind "$CAPBOX_WORKSPACE" /workspace)
+    local writable
+    while IFS= read -r writable; do
+      [[ -n "$writable" ]] || continue
+      a+=(--bind "$CAPBOX_WORKSPACE/$writable" "/workspace/$writable")
+    done <<<"${CAPBOX_TASK_WRITE_DIRS:-}"
+  else
+    a+=(--bind "$CAPBOX_WORKSPACE" /workspace)
+  fi
   # 覆盖式只读挂载：防止 guest 改写宿主侧 CLI / 配置（下次执行 = RCE）
   _capbox_append_ro_cli_binds a || return $?
   # FS hide / 额外 binds（拒绝工作区外任意 bind）
@@ -116,6 +125,11 @@ build_bwrap_args() {
   # 安全档（compat 为 no-op；untrusted/strict 追加 drop/seccomp 标记/hide）
   if declare -F _security_append_bwrap_args >/dev/null 2>&1; then
     _security_append_bwrap_args a || return $?
+  fi
+
+  if [[ "$mode" == oneshot && "${CAPBOX_TASK_WORKSPACE_READONLY:-}" == 1 ]]; then
+    # Prevent reopening read-only mounts, including through a nested user namespace.
+    a+=(--cap-drop CAP_SYS_ADMIN --disable-userns)
   fi
 
   # ---- 环境白名单（clearenv 之后显式重建；勿透传宿主 *TOKEN/*_KEY/SSH/GPG）----

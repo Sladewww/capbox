@@ -207,6 +207,35 @@ class TaskTests(Fixture):
         self.assertEqual(self.wait(task,143,timeout=3)['status'],'cancelled')
         self.assertEqual(self.wait(other)['status'],'succeeded')
 
+    def test_readonly_worktree_and_diff(self):
+        (self.ws / 'out/sub').mkdir(parents=True)
+        (self.ws / 'other').mkdir()
+        (self.ws / 'other/file').write_text('original')
+        task = self.start('--isolate', '--workspace-readonly', '--write-dir', 'out',
+                          '--write-dir', 'out/sub', '--', 'sh', '-c',
+                          'set -e; touch out/sub/result; ! touch other/new; '
+                          '! echo modified > other/file; ! touch .capbox/cache/new')
+        self.wait(task)
+        diff = json.loads(self.run_cli('task', 'diff', task, '--json', check=True).stdout)
+        self.assertEqual(diff['changed_files'], ['out/sub/result'])
+        self.assertFalse((self.ws / 'out/sub/result').exists())
+
+    def test_readonly_worktree_rejects_unsafe_paths_and_mounts(self):
+        (self.ws / 'out/sub').mkdir(parents=True)
+        (self.ws / 'alias').symlink_to('out', target_is_directory=True)
+        for path in ('alias', 'alias/sub', '../out', '.capbox', 'missing'):
+            with self.subTest(path=path):
+                result = self.run_cli('task', 'start', '--isolate', '--workspace-readonly',
+                                      '--write-dir', path, '--', 'true')
+                self.assertEqual(result.returncode, 2, result.stderr)
+        self.env['CAPBOX_FS_HIDE'] = 'out/sub'
+        result = self.run_cli('task', 'start', '--isolate', '--workspace-readonly',
+                              '--write-dir', 'out', '--', 'true')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.env['CAPBOX_FS_BINDS'] = 'out:/alternate:rw'
+        result = self.run_cli('task', 'start', '--isolate', '--workspace-readonly', '--', 'true')
+        self.assertEqual(result.returncode, 2, result.stderr)
+
     def test_execution_timeout_and_bounded_binary_logs(self):
         task=self.start('--timeout','1','--','sleep','30')
         self.assertEqual(self.wait(task,124)['status'],'timed_out')
