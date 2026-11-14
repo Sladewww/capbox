@@ -8,9 +8,9 @@ _agent_command() {
     "CAPBOX_AGENT_WORKSPACE=$CAPBOX_WORKSPACE" "CAPBOX_AGENT_ROOTFS=$CAPBOX_ROOTFS"
     "CAPBOX_AGENT_CLI=$_CAPBOX_CLI_BIN_DIR/capbox" "CAPBOX_AGENT_LIB=$CAPBOX_LIB_DIR"
     "CAPBOX_AGENT_ALLOW_ONCE=${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-0}")
-  if [[ "${1:-}" == task && "${2:-}" == start ]]; then
+  if [[ "${1:-}" == task ]]; then
     context+=("CAPBOX_AGENT_AUDIT_PATH=$(_audit_path)" "CAPBOX_AGENT_AUDIT_CMD=")
-    if _audit_enabled; then
+    if [[ "${2:-}" == start ]] && _audit_enabled; then
       context+=("CAPBOX_AGENT_AUDIT_CMD=$(_audit_cmd_field "task ${*:2}")")
     fi
   fi

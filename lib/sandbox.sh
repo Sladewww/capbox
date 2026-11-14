@@ -87,6 +87,14 @@ cmd_exec() {
     _audit_task_id="$CAPBOX_TASK_AUDIT_ID"
     _audit_task_path="$CAPBOX_TASK_AUDIT_PATH"
   fi
+  local _task_status_fd=""
+  if [[ -n "$_audit_task_id" && "${CAPBOX_TASK_LAUNCH_STATUS:-}" == /*/"$_audit_task_id"/launch.jsonl ]]; then
+    if exec {_task_status_fd}>"$CAPBOX_TASK_LAUNCH_STATUS"; then
+      printf 'supported\n' >&"$_task_status_fd"
+    else
+      _task_status_fd=""
+    fi
+  fi
   local use_daemon=0
   local timeout_s="${CAPBOX_EXEC_TIMEOUT:-600}"
   local cwd="/workspace"

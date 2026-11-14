@@ -518,6 +518,7 @@ def start_task(ctx, root, args):
         env = clean_environment(ctx)
         env['CAPBOX_NET_ALLOW'] = policy['values']['NET_ALLOW']['value']
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
+        env['CAPBOX_TASK_LAUNCH_STATUS'] = str(job / 'launch.jsonl')
         env['CAPBOX_TASK_AUDIT_ID'] = task_id
         env['CAPBOX_TASK_AUDIT_PATH'] = audit_path
         argv = [ctx['cli'], '--root', ctx['workspace']]
@@ -561,7 +562,7 @@ def start_task(ctx, root, args):
         if launched is not None and launched.poll() is None:
             launched.kill()
             launched.wait()
-        state.update(status='failed', exit_code=1, finished_at=time.time())
+        state.update(status='failed', exit_code=1, finished_at=time.time(), failure_reason='launch_failed')
         task_event(audit_path, config, state, 'fail')
         write_json(job / 'state.json', state)
         raise
@@ -572,6 +573,23 @@ def pdeathsig(parent):
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent:
         os._exit(125)
+
+
+def launch_outcome(job, code):
+    """The host launcher writes a marker before bubblewrap setup and bwrap reports exit."""
+    try:
+        with (job / 'launch.jsonl').open() as stream:
+            if stream.readline() != 'supported\n':
+                return None
+            for line in stream:
+                if line == 'unsupported\n':
+                    return None
+                record = json.loads(line)
+                if 'exit-code' in record:
+                    return 'nonzero_exit' if record['exit-code'] == code else None
+            return 'launch_failed'
+    except (OSError, ValueError):
+        return None
 
 
 def worker(root, task_id):
@@ -637,9 +655,15 @@ def worker(root, task_id):
         code = 128 - code if code < 0 else code
         if reason == 'cancelled':
             code = 143
-        elif reason == 'timed_out' or code == 124:
-            reason, code = 'timed_out', 124
+        elif reason == 'timed_out':
+            code = 124
         state.update(status=reason or ('succeeded' if code == 0 else 'failed'), exit_code=code)
+        if reason:
+            state['failure_reason'] = {'cancelled': 'cancelled', 'timed_out': 'execution_timeout'}[reason]
+        elif code:
+            outcome = launch_outcome(job, code)
+            if outcome:
+                state['failure_reason'] = outcome
     except BaseException as exc:
         if proc is not None and proc.poll() is None:
             try:
@@ -648,6 +672,8 @@ def worker(root, task_id):
                 pass
             proc.wait()
         state.update(status='failed', exit_code=125, error=type(exc).__name__)
+        if proc is None:
+            state['failure_reason'] = 'launch_failed'
     finally:
         for output, _size in streams.values():
             output.close()
@@ -871,8 +897,12 @@ def main(argv=None):
                     emit(dict(type='exit', **state))
                 return return_code(state)
             if deadline and time.monotonic() >= deadline:
+                audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
+                task_event(audit_path, ctx['config'], state, 'warn',
+                           observation='client_wait_timeout', detail='client_wait_timeout')
                 if args.json or args.action == 'wait':
-                    emit({'kind': 'wait_timeout', 'task_id': job.name, 'status': state['status'],
+                    emit({'kind': 'wait_timeout', 'failure_reason': 'client_wait_timeout',
+                          'task_id': job.name, 'status': state['status'],
                           'hint': i18n.t('task.hint_client_wait_timeout')})
                 return 124
             time.sleep(0.05)
