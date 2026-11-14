@@ -381,8 +381,8 @@ _capbox_audit_old_bwrap() {
   local dir f ts esc_ts esc_ver esc_scope esc_cmd
   [[ "$scope" == "once" || "$scope" == "persist" ]] || return 1
   [[ -n "${CAPBOX_DIR:-}" ]] || return 1
-  dir="${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}"
-  f="$dir/audit.jsonl"
+  f="${_audit_task_path:-${CAPBOX_LOG_DIR:-$CAPBOX_DIR/logs}/audit.jsonl}"
+  dir="${f%/*}"
   if [[ -L "$dir" || -L "$f" ]]; then
     i18n_err common.audit_log_path_symlink_refusing_record_old f="$f"
     return 1
@@ -404,6 +404,12 @@ _capbox_audit_old_bwrap() {
   esc_ver="$(json_escape "$version")"
   esc_scope="$(json_escape "$scope")"
   esc_cmd="$(json_escape "$cmd")"
+  if [[ -n "${_audit_task_path:-}" ]]; then
+    printf '{"ts":"%s","kind":"security","status":"warn","event":"old_bwrap_bypass","object":"old_bwrap_bypass","task_id":"%s","version":"%s","scope":"%s","cmd":"%s"}\n' \
+      "$esc_ts" "$_audit_task_id" "$esc_ver" "$esc_scope" "$esc_cmd" |
+      python3 "${BASH_SOURCE[0]%/*}/audit_store.py" "$f"
+    return $?
+  fi
   printf '{"ts":"%s","event":"old_bwrap_bypass","version":"%s","scope":"%s","cmd":"%s"}\n' \
     "$esc_ts" "$esc_ver" "$esc_scope" "$esc_cmd" >>"$f" || return 1
   return 0

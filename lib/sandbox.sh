@@ -79,6 +79,14 @@ _resolve_guest_cwd() {
 # ---------- 3. exec（容器内执行） ----------------------------------------------
 
 cmd_exec() {
+  # Only the host task launcher supplies this context. Guest env uses --clearenv.
+  local _audit_task_id="" _audit_task_path=""
+  if [[ "${CAPBOX_TASK_AUDIT_ID:-}" =~ ^[0-9a-f]{32}$ &&
+        "${CAPBOX_NET_SESSION:-}" == "task-$CAPBOX_TASK_AUDIT_ID" &&
+        "${CAPBOX_TASK_AUDIT_PATH:-}" == /*/logs/audit.jsonl ]]; then
+    _audit_task_id="$CAPBOX_TASK_AUDIT_ID"
+    _audit_task_path="$CAPBOX_TASK_AUDIT_PATH"
+  fi
   local use_daemon=0
   local timeout_s="${CAPBOX_EXEC_TIMEOUT:-600}"
   local cwd="/workspace"
