@@ -18,16 +18,13 @@ _LIB_DIR = str(Path(__file__).resolve().parent)
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import i18n
+from audit_store import TASK_ID, TASK_STATES, parent_fd, policy_summary, redact
 
 SCHEMA = 'capbox.audit-report.v1'
 MAX_SCAN = 32 * 1024 * 1024
 MAX_LINE = 64 * 1024
 MAX_PAYLOAD = 32 * 1024 * 1024
 STRING_FIELDS = ('object', 'cmd', 'detail', 'profile', 'net', 'uid', 'distro')
-SENSITIVE = (r'(?:[A-Za-z][A-Za-z0-9_-]{0,80}[_-])?'
-             r'(?:password|passwd|pwd|token|secret|api[_-]?key|authorization|access[_-]?token|'
-             r'client[_-]?secret|secret[_-]?access[_-]?key|access[_-]?key(?:[_-]?id)?|private[_-]?key)')
-
 
 def utc(value, *, date_only=False):
     if not isinstance(value, str) or len(value) > 80:
@@ -59,32 +56,6 @@ def constant(_value):
     raise ValueError(i18n.t('audit.not_a_json_number'))
 
 
-def redact(value):
-    value = re.sub(r'(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', r'\1 [REDACTED]', value)
-    value = re.sub(r'(?i)(https?://)[^\s/@]+@', r'\1[REDACTED]@', value)
-    pattern = r'(?i)(\b' + SENSITIVE + r'\b[\s\"\x27]*[=:][\s]*)(?:\"[^\"]*\"|\x27[^\x27]*\x27|[^\s&;,]+)'
-    value = re.sub(pattern, r'\1[REDACTED]', value)
-    pattern = r'(?i)(--?' + SENSITIVE + r'\s+)(?:\"[^\"]*\"|\x27[^\x27]*\x27|[^\s]+)'
-    return re.sub(pattern, r'\1[REDACTED]', value)
-
-
-def parent_fd(path):
-    """钉住每一级目录，不跟随 guest 可写的符号链接祖先。"""
-    path = Path(os.path.abspath(path))
-    if not path.name:
-        raise ValueError(i18n.t('audit.filename_required'))
-    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for component in path.parts[1:-1]:
-            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = child
-        return fd, path.name
-    except BaseException:
-        os.close(fd)
-        raise
-
-
 def normalise(data, number, counters):
     if not isinstance(data, dict):
         raise ValueError(i18n.t('audit.record_not_an_object'))
@@ -109,6 +80,17 @@ def normalise(data, number, counters):
             counters['truncated_fields'] += 1
             clean = clean[:2048] + i18n.t('audit.field_truncated')
         event[key] = clean
+    task_id, task_status = data.get('task_id'), data.get('task_status')
+    if isinstance(task_id, str) and TASK_ID.fullmatch(task_id):
+        event['task_id'] = task_id
+        if event['kind'] == 'task' and isinstance(task_status, str) and task_status in TASK_STATES:
+            event['task_status'] = task_status
+            if task_status == 'preparing':
+                event['policy'] = policy_summary(data.get('policy'))
+                if type(data.get('isolated')) is bool:
+                    event['isolated'] = data['isolated']
+    elif task_id is not None:
+        counters['invalid_fields'] += 1
     for key in ('exit', 'ms'):
         value = data.get(key)
         if value is None:
@@ -127,6 +109,7 @@ def snapshot(path, args):
                     incomplete_records=0, blank_lines=0, invalid_fields=0, redacted_fields=0,
                     truncated_fields=0, scanned_bytes=0, omitted_prefix_bytes=0, source_missing=False)
     records = deque(maxlen=args.limit)
+    task = {'task_id': args.task_id} if args.task_id else None
     parent = None
     try:
         parent, name = parent_fd(path)
@@ -135,7 +118,7 @@ def snapshot(path, args):
         if args.input:
             raise
         counters.update(source_missing=True, source_bytes=0, omitted_records=0)
-        return [], counters
+        return [], counters, task
     finally:
         if parent is not None:
             os.close(parent)
@@ -189,6 +172,15 @@ def snapshot(path, args):
                 counters['invalid_records'] += 1
                 continue
             counters['valid_records'] += 1
+            if task is not None:
+                if event.get('task_id') != args.task_id:
+                    continue
+                if 'task_status' in event:
+                    task['status'] = event['task_status']
+                    task['exit_code'] = event.get('exit')
+                    for key in ('policy', 'isolated'):
+                        if key in event:
+                            task[key] = event[key]
             if args.since is not None and event['time'] < args.since:
                 continue
             if args.until is not None and event['time'] >= args.until:
@@ -200,7 +192,30 @@ def snapshot(path, args):
             counters['matching_records'] += 1
             records.append(event)
     counters['omitted_records'] = counters['matching_records'] - len(records)
-    return sorted(records, key=lambda event: (event['time'], event['id'])), counters
+    return sorted(records, key=lambda event: (event['time'], event['id'])), counters, task
+
+
+def enrich_task(task, private):
+    if not private or 'status' not in task:
+        return
+    # agent-runtime.py is also the task CLI. Load it only for a local task query.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('capbox_agent_runtime',
+                                                  Path(__file__).with_name('agent-runtime.py'))
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    try:
+        job = runtime.job_path(runtime.private_dir(Path(private) / 'tasks'), task['task_id'])
+        state = runtime.state_of(job)
+        if state['status'] == 'lost' and task['status'] not in runtime.FINISHED:
+            task.update(status='lost', exit_code=state['exit_code'])
+        if not state['isolated'] or state['status'] not in runtime.FINISHED:
+            return
+        summary, _ = runtime.diff_summary(job)
+    except (OSError, ValueError, KeyError, runtime.AgentError):
+        return
+    task['diff'] = {key: [redact(path)[:2048] for path in paths]
+                    for key, paths in summary.items()}
 
 
 def html_escape(value):
@@ -283,17 +298,25 @@ def publish(path, workspace, payload, force, source_identity):
 
 
 def main():
-    parser = i18n.I18nArgumentParser(prog='capbox audit report', description=i18n.t('audit.report_description'))
-    parser.add_argument('--output', required=True, help=i18n.t('audit.help_output'))
+    argv = sys.argv[1:]
+    action = argv.pop(0) if argv and argv[0] in ('query', 'report') else 'report'
+    query = action == 'query'
+    parser = i18n.I18nArgumentParser(prog='capbox audit ' + action,
+                                     description=i18n.t('audit.query_description' if query else 'audit.report_description'))
+    parser.add_argument('--task-id', required=query, help=i18n.t('audit.help_task_id'))
+    if not query:
+        parser.add_argument('--output', required=True, help=i18n.t('audit.help_output'))
+        parser.add_argument('--force', action='store_true', help=i18n.t('audit.help_force'))
+        parser.add_argument('--json', action='store_true', help=i18n.t('audit.help_json'))
     parser.add_argument('--input', help=i18n.t('audit.help_input'))
     parser.add_argument('--limit', type=int, default=5000, help=i18n.t('audit.help_limit'))
     parser.add_argument('--since', help=i18n.t('audit.help_since'))
     parser.add_argument('--until', help=i18n.t('audit.help_until'))
     parser.add_argument('--kind', action='append', help=i18n.t('audit.help_kind'))
     parser.add_argument('--status', action='append', help=i18n.t('audit.help_status'))
-    parser.add_argument('--force', action='store_true', help=i18n.t('audit.help_force'))
-    parser.add_argument('--json', action='store_true', help=i18n.t('audit.help_json'))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.task_id is not None and not TASK_ID.fullmatch(args.task_id):
+        parser.error(i18n.t('task.invalid_task_id'))
     if not 1 <= args.limit <= 20000:
         parser.error(i18n.t('audit.limit_must_be_1_20000'))
     args.since = round(utc(args.since, date_only=True).timestamp() * 1000) if args.since else None
@@ -302,13 +325,24 @@ def main():
         parser.error(i18n.t('audit.since_must_precede_until'))
     source = Path(args.input or os.environ['CAPBOX_AUDIT_REPORT_SOURCE']).absolute()
     workspace = Path(os.environ['CAPBOX_AUDIT_REPORT_WORKSPACE']).resolve()
-    destination = Path(args.output).absolute()
-    events, counters = snapshot(source, args)
+    events, counters, task = snapshot(source, args)
     source_identity = counters.pop('_source_identity', None)
     document = dict(schema=SCHEMA, generated_at=datetime.now(timezone.utc).isoformat(),
                     project=workspace.name, source=source.name, events=events,
                     coverage=dict(counters, retained_events=len(events), limit=args.limit, max_scan_bytes=MAX_SCAN,
                                   filters=dict(since=args.since, until=args.until, kind=args.kind, status=args.status)))
+    if task is not None:
+        if not args.input:
+            enrich_task(task, os.environ.get('CAPBOX_AUDIT_REPORT_PRIVATE'))
+        document['task'] = task
+        document['coverage']['filters']['task_id'] = args.task_id
+    if query:
+        encoded = json.dumps(document, ensure_ascii=True, allow_nan=False)
+        if len(encoded) > MAX_PAYLOAD:
+            raise ValueError(i18n.t('audit.report_data_exceeds_32mib'))
+        print(encoded)
+        return 0
+    destination = Path(args.output).absolute()
     publish(destination, workspace, render(document), args.force, source_identity)
     result = dict(schema=SCHEMA, path=str(destination), events=len(events), coverage=document['coverage'])
     print(json.dumps(result, ensure_ascii=True) if args.json else i18n.t('audit.report_generated', path=destination, count=len(events)))
