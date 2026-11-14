@@ -121,6 +121,49 @@ class TaskTests(Fixture):
         self.git('add','hello.txt','.gitignore')
         self.git('add','-f','.env')
 
+    def test_parallel_isolated_task_audit_survives_runtime_cleanup(self):
+        self.init_git()
+        self.env['CAPBOX_NET'] = 'open'
+        (self.ws / '.capbox/logs/audit.jsonl').write_text(
+            '{"ts":"2026-11-08T00:00:00Z","kind":"exec","status":"ok","cmd":"legacy"}\n')
+        timed = self.start('--isolate', '--timeout', '4', '--net', 'open',
+                           '--', 'sleep', '30')
+        done = self.start('--isolate', '--timeout', '20', '--profile', 'compat',
+                          '--', 'sh', '-c',
+                          'test -z "${CAPBOX_TASK_AUDIT_ID:-}" && '
+                          "printf '%s' private-output > /dev/null && echo task > hello.txt")
+        self.assertEqual(self.wait(done)['status'], 'succeeded')
+        self.assertEqual(self.wait(timed, 124)['status'], 'timed_out')
+        (self.ws / 'hello.txt').write_text('source edit\n')
+        for task, status, code in ((timed, 'timed_out', 124), (done, 'succeeded', 0)):
+            r = self.run_cli('audit', 'query', '--task-id', task, check=True)
+            result = json.loads(r.stdout)
+            self.assertEqual(result['task']['status'], status)
+            self.assertEqual(result['task']['exit_code'], code)
+            self.assertTrue(all(event['task_id'] == task for event in result['events']))
+            self.assertNotIn('legacy', r.stdout)
+            if task == done:
+                self.assertIn('exec', {event['kind'] for event in result['events']})
+                self.assertEqual(result['task']['policy']['SECURITY_PROFILE'],
+                                 {'value': 'compat', 'source': 'command'})
+                self.assertEqual(result['task']['diff']['changed_files'], ['hello.txt'])
+                self.assertEqual(result['task']['diff']['origin_changed'], ['hello.txt'])
+            else:
+                self.assertEqual(result['task']['policy']['NET'],
+                                 {'value': 'open', 'source': 'command'})
+        report = self.base / 'task.html'
+        self.run_cli('audit', 'report', '--task-id', done, '--output', str(report), check=True)
+        self.assertIn('origin_changed', report.read_text())
+        for task in (timed, done):
+            self.run_cli('task', 'rm', task, check=True)
+            self.tasks.remove(task)
+            self.assertNotEqual(self.run_cli('task', 'logs', task).returncode, 0)
+            result = json.loads(self.run_cli('audit', 'query', '--task-id', task,
+                                            check=True).stdout)
+            self.assertNotIn('diff', result['task'])
+            self.assertIn('policy', result['task'])
+            self.assertEqual(result['task']['status'], 'timed_out' if task == timed else 'succeeded')
+
     def test_reconnect_cursors_streams_and_exit(self):
         task=self.start('--','sh','-c','printf abc; sleep 0.5; printf def; printf err >&2; exit 7')
         self.assertEqual(self.wait(task,7)['status'],'failed')

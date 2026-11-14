@@ -61,7 +61,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   image export|import|docker|lock|cache
                                     rootfs 归档、包锁，以及本地 Docker/OCI 镜像
   secret set|ls|rm|import           宿主凭据（真实 key 不进沙箱；见 docs/credentials.md）
-  audit report|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
+  audit report|query|tail|path|clear      离线 HTML 报告与 JSONL 审计日志
   metrics [--json]                  资源/cgroup/磁盘真实状态（无假数据）
   version                           打印版本
   help, --help, -h                  显示本帮助
@@ -236,9 +236,10 @@ help.service.logs<<
 >>
 
 help.audit<<
-用法: capbox audit <report|tail|path|clear> [参数]
+用法: capbox audit <report|query|tail|path|clear> [参数]
 
   report --output FILE  生成离线 HTML 报告（文件须在工作区外，report --help 查看筛选参数）
+  query --task-id ID    以 JSON 查询任务及关联事件
   tail [N]   显示最近 N 条（默认 50）
   path       打印审计文件路径
   clear      清空审计文件（需确认意图：直接执行即清空）
@@ -430,7 +431,7 @@ audit.audit_log_must_regular_file_refusing_write=审计日志必须是普通文�
 audit.unable_truncate=无法清空 {f}
 audit.cleared_audit_log=已清空审计日志: {f}
 audit.audit_tail_n_must_non_negative_integer=audit tail: N 必须是非负整数
-audit.audit_unknown_subcommand_report_tail_path_clear=audit: 未知子命令 {sub}（report|tail|path|clear）
+audit.audit_unknown_subcommand_report_tail_path_clear=audit: 未知子命令 {sub}（report|query|tail|path|clear）
 audit.metrics_unknown_option=metrics: 未知选项 {arg}
 common.net_must_none_restricted_open_host_alias={who}: --net 必须是 none|restricted|open（host 别名）；当前: {mode}
 common.net_restricted_requires_non_empty_capbox_net={who}: --net restricted 需要非空 CAPBOX_NET_ALLOW（config set 或环境变量）
@@ -987,7 +988,6 @@ doctor.workspace_dangerous=工作区为 {home} 或 / ({workspace})；会把整�
 doctor.workspace_safe=工作区安全 ({workspace})
 doctor.audit_workspace_unsafe=工作区不安全
 doctor.userns_ok=userns 全权限 (uid=0, CapEff={caphex})
-doctor.userns_probe_failed=userns 全权限探测失败：容器内无法获得 uid0 + 全量 capability（检查内核 unprivileged_userns_clone 与 bwrap 版本）
 doctor.userns_not_probed=userns 全权限未探测（bwrap 不可用）
 doctor.idmap_module_missing=UID 映射模块未加载（lib/idmap.sh）
 doctor.deps_complete=依赖命令齐全 (tar/curl/flock/timeout)
@@ -1618,3 +1618,28 @@ unshare/setns 拦截（idmap 关闭时还有 bwrap --disable-userns）。
 task.net_allow_requires_restricted=--net-allow 仅适用于 restricted 网络
 task.net_allow_outside_host=--net-allow 须填写宿主 NET_ALLOW 覆盖的有效规则，且不能为空
 task.help_net_allow=任务出站规则，以逗号分隔，须在宿主 restricted 白名单范围内
+
+doctor.userns_host_failed=用户命名空间启动失败：{detail}
+doctor.userns_insufficient=探针未取得 uid 0 与全量 capability
+doctor.userns_no_detail=bwrap 失败或超时，未返回诊断信息
+doctor.userns_next=检查此 bwrap 二进制适用的宿主 user namespace、AppArmor 或外层容器策略。
+doctor.netns_ready=隔离网络命名空间探测通过
+doctor.netns_probe_failed=隔离网络命名空间启动失败：{detail}
+doctor.netns_next=检查宿主是否允许当前会话创建网络命名空间及初始化回环接口。
+doctor.skip_guest_host_probe=宿主命名空间探测失败，跳过 guest 探针
+res.find_why_controller_not_delegated=探针 cgroup 中的 {controller}.max 缺失或不可写。{hint}
+res.detail_cgroup_inspected={root}（探针子 cgroup 的控制器文件可写）
+setup.next_bwrap=安装或更新 bubblewrap 至 0.12.0 或更高版本，然后重跑 setup check。
+setup.next_cgroup=使用可写的会话和已委派的空 cgroup v2 父级，并启用请求额度对应的控制器。
+setup.next_rootfs=运行 capbox init --distro {distro} 准备 rootfs，再运行 capbox doctor。
+audit.query_description=从项目审计日志查询任务及其事件，输出 JSON
+audit.help_task_id=精确匹配任务 ID（32 位小写十六进制字符）
+audit.html.task_heading=任务摘要
+audit.html.label_task_id=任务 ID
+audit.html.label_task_status=任务状态
+audit.html.task_status_unavailable=审计记录无任务状态
+audit.html.task_policy=请求策略
+audit.html.task_changed_files=变更路径
+audit.html.task_origin_changed=源工作区冲突
+audit.html.task_diff_unavailable=无可用 diff 摘要
+audit.html.task_unassociated=未关联

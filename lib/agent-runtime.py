@@ -30,6 +30,7 @@ _LIB_DIR = str(Path(__file__).resolve().parent)
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import i18n
+from audit_store import TASK_ID, policy_summary, task_event
 
 SCHEMA = 'capbox.agent.v1'
 FINISHED = {'succeeded', 'failed', 'cancelled', 'timed_out'}
@@ -449,7 +450,7 @@ def isolate(ctx, job):
 
 
 def job_path(root, name):
-    if not re.fullmatch(r'[0-9a-f]{32}', name):
+    if not TASK_ID.fullmatch(name):
         raise AgentError(i18n.t('task.invalid_task_id'), 2)
     try:
         return private_dir(root / name)
@@ -499,6 +500,13 @@ def start_task(ctx, root, args):
              'exit_code': None, 'worker': identity(os.getpid()), 'isolated': args.isolate,
              'policy': policy, 'output_limit_per_stream': args.max_output_bytes}
     write_json(job / 'state.json', state)
+    config = ctx['config']
+    audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
+    audit_command = os.environ.get('CAPBOX_AGENT_AUDIT_CMD')
+    submission = {'policy': policy_summary(state['policy']['values']), 'isolated': args.isolate}
+    if audit_command:
+        submission['cmd'] = audit_command
+    task_event(audit_path, config, state, 'start', **submission)
     origin = ctx['workspace']
     launched = None
     try:
@@ -508,6 +516,8 @@ def start_task(ctx, root, args):
         env = clean_environment(ctx)
         env['CAPBOX_NET_ALLOW'] = policy['values']['NET_ALLOW']['value']
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
+        env['CAPBOX_TASK_AUDIT_ID'] = task_id
+        env['CAPBOX_TASK_AUDIT_PATH'] = audit_path
         argv = [ctx['cli'], '--root', ctx['workspace']]
         if ctx['allow_once']:
             argv += ['--allow-old-bwrap']
@@ -520,7 +530,7 @@ def start_task(ctx, root, args):
             argv += ['--profile', args.profile]
         argv += ['--'] + command
         write_json(job / 'plan.json', {'argv': argv, 'env': env, 'timeout': args.timeout,
-                                      'origin': origin, 'workspace': ctx['workspace'],
+                                      'origin': origin, 'workspace': ctx['workspace'], 'audit_path': audit_path,
                                       'config': ctx['config'], 'sources': ctx['sources'],
                                       'skipped': skipped, 'max_output_bytes': args.max_output_bytes})
         # worker 生命周期独立于本 CLI。外层监督器仍可结束整个宿主会话；
@@ -550,6 +560,7 @@ def start_task(ctx, root, args):
             launched.kill()
             launched.wait()
         state.update(status='failed', exit_code=1, finished_at=time.time())
+        task_event(audit_path, config, state, 'fail')
         write_json(job / 'state.json', state)
         raise
 
@@ -570,6 +581,9 @@ def worker(root, task_id):
         raise AgentError(i18n.t('task.already_submitted_to_supervisor'))
     plan = read_json(job / 'plan.json')
     state.update(status='running', worker=identity(os.getpid()), started_at=time.time())
+    audit_path = plan.get('audit_path')
+    if audit_path:
+        task_event(audit_path, plan['config'], state, 'start')
     write_json(job / 'state.json', state)
     proc, streams = None, {}
     dropped = {'stdout': 0, 'stderr': 0}
@@ -636,6 +650,9 @@ def worker(root, task_id):
         for output, _size in streams.values():
             output.close()
         state.update(finished_at=time.time(), dropped_bytes=dropped)
+        if audit_path:
+            task_event(audit_path, plan['config'], state,
+                       'ok' if state['exit_code'] == 0 else 'fail')
         write_json(job / 'state.json', state)
         os.close(lock)
     return 0
@@ -665,23 +682,15 @@ def log_chunk(job, stream, offset, limit):
     return result
 
 
-def diff_task(ctx, job, as_json):
+def diff_summary(job):
     state = state_of(job)
     if not state['isolated'] or state['status'] not in FINISHED:
         raise AgentError(i18n.t('task.diff_only_finished_isolated'), 2)
     plan = read_json(job / 'plan.json')
-    view, index = job / 'workspace', job / 'review.git'
+    view = job / 'workspace'
     current = regular_files(view)
     baseline = read_json(job / 'baseline.json')
     new = sorted(set(current) - set(baseline))
-    if new:
-        payload = b''.join(name.encode() + b'\0' for name in new)
-        git(ctx, ['add', '--intent-to-add', '--force', '--pathspec-from-file=-',
-                  '--pathspec-file-nul'], work=view, index=index, data=payload)
-    patch = git(ctx, ['diff', '--binary', '--no-ext-diff', '--no-textconv', '--', '.',
-                      ':(exclude).capbox', ':(exclude).git'], work=view, index=index)
-    if len(patch) > 16 * 1024 * 1024:
-        raise AgentError(i18n.t('task.diff_exceeds_16mib'))
     origin = Path(plan['origin'])
     conflicts = []
     for name in set(baseline) | set(new):
@@ -694,10 +703,26 @@ def diff_task(ctx, job, as_json):
             if old is not None:
                 conflicts.append(name)
     conflicts.sort()
-    result = {'kind': 'workspace_diff', 'task_id': job.name, 'changed_files': sorted(
-        name for name in set(current) | set(baseline) if current.get(name) != baseline.get(name)),
-        'origin_changed': conflicts, 'patch_base64': base64.b64encode(patch).decode(),
-        'notes': i18n.t('task.diff_export_notes')}
+    changed = sorted(name for name in set(current) | set(baseline)
+                     if current.get(name) != baseline.get(name))
+    return {'changed_files': changed, 'origin_changed': conflicts}, new
+
+
+def diff_task(ctx, job, as_json):
+    summary, new = diff_summary(job)
+    view, index = job / 'workspace', job / 'review.git'
+    if new:
+        payload = b''.join(name.encode() + b'\0' for name in new)
+        git(ctx, ['add', '--intent-to-add', '--force', '--pathspec-from-file=-',
+                  '--pathspec-file-nul'], work=view, index=index, data=payload)
+    patch = git(ctx, ['diff', '--binary', '--no-ext-diff', '--no-textconv', '--', '.',
+                      ':(exclude).capbox', ':(exclude).git'], work=view, index=index)
+    if len(patch) > 16 * 1024 * 1024:
+        raise AgentError(i18n.t('task.diff_exceeds_16mib'))
+    conflicts = summary['origin_changed']
+    result = {'kind': 'workspace_diff', 'task_id': job.name, **summary,
+              'patch_base64': base64.b64encode(patch).decode(),
+              'notes': i18n.t('task.diff_export_notes')}
     if as_json:
         emit(result)
     else:
