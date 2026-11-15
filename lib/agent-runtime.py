@@ -739,6 +739,7 @@ def start_task(ctx, root, args):
             resource_check = 'cgroup_limits'
             actual = task_cgroup.write_limits(leaf, expected)
             state['resources']['configured'] = actual
+            write_json(job / 'state.json', state)
             resource_observation(audit_path, config, state, 'configured', limits=actual)
             resource_check = None
         skipped = []
