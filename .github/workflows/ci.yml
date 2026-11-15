@@ -92,11 +92,11 @@ jobs:
 
       - name: Enable unprivileged userns (best effort)
         run: |
-          if [ -w /proc/sys/kernel/unprivileged_userns_clone ]; then
-            echo 1 | sudo tee /proc/sys/kernel/unprivileged_userns_clone || true
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           fi
-          if [ -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi
           sysctl kernel.unprivileged_userns_clone 2>/dev/null || true
 
@@ -228,11 +228,11 @@ jobs:
       - uses: ./.github/actions/setup-runtime
       - name: Enable unprivileged userns (best effort)
         run: |
-          if [ -w /proc/sys/kernel/unprivileged_userns_clone ]; then
-            echo 1 | sudo tee /proc/sys/kernel/unprivileged_userns_clone || true
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           fi
-          if [ -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi
       - name: Install Go and Node tooling
         run: sudo apt-get install -y -qq golang-go nodejs npm
@@ -250,8 +250,8 @@ jobs:
       - name: Host AppArmor is enabled and reported
         run: |
           set -euo pipefail
-          if [ -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi
           test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
           ./bin/capbox init --distro alpine
