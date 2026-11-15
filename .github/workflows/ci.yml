@@ -258,19 +258,21 @@ jobs:
           CAPBOX_LANG=en ./bin/capbox doctor > "$RUNNER_TEMP/doctor.log" 2>&1 || true
           cat "$RUNNER_TEMP/doctor.log"
           grep -q 'Host AppArmor is enabled' "$RUNNER_TEMP/doctor.log"
+          grep -Eq 'AppArmor label reported by the guest shell:|Guest AppArmor label unavailable' "$RUNNER_TEMP/doctor.log"
       - name: Guest label is observable under confinement
         run: |
           set -euo pipefail
           sudo apt-get install -y -qq apparmor-utils
           printf 'profile capbox-probe flags=(complain) {\n}\n' | sudo tee /etc/apparmor.d/capbox-probe >/dev/null
           sudo apparmor_parser -a /etc/apparmor.d/capbox-probe
-          label="$(sudo aa-exec -p capbox-probe -- bwrap --unshare-user --uid 0 --gid 0 \
-            --ro-bind / / --clearenv --setenv PATH /usr/bin:/bin \
-            -- cat /proc/self/attr/apparmor/current)"
-          echo "guest label: $label"
+          # bwrap runs as root here, so it needs no uid map; a user namespace
+          # would be denied by the host's AppArmor userns policy.
+          label="$(sudo aa-exec -p capbox-probe -- bwrap --ro-bind / / --clearenv \
+            --setenv PATH /usr/bin:/bin -- cat /proc/self/attr/apparmor/current)"
+          echo "process label: $label"
           case "$label" in
             *capbox-probe*) ;;
-            *) echo "guest did not inherit the test profile" >&2; exit 1 ;;
+            *) echo "process did not inherit the test profile" >&2; exit 1 ;;
           esac
 
   compatibility-gate:
