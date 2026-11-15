@@ -276,9 +276,16 @@ if [ ! -f "$_capbox_lib_dir/common.sh" ]; then
   fi
 fi
 
-if [[ "${1:-}" == upgrade || "${1:-}" == setup ]]; then
+_capbox_command="${1:-}"
+[[ "$_capbox_command" != -- ]] || _capbox_command="${2:-}"
+if [[ "$_capbox_command" == upgrade || "$_capbox_command" == setup ||
+      "$_capbox_command" == task || "$_capbox_command" == policy ||
+      "$_capbox_command" == mcp ||
+      ( "$_capbox_command" == doctor && " ${*:1} " == *" --agent "* ) ||
+      "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
   _capbox_lib_dir="$(cd -- "$_CAPBOX_CLI_BIN_DIR/../lib" && pwd)"
 fi
+unset _capbox_command
 
 # shellcheck source=/dev/null
 source "$_capbox_lib_dir/common.sh" || {

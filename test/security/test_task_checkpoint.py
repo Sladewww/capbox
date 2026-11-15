@@ -53,9 +53,9 @@ class CheckpointTests(Fixture):
         os.setxattr(upper / 'etc/sub', 'user.overlay.opaque', b'y')
         (upper / 'etc/.wh.drop-from-lower').touch()
         (upper / 'etc/sub/new').write_text('copied-up')
-        task = self.start('--isolate', '--profile', 'untrusted', '--', 'sh', '-ec',
+        task = self.start('--isolate', '--profile', 'strict', '--', 'sh', '-ec',
                           'test ! -e /etc/drop-from-lower && test ! -e /etc/sub/old; '
-                          'echo updated > progress; rm remove-this; echo task > /etc/task-only')
+                          'echo updated > progress; rm remove-this; ! touch /etc/task-only')
         self.run_cli('task', 'wait', task, '--timeout', '15', check=True)
         result = self.run_cli('task', 'checkpoint', task, str(self.archive))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -69,7 +69,7 @@ class CheckpointTests(Fixture):
                              'test "$(cat progress)" = updated; test ! -e remove-this; '
                              'test ! -e .env; test ! -e /etc/drop-from-lower; '
                              'test ! -e /etc/sub/old; test "$(cat /etc/sub/new)" = copied-up; '
-                             'test "$(cat /etc/task-only)" = task; echo continued > continued',
+                             'test ! -e /etc/task-only; echo continued > continued',
                              workspace=self.target)
         result = subprocess.run([self.cli[0], '--root', str(self.target), 'task', 'wait',
                                  resumed, '--timeout', '15'], env=self.env, capture_output=True,

@@ -1,17 +1,216 @@
 #!/usr/bin/env python3
 """Public CLI contracts, including real guest execution when a rootfs is supplied."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest import mock
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]
 ROOTFS = Path(os.environ.get('CAPBOX_TEST_ROOTFS', REPO / 'os/alpine'))
+
+
+class InputSelectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('capbox_agent', REPO / 'lib/agent-runtime.py')
+        cls.agent = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.agent)
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='cb-inputs-')
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.ws = self.base / 'project'
+        self.ws.mkdir()
+        self.ctx = {'workspace': str(self.ws), 'config': {'DISTRO': 'alpine'},
+                    'cli': str(REPO / 'bin/capbox'), 'lib': str(REPO / 'lib'),
+                    'locked': True}
+
+    def put(self, name, value):
+        file = self.ws / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(value)
+
+    def git(self, *args):
+        self.agent.git(self.ctx, list(args), work=self.ws)
+
+    def copy(self, view, *paths):
+        view.mkdir()
+        return self.agent.copy_selected_inputs(self.ctx, self.ws, view,
+                                               self.agent.input_paths(list(paths)))[0]
+
+    def test_host_policy_from_external_template(self):
+        template = self.base / 'template'
+        template.mkdir()
+        ctx = dict(self.ctx, lib=str(template / 'lib'), cli=str(template / 'bin/capbox'),
+                   sources={}, allow_once=False)
+        parser = self.agent.parser()
+        args = parser.parse_args(['task', 'start', '--isolate', '--', 'true'])
+        ctx = self.agent.locked_context(ctx, args)
+        self.put('agent-inputs.json', '["private"]')
+        self.assertIsNone(self.agent.task_inputs(ctx, args))
+        policy = template / 'agent-inputs.json'
+        policy.write_text('["src", "build/config"]')
+        self.assertEqual(self.agent.task_inputs(ctx, args), self.agent.input_paths(['src', 'build/config']))
+        args.input = ['src/main.c']
+        self.assertEqual(self.agent.task_inputs(ctx, args), self.agent.input_paths(args.input))
+        for path in ('src2', 'build', '../src', '/src', 'src/.env', 'src//main.c'):
+            with self.subTest(path=path):
+                args.input = [path]
+                with self.assertRaises(self.agent.AgentError):
+                    self.agent.task_inputs(ctx, args)
+        args.input = None
+        policy.write_text('[]')
+        self.assertEqual(self.agent.task_inputs(ctx, args), set())
+        for malformed in ('{', '[null]', '["/src"]'):
+            policy.write_text(malformed)
+            with self.assertRaises(self.agent.AgentError):
+                self.agent.task_inputs(ctx, args)
+        policy.unlink()
+        policy.symlink_to(self.ws / policy.name)
+        with self.assertRaises(self.agent.AgentError):
+            self.agent.task_inputs(ctx, args)
+
+    def test_git_selection_and_credentials(self):
+        self.git('init', '-q')
+        self.put('.gitignore', '*.ignored\n')
+        self.put('src/tracked.ignored', 'old')
+        self.put('src/deleted', 'gone')
+        self.put('src/.env', 'credential')
+        self.git('add', '-f', 'src/tracked.ignored', 'src/deleted', 'src/.env')
+        (self.ws / 'src/deleted').unlink()
+        self.put('src/tracked.ignored', 'dirty')
+        self.put('src/new', 'untracked')
+        self.put('src/local.ignored', 'ignored')
+        self.put('src-other/hidden', 'out of scope')
+        (self.ws / 'src-other/link').symlink_to(self.base)
+
+        view = self.base / 'view'
+        self.assertEqual(set(self.copy(view, 'src', 'src/new')), {'src/tracked.ignored', 'src/new'})
+        self.assertEqual((view / 'src/tracked.ignored').read_text(), 'dirty')
+        self.assertFalse((view / 'src-other').exists())
+        with self.assertRaises(self.agent.AgentError):
+            self.copy(self.base / 'ignored', 'src/local.ignored')
+
+    def test_refuses_links_special_files_and_replacement(self):
+        self.put('src/main', 'original')
+        (self.ws / 'alias').symlink_to(self.ws / 'src')
+        os.link(self.ws / 'src/main', self.ws / 'hard')
+        os.mkfifo(self.ws / 'fifo')
+        for index, name in enumerate(('alias', 'alias/main', 'hard', 'src', 'fifo')):
+            with self.subTest(name=name), self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / str(index), name)
+        (self.ws / 'hard').unlink()
+        original_read = self.agent.read_pinned_regular
+
+        def replace_after_open(fd, name):
+            data = original_read(fd, name)
+            (self.ws / 'src').rename(self.ws / 'old')
+            (self.ws / 'src').symlink_to(self.ws / 'old')
+            return data
+
+        with patch.object(self.agent, 'read_pinned_regular', replace_after_open):
+            with self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / 'race', 'src/main')
+
+    def test_selected_input_enumeration_respects_preparation_limits(self):
+        self.put('src/main.c', 'int main(void) { return 0; }')
+        self.put('src/empty/child/.env', '')
+        with mock.patch.object(self.agent, 'MAX_PREP_ENTRIES', 1):
+            with self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / 'bounded-fs', 'src')
+
+        self.git('init', '-q')
+        self.put('unselected.txt', 'outside selected input')
+        with mock.patch.object(self.agent, 'MAX_STREAM', 12):
+            with self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / 'bounded-git', 'src/main.c')
+
+    def test_broken_git_metadata_does_not_fall_back_to_filesystem(self):
+        self.put('.git', 'gitdir: ./missing\n')
+        self.put('src/local', 'copying without Git rules would include this file\n')
+        with self.assertRaises(self.agent.AgentError):
+            self.copy(self.base / 'view', 'src')
+
+    def test_replaced_workspace_ancestor_is_rejected(self):
+        self.put('src/main', 'outside the submitted workspace')
+        alias = self.base / 'alias'
+        alias.symlink_to(self.base, target_is_directory=True)
+        view = self.base / 'view'
+        view.mkdir()
+        with self.assertRaises(OSError):
+            self.agent.copy_selected_inputs(self.ctx, alias / self.ws.name, view,
+                                             self.agent.input_paths(['src']))
+        self.assertEqual(list(view.iterdir()), [])
+
+    def test_concurrent_private_copies_and_partial_patch(self):
+        self.put('a/modify', 'before\n')
+        self.put('a/remove', 'remove this\n')
+        self.put('a/hidden', 'unselected source text\n')
+        self.put('b/file', 'other task\n')
+        rootfs = self.base / 'state/os/alpine'
+        rootfs.mkdir(parents=True)
+        ctx = dict(self.ctx, rootfs=str(rootfs))
+
+        def prepare(label, paths):
+            job = self.base / label
+            job.mkdir()
+            self.agent.isolate(ctx, job, self.agent.input_paths(paths))
+            return job
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            one = executor.submit(prepare, 'one', ['a/modify', 'a/remove'])
+            two = executor.submit(prepare, 'two', ['b'])
+            job, other = one.result(), two.result()
+        view = job / 'workspace'
+        (view / 'a/modify').write_text('after\n')
+        (view / 'a/remove').unlink()
+        self.assertFalse((view / 'a/hidden').exists())
+        (view / 'a/hidden').write_text('new task output\n')
+        (view / 'a/:(literal)new').write_text('new file\n')
+        self.put('a/modify', 'host change\n')
+        self.assertFalse((other / 'workspace/a').exists())
+        self.assertFalse((view / 'b').exists())
+
+        self.agent.write_json(job / 'state.json', {'status': 'succeeded', 'isolated': True})
+        self.agent.write_json(job / 'plan.json', {'origin': str(self.ws)})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.agent.diff_task(ctx, job, True, False)
+        diff = json.loads(output.getvalue())
+        self.assertEqual(diff['changed_files'], ['a/:(literal)new', 'a/hidden', 'a/modify', 'a/remove'])
+        self.assertEqual(diff['origin_changed'], ['a/hidden', 'a/modify'])
+        patch_bytes = base64.b64decode(diff['patch_base64'])
+        self.assertIn(b'deleted file mode', patch_bytes)
+        self.assertIn(b'+new task output', patch_bytes)
+        self.assertIn(b'+after', patch_bytes)
+        self.assertNotIn(b'unselected source text', patch_bytes)
+        self.assertNotIn(b'host change', patch_bytes)
+        self.assertNotIn(b'b/file', patch_bytes)
+
+    @unittest.skipUnless(shutil.which('cc'), 'requires a host C compiler')
+    def test_build_from_selected_inputs(self):
+        self.put('src/main.c', '#include "value.h"\nint main(void) { return VALUE; }\n')
+        self.put('src/value.h', '#define VALUE 7\n')
+        self.put('src/unselected.c', '#error file outside the input selection\n')
+        view = self.base / 'build-view'
+        self.copy(view, 'src/main.c', 'src/value.h')
+        (view / 'out').mkdir()
+        subprocess.run(['cc', 'src/main.c', '-o', 'out/example'], cwd=view, check=True)
+        self.assertEqual(subprocess.run([view / 'out/example']).returncode, 7)
+        self.assertFalse((self.ws / 'out').exists())
+        self.assertFalse((view / 'src/unselected.c').exists())
 
 
 class Fixture(unittest.TestCase):
@@ -36,6 +235,112 @@ class Fixture(unittest.TestCase):
 
 
 class PolicyTests(Fixture):
+    def test_isolated_host_policy_caps_project_and_environment(self):
+        self.run_cli('config', 'set', 'CAPBOX_ROOTFS_RO', '0', check=True)
+        self.env.update(CAPBOX_NET='open', CAPBOX_SECURITY_PROFILE='compat',
+                        CAPBOX_IDMAP='on', CAPBOX_LANDLOCK='off')
+        result = self.run_cli('policy', 'show', '--isolate', check=True)
+        values = json.loads(result.stdout)['values']
+        for key, value in {'NET': 'none', 'SECURITY_PROFILE': 'strict', 'IDMAP': 'off',
+                           'LANDLOCK': 'on', 'ROOTFS_RO': '1'}.items():
+            self.assertEqual(values[key], {'value': value, 'source': 'host'})
+        regular = json.loads(self.run_cli('policy', 'show', check=True).stdout)['values']
+        self.assertEqual(regular['NET'], {'value': 'open', 'source': 'env'})
+        self.assertEqual(regular['SECURITY_PROFILE'], {'value': 'compat', 'source': 'env'})
+
+    def test_isolated_policy_rejects_weakening_paths(self):
+        for flag, value in (('--net', 'open'), ('--profile', 'compat'),
+                            ('--net-allow', 'example.com')):
+            with self.subTest(flag=flag):
+                result = self.run_cli('policy', 'show', '--isolate', flag, value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        for key, value in (('CAPBOX_BWRAP_EXTRA', '--share-net'),
+                           ('CAPBOX_BWRAP_NO_PIDNS', '1'),
+                           ('CAPBOX_FS_BINDS', '.:/workspace/extra:rw'),
+                           ('CAPBOX_BWRAP', '/bin/true')):
+            with self.subTest(key=key):
+                self.env[key] = value
+                result = self.run_cli('policy', 'show', '--isolate')
+                self.env.pop(key)
+                self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_isolated_restricted_requires_host_allowlist(self):
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        args = ('policy', 'show', '--isolate', '--net', 'restricted')
+        policy = template / 'agent-network.allow'
+        (self.ws / policy.name).write_text('example.com')
+        self.env['CAPBOX_NET_ALLOW'] = 'example.com,evil.invalid'
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+        policy.write_text('example.com')
+        result = self.run_cli(*args, '--net-allow', 'example.com:443', check=True)
+        self.assertEqual(json.loads(result.stdout)['values']['NET_ALLOW'],
+                         {'source': 'command', 'value': 'example.com:443'})
+        self.assertEqual(self.run_cli(*args, '--net-allow', 'evil.invalid').returncode, 2)
+        policy.chmod(0o666)
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+
+    def test_isolated_policy_uses_host_template(self):
+        common = self.ws / '.capbox/lib/common.sh'
+        original = common.read_bytes()
+        common.write_text('exit 82\n')
+        self.run_cli('policy', 'show', '--isolate', check=True)
+        self.assertEqual(self.run_cli('config', 'get', 'CAPBOX_NET').returncode, 82)
+        common.write_bytes(original)
+        result = subprocess.run([str(self.ws / '.capbox/bin/capbox'), '--root', str(self.ws),
+                                 'policy', 'show', '--isolate'], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    @unittest.skipUnless(os.getenv('CAPBOX_TEST_DELEGATED'), 'requires the delegated test service')
+    def test_missing_agent_probe_fails_before_payload(self):
+        template = self.base / 'template'
+        shutil.copytree(REPO / 'bin', template / 'bin')
+        shutil.copytree(REPO / 'lib', template / 'lib')
+        (template / 'lib/guest/capbox-agent-probe.c').unlink()
+        rootfs = self.ws / '.capbox/os/alpine'
+        (rootfs / 'bin').mkdir(parents=True, exist_ok=True)
+        shutil.copy2('/bin/true', rootfs / 'bin/sh')
+        self.cli[0] = str(template / 'bin/capbox')
+        started = self.run_cli('task', 'start', '--isolate', '--', 'touch', 'sentinel', check=True)
+        task = json.loads(started.stdout)['task_id']
+        try:
+            waited = self.run_cli('task', 'wait', task, '--timeout', '20')
+            self.assertNotEqual(waited.returncode, 0)
+            state = json.loads(waited.stdout)
+            self.assertEqual(state['failure_reason'], 'launch_failed')
+            self.assertEqual(state['protection']['status'], 'failed')
+            self.assertEqual(state['resources']['cleanup'], 'removed')
+            self.assertFalse(Path(state['resources']['cgroup']).exists())
+            audit = self.run_cli('audit', 'query', '--task-id', task, check=True)
+            result = json.loads(audit.stdout)['task']
+            self.assertEqual(result['protection'], state['protection'])
+            self.assertEqual(result['diff']['changed_files'], [])
+        finally:
+            self.run_cli('task', 'rm', task)
+
+    @unittest.skipIf(os.getuid() == 0, 'locked tasks require a non-root host UID')
+    def test_missing_cgroup_delegation_refuses_before_execution(self):
+        rootfs = self.ws / '.capbox/os/alpine/bin'
+        rootfs.mkdir(parents=True, exist_ok=True)
+        shutil.copy2('/bin/true', rootfs / 'sh')
+        self.env['CAPBOX_TASK_HOST_CGROUP_ROOT'] = str(self.base)
+        result = self.run_cli('task', 'start', '--isolate', '--', 'touch', 'sentinel')
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn('cgroup_delegation', result.stderr)
+        self.assertFalse((self.ws / 'sentinel').exists())
+        tasks = json.loads(self.run_cli('task', 'list', check=True).stdout)['tasks']
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]['protection']['check'], 'cgroup_delegation')
+        self.assertEqual(tasks[0]['output_bytes']['stdout'], 0)
+        audit = self.run_cli('audit', 'query', '--task-id', tasks[0]['task_id'], check=True)
+        observations = [event['observation'] for event in json.loads(audit.stdout)['events']
+                        if 'observation' in event]
+        self.assertEqual([item['phase'] for item in observations], ['requested', 'failed'])
+        self.assertEqual(observations[-1]['check'], 'cgroup_delegation')
+
     def test_sources_override_without_mutation(self):
         self.run_cli('config', 'set', 'CAPBOX_NET', 'open', check=True)
         d=json.loads(self.run_cli('policy','show').stdout)
@@ -241,7 +546,9 @@ class TaskTests(Fixture):
 
     def wait(self,task,code=0,timeout=15):
         r=self.run_cli('task','wait',task,'--timeout',str(timeout),'--json')
-        self.assertEqual(r.returncode,code,r.stdout+r.stderr)
+        if r.returncode != code:
+            logs = self.run_cli('task', 'logs', task, '--stream', 'stderr')
+            self.fail(f'expected task exit {code}, got {r.returncode}\n{r.stdout}{r.stderr}{logs.stdout}')
         return json.loads(r.stdout)
 
     def git(self,*args):
@@ -255,19 +562,65 @@ class TaskTests(Fixture):
         self.git('add','hello.txt','.gitignore')
         self.git('add','-f','.env')
 
+    def test_task_cgroup_limits_membership_and_cancel(self):
+        self.env.update(CAPBOX_TASK_HOST_CPU_MAX='50%', CAPBOX_TASK_HOST_MEMORY_MAX='256Mi',
+                        CAPBOX_TASK_HOST_PIDS_MAX='64', CAPBOX_TASK_HOST_SWAP_MAX='0',
+                        CAPBOX_MEMORY_MAX='max', CAPBOX_RESOURCES_MODE='warn')
+        expected = {'cpu.max': '50000 100000', 'memory.max': '268435456',
+                    'pids.max': '64', 'memory.swap.max': '0'}
+        first = self.start('--isolate', '--', 'sh', '-c', 'sleep 60 & echo ready; wait')
+        first_running = json.loads(self.run_cli('task', 'status', first, check=True).stdout)
+        leaf = Path(first_running['resources']['cgroup'])
+        self.assertEqual({key: (leaf / key).read_text().strip() for key in expected}, expected)
+        second = self.start('--isolate', '--', 'true')
+        second_resources = self.wait(second)['resources']
+        self.assertNotEqual(second_resources['cgroup'], str(leaf))
+        self.assertEqual(second_resources['verified']['limits'], expected)
+        self.assertTrue(leaf.is_dir())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if 'ready' in self.run_cli('task', 'logs', first, check=True).stdout:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail('guest did not reach the command gate')
+        pids = [int(pid) for pid in (leaf / 'cgroup.procs').read_text().split()]
+        self.assertGreaterEqual(len(pids), 2)
+        membership = str(leaf).removeprefix('/sys/fs/cgroup')
+        for pid in pids:
+            self.assertIn(f'0::{membership}', Path(f'/proc/{pid}/cgroup').read_text().splitlines())
+        self.run_cli('task', 'cancel', first, check=True)
+        result = self.wait(first, 143)['resources']
+        self.assertEqual(result['verified']['membership'], membership)
+        self.assertIn(result['verified']['pid'], pids)
+        self.assertEqual(result['cleanup'], 'removed')
+        self.assertFalse(leaf.exists())
+        for pid in pids:
+            entry = Path(f'/proc/{pid}/cgroup')
+            if entry.exists():
+                try:
+                    self.assertNotIn(f'0::{membership}', entry.read_text().splitlines())
+                except ProcessLookupError:
+                    pass
+        print(json.dumps({'limits': expected, 'membership': membership,
+                          'observed_pids': pids, 'cleanup': result['cleanup']}, sort_keys=True))
+
     def test_parallel_isolated_task_audit_survives_runtime_cleanup(self):
         self.init_git()
         self.env['CAPBOX_NET'] = 'open'
         (self.ws / '.capbox/logs/audit.jsonl').write_text(
             '{"ts":"2026-11-08T00:00:00Z","kind":"exec","status":"ok","cmd":"legacy"}\n')
-        timed = self.start('--isolate', '--timeout', '4', '--net', 'open',
+        timed = self.start('--isolate', '--timeout', '8', '--net', 'none',
                            '--', 'sleep', '30')
-        done = self.start('--isolate', '--timeout', '20', '--profile', 'compat',
+        done = self.start('--isolate', '--timeout', '20', '--profile', 'strict',
                           '--', 'sh', '-c',
                           'test -z "${CAPBOX_TASK_AUDIT_ID:-}" && '
                           "printf '%s' private-output > /dev/null && echo task > hello.txt")
-        self.assertEqual(self.wait(done)['status'], 'succeeded')
-        self.assertEqual(self.wait(timed, 124)['status'], 'timed_out')
+        for task, status, code in ((done, 'succeeded', 0), (timed, 'timed_out', 124)):
+            finished = self.wait(task, code)
+            self.assertEqual(finished['status'], status)
+            self.assertEqual(finished['resources']['cleanup'], 'removed')
+            self.assertFalse(Path(finished['resources']['cgroup']).exists())
         (self.ws / 'hello.txt').write_text('source edit\n')
         for task, status, code in ((timed, 'timed_out', 124), (done, 'succeeded', 0)):
             r = self.run_cli('audit', 'query', '--task-id', task, check=True)
@@ -275,16 +628,22 @@ class TaskTests(Fixture):
             self.assertEqual(result['task']['status'], status)
             self.assertEqual(result['task']['exit_code'], code)
             self.assertTrue(all(event['task_id'] == task for event in result['events']))
+            resource_phases = [event['observation']['phase'] for event in result['events']
+                               if isinstance(event.get('observation'), dict)
+                               and event['observation'].get('kind') == 'resources']
+            self.assertEqual(resource_phases, ['requested', 'configured', 'entered', 'verified', 'cleanup'])
             self.assertNotIn('legacy', r.stdout)
             if task == done:
                 self.assertIn('exec', {event['kind'] for event in result['events']})
                 self.assertEqual(result['task']['policy']['SECURITY_PROFILE'],
-                                 {'value': 'compat', 'source': 'command'})
+                                 {'value': 'strict', 'source': 'host'})
                 self.assertEqual(result['task']['diff']['changed_files'], ['hello.txt'])
                 self.assertEqual(result['task']['diff']['origin_changed'], ['hello.txt'])
             else:
                 self.assertEqual(result['task']['policy']['NET'],
-                                 {'value': 'open', 'source': 'command'})
+                                 {'value': 'none', 'source': 'host'})
+                self.assertEqual(result['task']['protection']['requested']['NET'],
+                                 {'value': 'none', 'source': 'command'})
         report = self.base / 'task.html'
         self.run_cli('audit', 'report', '--task-id', done, '--output', str(report), check=True)
         self.assertIn('origin_changed', report.read_text())
@@ -354,6 +713,46 @@ class TaskTests(Fixture):
         self.assertEqual(diff['changed_files'], ['out/sub/result'])
         self.assertFalse((self.ws / 'out/sub/result').exists())
 
+    def test_selected_inputs_in_concurrent_guest_builds(self):
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        (template / 'agent-inputs.json').write_text('["src"]')
+        self.cli[0] = str(template / 'bin/capbox')
+        (self.ws / 'src').mkdir()
+        (self.ws / 'out').mkdir()
+        (self.ws / 'out/private').write_text('host data')
+        for name in ('a', 'b'):
+            (self.ws / 'src' / name).write_text(name + '\n')
+        denied = self.run_cli('task', 'start', '--isolate', '--input', 'out/private', '--', 'true')
+        self.assertEqual(denied.returncode, 2, denied.stderr)
+
+        def build(name, absent):
+            return self.start('--isolate', '--input', 'src/' + name, '--write-dir', 'out', '--',
+                              'sh', '-eu', '-c',
+                              'test ! -e "src/$2"; test ! -e out/private; '
+                              'if (echo overwrite > "src/$1") 2>/dev/null; then exit 1; fi; '
+                              'tar -cf out/package.tar -C src "$1"; '
+                              'test "$(tar -xOf out/package.tar "$1")" = "$1"',
+                              'build', name, absent)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            a = executor.submit(build, 'a', 'b')
+            b = executor.submit(build, 'b', 'a')
+            tasks = [(a.result(), 'a'), (b.result(), 'b')]
+        patches = []
+        for task, name in tasks:
+            state = self.wait(task)
+            self.assertEqual(state['input_paths'], ['src/' + name])
+            self.assertEqual(state['protection']['status'], 'verified')
+            diff = json.loads(self.run_cli('task', 'diff', task, '--json', check=True).stdout)
+            self.assertEqual(diff['changed_files'], ['out/package.tar'])
+            self.assertEqual(diff['origin_changed'], [])
+            patches.append(diff['patch_base64'])
+        self.assertNotEqual(*patches)
+        self.assertFalse((self.ws / 'out/package.tar').exists())
+        self.assertEqual((self.ws / 'out/private').read_text(), 'host data')
+
     def test_readonly_worktree_rejects_unsafe_paths_and_mounts(self):
         (self.ws / 'out/sub').mkdir(parents=True)
         (self.ws / 'alias').symlink_to('out', target_is_directory=True)
@@ -411,10 +810,11 @@ class TaskTests(Fixture):
 
     def test_isolation_diff_binary_deletion_and_origin_conflict(self):
         self.init_git()
-        task=self.start('--isolate','--','sh','-c',
-            'test ! -e /workspace/.env && test ! -e /workspace/.git && '
+        task=self.start('--isolate','--','sh','-ec',
+            'test ! -e /workspace/.env; test ! -e /workspace/.git; '
             'echo task > /workspace/hello.txt; printf "\\000binary" > /workspace/new.bin; '
-            'rm /workspace/.gitignore; echo private > /etc/task-private')
+            'rm /workspace/.gitignore; '
+            'if touch /etc/task-private; then exit 1; fi; test ! -e /etc/task-private')
         self.wait(task)
         self.assertEqual((self.ws/'hello.txt').read_text(),'base\n')
         self.assertFalse((self.ws/'.capbox/os/alpine/etc/task-private').exists())
@@ -501,6 +901,59 @@ class TaskTests(Fixture):
             finally:
                 server.shutdown()
                 poll.join()
+
+    def test_isolated_restricted_uses_verified_proxy(self):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            url = f'http://127.0.0.1:{server.server_port}/'
+            (template / 'agent-network.allow').write_text(f'127.0.0.1:{server.server_port}')
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                                  'wget -T 3 -O /dev/null "$1"; '
+                                  '! HTTP_PROXY= http_proxy= all_proxy= wget -T 3 -O /dev/null "$1"',
+                                  'probe', url)
+                state = self.wait(task)
+                self.assertEqual(state['protection']['checks']['network'], 'restricted')
+            finally:
+                server.shutdown()
+                thread.join()
+
+    def test_isolated_granted_credential_is_a_placeholder(self):
+        subprocess.run(self.cli + ['secret', 'set', 'openai', '--value-stdin'],
+                       input='fixture-locked-agent-secret', text=True, env=self.env,
+                       capture_output=True, check=True, timeout=20)
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        (template / 'agent-network.allow').write_text('api.openai.com')
+        command = ('case "${OPENAI_API_KEY:-}" in capbox-sec-*) ;; *) exit 42;; esac; '
+                   'test -r "$SSL_CERT_FILE"; test "$SSL_CERT_FILE" = /run/capbox-agent-ca.pem')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                          'test -z "${OPENAI_API_KEY:-}"')
+        self.wait(task)
+        (template / 'agent-credentials.allow').write_text('service:openai\n')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec', command)
+        self.wait(task)
+        for stream in ('stdout', 'stderr'):
+            logs = self.run_cli('task', 'logs', task, '--stream', stream, check=True)
+            self.assertNotIn('fixture-locked-agent-secret', logs.stdout)
 
     def test_parallel_restricted_tasks_have_private_network_sessions(self):
         import time

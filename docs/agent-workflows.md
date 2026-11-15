@@ -49,6 +49,10 @@ capbox policy check --net restricted --resolve https://example.com/
 
 ## 隔离工作区与可审阅 diff
 
+`task start --isolate` 和 `mcp serve` 使用项目外可信 CapBox 模板的宿主策略。请用模板的绝对路径调用，传入 `--root` 选择项目。首版锁定 `strict`、单 UID、只读 rootfs 和 Landlock，默认无网。工作区副本可写，也可用 `--workspace-readonly` 和 `--write-dir` 收窄。项目中的 rootfs 可写设置、网络和安全档不会放宽宿主策略。任务显式请求更宽策略、配置额外 bind、指定自定义 bwrap，或传入关闭 PID namespace 的低层参数时会被拒绝。
+
+`capbox policy show --isolate --json` 显示解析后的宿主策略。`capbox doctor --agent --json` 用同一启动路径检查已初始化的项目。提交成功仅表示监督器接受任务。终态 `protection` 字段记录请求、验证状态和已验证的策略。验证失败会在执行用户命令前停止；`audit query --task-id` 可从持久日志查询结果。
+
 `--isolate` 把当前工作区视图拷进私有任务树，并做独立 rootfs 副本（不硬链到活动镜像）。对 Git 仓库根，包含已跟踪工作树内容**以及**仍被 `.gitignore` 允许的未跟踪文件；CapBox 凭据排除规则始终优先。对非 Git 目录只遍历普通文件（无 `.gitignore`）。非空 overlay upper 合并进私有 rootfs（copy-up + whiteout），而不是拒绝。拷贝活动 rootfs 前请停其它写入方、服务与 daemon；不做在线数据库一致性保证。
 
 ```sh
@@ -116,7 +120,22 @@ capbox task diff TASK_ID --json
 
 每个 `--write-dir` 指定隔离副本中一个已存在的目录，路径相对于项目根目录。允许写入某个目录时，其后代目录也可写。省略所有 `--write-dir` 时，整个工作树只读。
 
-任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围、已配置的 `FS_BINDS` 和显式的 `IDMAP=on`。此模式使用单 UID 映射，并移除挂载管理权限。处于隔离模式的 MCP 服务接受 `execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
+任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围，以及配置了 `FS_BINDS` 的请求。MCP 服务接受 `capbox_execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
+
+### 选择隔离任务的输入
+
+宿主操作者可在可信模板的根目录（与 `bin/`、`lib/` 同级）创建 `agent-inputs.json`。它接受一个项目相对路径数组，例如 `["src", "Makefile", "build/fixtures"]`。文件应由宿主用户或 root 持有，禁止组和其他用户写入。配置适用于该模板提交的隔离 CLI 与 MCP 任务。
+
+```sh
+mkdir -p build
+capbox task start --isolate --input src --input Makefile --write-dir build -- \
+  make BUILD_DIR=build
+```
+
+- `--input` 可重复，每项是文件或目录。目录匹配自身及后代。宿主设限后，请求中的每项都必须落在允许范围内。配置与请求各最多 256 项。省略 `--input` 时使用宿主范围。宿主配置为 `[]` 时工作树起始为空。宿主配置和请求均省略时，使用原有的完整工作树复制语义。
+- Git 根复制所选的已跟踪工作树文件（包括已跟踪但匹配忽略规则的文件）及未被忽略的未跟踪文件。非 Git 项目按普通文件遍历。凭据排除规则始终优先。直接指定被忽略、被排除或不存在的文件会失败。所选范围内的符号链接、硬链接和特殊文件会被拒绝。
+- 输入选择自动将工作树挂载为只读。仅 `--write-dir` 指定的目录可写，允许在私有副本中创建空的输出目录。可写目录必须在源项目中已存在，其未选中的文件仍留在源项目。
+- 任务状态的 `input_paths` 返回实际采用的选择器（排序去重）。`task diff` 相对提交时复制的文件生成补丁。源树里未被复制的文件不会产生删除项。任务在同一路径新建输出时，`origin_changed` 会报告冲突，补丁只包含任务生成的内容。
 
 ### 查看任务失败证据
 
@@ -142,7 +161,13 @@ CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
 
 任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
 
-省略 `--net-allow` 时沿用现有配置的范围。MCP 服务采用 `restricted` 网络模式时，客户端可用 `net_allow` 向 `execute` 或 `policy` 传入同样的逗号分隔规则。
+共享任务省略 `--net-allow` 时沿用现有配置的范围。隔离任务默认无网。宿主可在工作区外可信模板的根目录创建 `agent-network.allow`（与 `bin/` 并列），写入逗号分隔的允许规则。文件须由运行用户或 root 拥有，且组和其他用户不可写。显式指定 `--net restricted` 才启用此列表；`--net-allow` 只能收窄。代理和桥在验证启动边界后就绪，随后才执行命令。
+
+```sh
+printf '%s\n' 'packages.example.org:443' > /path/to/template/agent-network.allow
+/path/to/template/bin/capbox --root /path/to/project task start --isolate \
+  --net restricted --net-allow packages.example.org:443 -- wget https://packages.example.org/
+```
 
 ## 冷检查点
 
@@ -167,15 +192,14 @@ CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
 项目之外，父目录须已存在，目标路径须尚不存在。普通恢复失败返回非零状态，
 新项目在检查及解包均成功后才以原子重命名发布，已有目录不会被覆盖。
 
-以下命令在已初始化、rootfs 可写的测试项目中运行。恢复后通过 `task start` 继续工作。
+以下命令在已初始化的测试项目中运行。恢复后通过 `task start` 继续工作。
 
 ```sh
 set -eu
 base=$(mktemp -d)
 capbox config set CAPBOX_HOSTNAME checkpoint-demo
-id=$(capbox task start --isolate --net none --profile untrusted -- sh -ec '
+id=$(capbox task start --isolate -- sh -ec '
   printf "step 1\n" > /workspace/progress
-  printf "installed state\n" > /etc/checkpoint-demo
 ' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 capbox task wait "$id" --timeout 30
 pin=$(capbox task checkpoint "$id" "$base/checkpoint" |
@@ -185,7 +209,6 @@ capbox task restore "$base/checkpoint" "$base/resumed" --manifest-sha256 "$pin"
 next=$(capbox --root "$base/resumed" task start --isolate -- sh -ec '
   test "$(hostname)" = checkpoint-demo
   test "$(cat /workspace/progress)" = "step 1"
-  test "$(cat /etc/checkpoint-demo)" = "installed state"
   printf "step 2\n" >> /workspace/progress
 ' | python3 -c 'import json,sys; print(json.load(sys.stdin)["task_id"])')
 capbox --root "$base/resumed" task wait "$next" --timeout 30
@@ -198,3 +221,31 @@ if capbox task restore "$base/checkpoint" "$base/rejected" --manifest-sha256 "$p
 fi
 test ! -e "$base/rejected"
 ```
+
+### 隔离任务的 cgroup v2
+
+`task start --isolate` 和 MCP 执行使用宿主的 `RESOURCES_MODE=require`。
+启动器在 guest 执行用户命令前核对实际额度、启动器和 guest 的 cgroup 归属。
+默认额度为 1 核、512 MiB 和 128 个 PID（包含线程）。
+宿主启动环境可以通过 `CAPBOX_TASK_HOST_CPU_MAX`、`CAPBOX_TASK_HOST_MEMORY_MAX`、
+`CAPBOX_TASK_HOST_PIDS_MAX` 调整额度。`CAPBOX_TASK_HOST_SWAP_MAX` 单独设置 swap，
+`0` 禁用 swap，留空时沿用上级 cgroup 的限制。内存和 swap 额度按内核页向下取整。
+项目配置和 MCP 调用参数不提供这些宿主设置。
+
+默认在调用进程的 cgroup 的父级下为每个任务创建独立子组。宿主也可以通过
+`CAPBOX_TASK_HOST_CGROUP_ROOT` 提供已委派的父组。父组必须已经启用
+`cpu memory pids`，并允许创建子组、迁移进程、写控制文件和执行 `cgroup.kill`。
+systemd 可以负责提供委派。硬限制证据来自内核读回和进程归属核验。
+`doctor --agent` 执行相同检查。`task status` 保存核验值和清理结果，审计时间线用
+`task_id` 关联 `requested`、`configured`、`entered`、`verified` 与 `cleanup`。
+缺少委派时，任务在工作区复制前失败。
+
+| 阶段 | 边界 |
+| --- | --- |
+| 工作区准备 | 在任务 cgroup 外。源工作区复制上限为 100 MiB、10,000 个文件。Git 清单输出上限为 8 MiB。模板、基础 rootfs 和 overlay 上层的合计复制上限为 4 GiB、200,000 个条目。 |
+| 启动、guest 和后代 | 同一任务 cgroup 覆盖 CLI、启动探针、Bubblewrap、guest 和后代。隔离任务固定离线，因此没有任务代理进程。 |
+| 产物 | guest 的单个常规文件有 100 MiB 上限。监督器检查可写工作区，超过 256 MiB 或 20,000 个条目时终止任务，清理进程后再次检查并尝试移除超限副本。检查之间的峰值和打开后已删除的文件不受聚合检查约束。需要硬磁盘总额的宿主应为任务状态所在文件系统配置独立配额。 |
+| 日志 | 宿主监督器在任务 cgroup 外截断 stdout/stderr，每路默认保留 8 MiB，允许配置到 64 MiB。长期保留的任务和审计日志占用宿主存储。 |
+
+`cleanup=removed` 表示内核报告任务 cgroup 已无进程，且子组已移除。
+清理失败会使任务返回 125，保留证据供宿主确认。`lost` 任务可能需要宿主清理。

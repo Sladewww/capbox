@@ -6,6 +6,7 @@
 """
 import argparse
 import base64
+from contextlib import contextmanager
 import ctypes
 import errno
 import fcntl
@@ -17,6 +18,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import resource
 import selectors
 import shutil
 import signal
@@ -25,6 +27,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -33,6 +36,7 @@ _LIB_DIR = str(Path(__file__).resolve().parent)
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import i18n
+import task_cgroup
 from audit_store import TASK_ID, policy_summary, task_event
 
 SCHEMA = 'capbox.agent.v1'
@@ -41,8 +45,25 @@ TERMINAL = FINISHED | {'lost'}
 MAX_STREAM = 8 * 1024 * 1024
 MAX_FILES = 10000
 MAX_COPY = 100 * 1024 * 1024
+MAX_PREP_ENTRIES = 200_000
+MAX_PREP_BYTES = 4 * 1024**3
+MAX_ARTIFACT_BYTES = 256 * 1024**2
+MAX_INPUT_PATHS = 256
 EXCLUDED = {'.git', '.capbox', '.env', '.secrets', '.ssh', '.aws', '.azure',
             '.gnupg', '.kube', '.docker'}
+# 宿主模板拥有这些值。项目配置和请求均不能替换它们。
+AGENT_POLICY = {
+    'SECURITY_PROFILE': 'strict', 'NET': 'none', 'NET_ALLOW': '', 'PROXY': '',
+    'IDMAP': 'off', 'UID_MAP': '', 'GID_MAP': '', 'SETGROUPS': '',
+    'EXEC_UID': '0', 'EXEC_GID': '0', 'LANDLOCK': 'on', 'ROOTFS_RO': '1',
+    'FS_BINDS': '', 'OVERLAY': 'off', 'DISK_MAX': '',
+    'ALLOW_OLD_BWRAP': '0', 'BWRAP': '/usr/bin/bwrap',
+}
+AGENT_RAW_CONTROLS = (
+    'BWRAP_EXTRA', 'BWRAP_NO_PIDNS', 'BWRAP_NO_DIE_WITH_PARENT',
+    'EXEC_UID_OVERRIDE', 'EXEC_GID_OVERRIDE', 'OCI_ENV_FILE',
+    'TASK_WORKSPACE_READONLY', 'TASK_WRITE_DIRS',
+)
 
 
 class AgentError(Exception):
@@ -116,17 +137,101 @@ def context():
             'allow_once': env.get('CAPBOX_AGENT_ALLOW_ONCE') == '1'}
 
 
+def locked_policy():
+    return {**AGENT_POLICY, **task_cgroup.host_request(), 'RESOURCES_MODE': 'require'}
+
+
+def trusted_policy_bytes(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
+            raise ValueError()
+        raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        return raw
+
+
+def host_credential_grants(ctx):
+    if ctx['config']['NET'] != 'restricted':
+        return []
+    path = Path(ctx['lib']).resolve().parent / 'agent-credentials.allow'
+    try:
+        names = trusted_policy_bytes(path).decode('ascii').split()
+        if any(not re.fullmatch(r'(service|custom):[a-zA-Z0-9][a-zA-Z0-9_.-]*', name)
+               for name in names):
+            raise ValueError()
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='agent-credentials.allow'), 2) from exc
+    return sorted(set(names))
+
+
+def host_network_policy(lib, args, ctx):
+    mode = getattr(args, 'net', None) or 'none'
+    requested = getattr(args, 'net_allow', None)
+    if mode == 'none' and requested is None:
+        return {'NET': 'none', 'NET_ALLOW': ''}
+    if mode != 'restricted':
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='NET'), 2)
+
+    policy = lib.parent / 'agent-network.allow'
+    module = net_module(ctx)
+    try:
+        allowed = module.parse_allowlist(trusted_policy_bytes(policy).decode('ascii'))
+        if not module.allowlist_subset(allowed, allowed):
+            raise ValueError()
+    except (OSError, ValueError) as exc:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='NET'), 2) from exc
+    rules = allowed if requested is None else module.parse_allowlist(requested)
+    if not rules or not module.allowlist_subset(rules, allowed):
+        raise AgentError(i18n.t('task.net_allow_outside_host'), 2)
+    return {'NET': mode, 'NET_ALLOW': ','.join(rules)}
+
+
+def locked_context(ctx, args):
+    workspace = Path(ctx['workspace'])
+    cli = Path(ctx['cli']).resolve()
+    lib = Path(ctx['lib']).resolve()
+    if (cli.is_relative_to(workspace) or lib.is_relative_to(workspace)
+            or lib != cli.parent.parent / 'lib'):
+        raise AgentError(i18n.t('task.agent_external_template'), 2)
+    if ctx['config'].get('DISTRO') not in ('alpine', 'ubuntu'):
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='DISTRO'), 2)
+    if getattr(args, 'profile', None) not in (None, 'strict'):
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='SECURITY_PROFILE'), 2)
+    policy = {**locked_policy(), **host_network_policy(lib, args, ctx)}
+    config = ctx['config']
+    for key in ('FS_BINDS', 'UID_MAP', 'GID_MAP', 'SETGROUPS', 'DISK_MAX', 'ALLOW_OLD_BWRAP'):
+        if config.get(key) not in (None, '', AGENT_POLICY[key]):
+            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    if ctx['allow_once']:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='ALLOW_OLD_BWRAP'), 2)
+    configured_bwrap = config.get('BWRAP', '')
+    if configured_bwrap and Path(configured_bwrap).resolve() != Path(AGENT_POLICY['BWRAP']).resolve():
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='BWRAP'), 2)
+    for key in AGENT_RAW_CONTROLS:
+        neutral = ('', '0') if key in ('BWRAP_NO_PIDNS', 'BWRAP_NO_DIE_WITH_PARENT') else ('',)
+        if os.environ.get('CAPBOX_' + key, '') not in neutral:
+            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    return dict(ctx, locked=True, config={**config, **policy},
+                sources={**ctx['sources'], **dict.fromkeys(policy, 'host'),
+                         **({'NET_ALLOW': 'command'} if getattr(args, 'net_allow', None) is not None else {})})
+
+
 def effective(ctx, args):
     cfg, sources = ctx['config'].copy(), ctx['sources'].copy()
     for key in ('NET', 'SECURITY_PROFILE'):
         attr = 'net' if key == 'NET' else 'profile'
         value = getattr(args, attr, None)
-        if value is not None:
+        if value is not None and not ctx.get('locked'):
             cfg[key], sources[key] = value, 'command'
     if cfg.get('NET') == 'host':
         cfg['NET'] = 'open'
     requested = getattr(args, 'net_allow', None)
-    if requested is not None:
+    if requested is not None and not ctx.get('locked'):
         if cfg.get('NET') != 'restricted':
             raise AgentError(i18n.t('task.net_allow_requires_restricted'), 2)
         module = net_module(ctx)
@@ -142,13 +247,15 @@ def effective(ctx, args):
               'MEMORY_MAX', 'CPU_MAX', 'PIDS_MAX', 'DISK_MAX', 'RESOURCES_MODE',
               'FS_HIDE', 'FS_BINDS', 'OVERLAY']
     values = {k: {'value': cfg.get(k, ''), 'source': sources.get(k, 'default')} for k in fields}
+    if ctx.get('locked'):
+        values['SWAP_MAX'] = {'value': cfg['SWAP_MAX'], 'source': 'host'}
     values['ROOTFS_RO'] = {'value': ro, 'source': 'profile' if ro != cfg.get('ROOTFS_RO') else sources.get('ROOTFS_RO', 'default')}
     values['LANDLOCK'] = {'value': cfg.get('LANDLOCK') or ('on' if profile == 'strict' else 'off'),
                           'source': sources.get('LANDLOCK', 'default') if cfg.get('LANDLOCK') else 'profile'}
     return {'kind': 'policy', 'values': values,
             'scope': i18n.t('policy.scope_new_oneshot'),
             'limits': i18n.t('policy.limits_checked_at_exec'),
-            'notes': [i18n.t('policy.note_net_none_pkg'),
+            'notes': [] if ctx.get('locked') else [i18n.t('policy.note_net_none_pkg'),
                       i18n.t('policy.note_idmap_auto_on'),
                       i18n.t('policy.note_readonly_rootfs_overlay')]}
 
@@ -206,8 +313,11 @@ def clean_environment(ctx):
             continue
         env['CAPBOX_' + k] = value
     # 显式 cgroup 委托在现有启动器中不走 config.env。
-    if 'CAPBOX_CGROUP_ROOT' in os.environ:
+    if 'CAPBOX_CGROUP_ROOT' in os.environ and not ctx.get('locked'):
         env['CAPBOX_CGROUP_ROOT'] = os.environ['CAPBOX_CGROUP_ROOT']
+    if ctx.get('locked'):
+        env['CAPBOX_AGENT_LOCKED'] = '1'
+        env['PATH'] = '/usr/bin:/bin'
     return env
 
 
@@ -224,30 +334,123 @@ def excluded(name):
                for part in PurePosixPath(name).parts)
 
 
-def read_regular(root, name):
-    """相对钉住的目录逐级打开每一段，从不跟随链接。"""
+def path_signature(st):
+    return st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+@contextmanager
+def open_relative(root_fd, name, flags):
     parts = safe_relative(name).parts
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.dup(root_fd)
     try:
         for part in parts[:-1]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = child
-        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        with os.fdopen(fd, 'rb') as f:
-            before = os.fstat(f.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-                raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
-            if before.st_size > MAX_COPY:
-                raise AgentError(i18n.t('task.file_exceeds_work_copy_limit', name=name))
-            data = f.read(MAX_COPY + 1)
-            after = os.fstat(f.fileno())
-            signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-            if len(data) > MAX_COPY or signature(before) != signature(after):
-                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
-            return data, before
+        fd = os.open(parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            yield fd
+        finally:
+            os.close(fd)
     finally:
         os.close(directory)
+
+
+def relative_stat(root_fd, name):
+    # O_PATH pins the entry without opening a FIFO, device or symlink target.
+    with open_relative(root_fd, name, os.O_PATH) as fd:
+        return os.fstat(fd)
+
+
+def open_workspace_root(source):
+    # source was canonicalized at submission. Do not follow later replacements
+    # of either the workspace itself or any of its ancestors.
+    system_root = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with open_relative(system_root, source.relative_to('/').as_posix(),
+                           os.O_RDONLY | os.O_DIRECTORY) as fd:
+            return os.dup(fd)
+    finally:
+        os.close(system_root)
+
+
+def read_pinned_regular(fd, name):
+    before = os.fstat(fd)
+    if stat.S_ISLNK(before.st_mode):
+        raise OSError(errno.ELOOP, os.strerror(errno.ELOOP), name)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
+    if before.st_size > MAX_COPY:
+        raise AgentError(i18n.t('task.file_exceeds_work_copy_limit', name=name))
+    with open(f'/proc/self/fd/{fd}', 'rb') as stream:
+        data = stream.read(MAX_COPY + 1)
+    after = os.fstat(fd)
+    if len(data) > MAX_COPY or path_signature(before) != path_signature(after):
+        raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+    return data, before
+
+
+def read_regular(root, name):
+    """相对钉住的目录逐级打开每一段，从不跟随链接。"""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with open_relative(root_fd, name, os.O_PATH) as fd:
+            return read_pinned_regular(fd, name)
+    finally:
+        os.close(root_fd)
+
+
+def input_paths(paths):
+    if not isinstance(paths, list) or len(paths) > MAX_INPUT_PATHS:
+        raise AgentError(i18n.t('task.input_invalid_list', limit=MAX_INPUT_PATHS), 2)
+    result = set()
+    for name in paths:
+        if not isinstance(name, str) or re.search(r'[\x00-\x1f\x7f\ud800-\udfff]', name):
+            raise AgentError(i18n.t('task.input_invalid_path'), 2)
+        try:
+            path = safe_relative(name)
+        except AgentError as exc:
+            raise AgentError(i18n.t('task.input_invalid_path'), 2) from exc
+        if excluded(name):
+            raise AgentError(i18n.t('task.input_invalid_path'), 2)
+        result.add(path)
+    return result
+
+
+def host_input_paths(ctx):
+    policy = Path(ctx['lib']).resolve().parent / 'agent-inputs.json'
+    try:
+        data, st = read_regular(policy.parent, policy.name)
+    except FileNotFoundError:
+        return None
+    except (OSError, AgentError) as exc:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2) from exc
+    if st.st_uid not in (0, os.getuid()) or st.st_mode & 0o022 or len(data) > 1024 * 1024:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2)
+    try:
+        return input_paths(json.loads(data))
+    except (ValueError, AgentError, RecursionError) as exc:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2) from exc
+
+
+def within_inputs(path, allowed):
+    return path in allowed or not allowed.isdisjoint(path.parents)
+
+
+def task_inputs(ctx, args):
+    requested = getattr(args, 'input', None)
+    if not args.isolate:
+        if requested is not None:
+            raise AgentError(i18n.t('task.input_requires_isolate'), 2)
+        return None
+    # locked_context has verified that this template is outside the project.
+    allowed = host_input_paths(ctx)
+    if requested is None:
+        return allowed
+    selected = input_paths(requested)
+    if allowed is not None and any(not within_inputs(path, allowed) for path in selected):
+        raise AgentError(i18n.t('task.input_outside_host'), 2)
+    return selected
 
 
 def regular_files(root, *, require_readable=False):
@@ -278,16 +481,32 @@ def regular_files(root, *, require_readable=False):
     return result
 
 
-def git(ctx, args, *, work=None, index=None, data=None):
+def git(ctx, args, *, work=None, index=None, data=None, bounded=False):
     env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'CAPBOX_'))}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_ATTR_NOSYSTEM='1',
                GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+    if ctx.get('locked'):
+        env['PATH'] = '/usr/bin:/bin'
     cmd = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
            '-c', 'core.attributesFile=/dev/null', '-c', 'core.quotePath=true']
     if index:
         cmd += ['--git-dir=' + str(index), '--work-tree=' + str(work)]
     elif work:
         cmd += ['-C', str(work)]
+    if bounded:
+        def cap_listing():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_STREAM, MAX_STREAM))
+
+        with tempfile.TemporaryFile() as stdout:
+            proc = subprocess.run(cmd + args, env=env, stdout=stdout, stderr=subprocess.DEVNULL,
+                                  timeout=30, preexec_fn=cap_listing)
+            if proc.returncode:
+                raise AgentError(i18n.t('task.git_work_copy_failed'))
+            stdout.seek(0)
+            result = stdout.read(MAX_STREAM)
+        if len(result) == MAX_STREAM:
+            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+        return result
     proc = subprocess.run(cmd + args, input=data, env=env, capture_output=True, timeout=30)
     if proc.returncode:
         raise AgentError(i18n.t('task.git_work_copy_failed'))
@@ -302,33 +521,151 @@ def is_git_workspace_root(ctx, source):
     return top == source.resolve()
 
 
+def git_worktree_names(ctx, source):
+    raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+              work=source, bounded=True)
+    names = raw.split(b'\0')
+    if names[-1] == b'':
+        names.pop()
+    if len(names) > MAX_FILES * 2:
+        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+    return sorted(set(names))
+
+
 def list_isolate_names(ctx, source):
     """返回 isolate 视图的相对路径：脏 Git 树或文件系统遍历。"""
     if is_git_workspace_root(ctx, source):
         # 已跟踪工作树文件 + 未跟踪文件，仍遵守 .gitignore。
         # 列出后 CapBox 凭据排除规则仍优先。
-        raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], work=source)
-        names = []
-        for item in raw.split(b'\0'):
-            if not item:
-                continue
-            names.append(item.decode('utf-8', 'strict'))
-        return sorted(set(names)), 'git'
+        return [item.decode('utf-8') for item in git_worktree_names(ctx, source)], 'git'
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_not_git_or_traversable'), 2)
     names = []
+    entries = 0
     for directory, dirs, files in os.walk(source, followlinks=False):
+        entries += len(dirs) + len(files)
+        if entries > MAX_PREP_ENTRIES:
+            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
         relative = Path(directory).relative_to(source)
         dirs[:] = [d for d in dirs if not excluded((relative / d).as_posix())]
         for name in files:
             rel = (relative / name).as_posix() if str(relative) != '.' else name
             if excluded(rel):
                 continue
+            if len(names) >= MAX_FILES:
+                raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
             names.append(rel)
     if not names and not any(source.iterdir()):
         # 空项目仍是合法的合成基线。
         return [], 'fs'
     return sorted(set(names)), 'fs'
+
+
+def walk_selected_files(root_fd, path, budget):
+    with open_relative(root_fd, path, os.O_RDONLY | os.O_DIRECTORY) as fd:
+        with os.scandir(fd) as children:
+            names = []
+            for child in children:
+                budget.list_entries(path, (child.name,))
+                names.append(child.name)
+        for child in sorted(names):
+            name = f'{path}/{child}'
+            if excluded(name):
+                continue
+            info = os.stat(child, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                yield from walk_selected_files(root_fd, name, budget)
+            else:
+                yield name
+
+
+def record_input(view, baseline, name, data, info, total):
+    total += len(data)
+    if total > MAX_COPY or len(baseline) >= MAX_FILES:
+        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+    dst = view / name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with dst.open('xb') as outgoing:
+        outgoing.write(data)
+    executable = bool(info.st_mode & 0o111)
+    dst.chmod(0o755 if executable else 0o644)
+    baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'executable': executable}
+    return total
+
+
+def copy_selected_inputs(ctx, source, view, selected):
+    baseline, total = {}, 0
+    if not selected:
+        return baseline, 'empty'
+    name = str(min(selected))
+    root_fd = open_workspace_root(source)
+    try:
+        initial = {}
+        for path in sorted(selected):
+            name = str(path)
+            info = relative_stat(root_fd, name)
+            initial[name] = info
+            if stat.S_ISDIR(info.st_mode):
+                (view / path).mkdir(parents=True, exist_ok=True)
+            elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise AgentError(i18n.t('task.input_invalid_entry', name=repr(name)), 2)
+
+        def fs_candidates():
+            budget = PreparationBudget()
+            for path in sorted(selected):
+                if not selected.isdisjoint(path.parents):
+                    continue
+                if stat.S_ISDIR(initial[str(path)].st_mode):
+                    yield from walk_selected_files(root_fd, str(path), budget)
+                else:
+                    yield str(path)
+
+        git_source = is_git_workspace_root(ctx, source)
+        if not git_source:
+            try:
+                relative_stat(root_fd, '.git')
+            except FileNotFoundError:
+                pass
+            else:
+                # Git 元数据不可用时拒绝输入，避免绕过原本适用的忽略规则。
+                raise AgentError(i18n.t('task.git_work_copy_failed'))
+        candidates = (map(os.fsdecode, git_worktree_names(ctx, source))
+                      if git_source else fs_candidates())
+        for name in candidates:
+            path = safe_relative(name)
+            if excluded(name) or not within_inputs(path, selected):
+                continue
+            try:
+                listed = relative_stat(root_fd, name)
+            except FileNotFoundError:
+                if git_source and name not in initial:
+                    continue  # 已跟踪路径可能在工作树里已删除。
+                raise
+            with open_relative(root_fd, name, os.O_PATH) as fd:
+                if path_signature(os.fstat(fd)) != path_signature(listed):
+                    raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+                data, info = read_pinned_regular(fd, name)
+            if path_signature(relative_stat(root_fd, name)) != path_signature(info):
+                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+            total = record_input(view, baseline, name, data, info, total)
+        for name, info in initial.items():
+            if path_signature(relative_stat(root_fd, name)) != path_signature(info):
+                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+            if stat.S_ISREG(info.st_mode) and name not in baseline:
+                raise AgentError(i18n.t('task.input_not_in_view', name=repr(name)), 2)
+        current_fd = open_workspace_root(source)
+        try:
+            current_root = os.fstat(current_fd)
+        finally:
+            os.close(current_fd)
+        pinned_root = os.fstat(root_fd)
+        if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
+            raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace'))
+        return baseline, 'git' if git_source else 'fs'
+    except OSError as exc:
+        raise AgentError(i18n.t('task.input_invalid_entry', name=repr(name)), 2) from exc
+    finally:
+        os.close(root_fd)
 
 
 def is_overlay_whiteout(st):
@@ -352,12 +689,73 @@ def remove_overlay_target(path):
         path.unlink(missing_ok=True)
 
 
-def merge_overlay_upper(upper, dest_rootfs):
+class PreparationBudget:
+    def __init__(self):
+        self.entries = 0
+        self.bytes_left = MAX_PREP_BYTES
+
+    def list_entries(self, _directory, names):
+        self.entries += len(names)
+        if self.entries > MAX_PREP_ENTRIES:
+            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+        return ()
+
+    def copy(self, source, destination):
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as incoming:
+            st = os.fstat(incoming.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_size > self.bytes_left:
+                raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+            with open(destination, 'xb') as outgoing:
+                while chunk := incoming.read(min(1024 * 1024, self.bytes_left + 1)):
+                    self.bytes_left -= len(chunk)
+                    if self.bytes_left < 0:
+                        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+                    outgoing.write(chunk)
+        shutil.copystat(source, destination, follow_symlinks=False)
+
+
+def check_artifact_budget(workspace):
+    """Bound retained workspace growth. Use descriptor-relative, no-follow traversal."""
+    entries, size = 0, 0
+
+    def scan(directory, top=False):
+        nonlocal entries, size
+        with os.scandir(directory) as files:
+            for item in files:
+                if top and item.name == '.capbox':  # launcher binds this subtree read-only
+                    continue
+                entries += 1
+                try:
+                    st = item.stat(follow_symlinks=False)
+                    size += max(st.st_size, st.st_blocks * 512)
+                    if entries > MAX_FILES * 2 or size > MAX_ARTIFACT_BYTES:
+                        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+                    if stat.S_ISDIR(st.st_mode):
+                        fd = os.open(item.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                     dir_fd=directory)
+                        try:
+                            scan(fd)
+                        finally:
+                            os.close(fd)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue  # concurrently removed or replaced
+
+    fd = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        scan(fd, top=True)
+    finally:
+        os.close(fd)
+
+
+def merge_overlay_upper(upper, dest_rootfs, budget=None):
     """Apply the supported copy-up and whiteout entries to a private rootfs."""
     if upper.is_symlink() or not upper.is_dir():
         raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
 
     for directory, dirs, files in os.walk(upper, followlinks=False):
+        if budget is not None:
+            budget.list_entries(directory, dirs + files)
         source = Path(directory)
         relative = source.relative_to(upper)
         target = dest_rootfs / relative
@@ -388,7 +786,7 @@ def merge_overlay_upper(upper, dest_rootfs):
             elif stat.S_ISREG(st.st_mode) and overlay_attribute(src, 'metacopy') is None:
                 dst = target / name
                 remove_overlay_target(dst)
-                shutil.copy2(src, dst)
+                (budget.copy if budget else shutil.copy2)(src, dst)
             elif not stat.S_ISDIR(st.st_mode) or name.startswith('.wh.'):
                 raise AgentError(i18n.t('task.isolate_overlay_upper_special', rel=rel))
 
@@ -427,8 +825,10 @@ def writable_directories(ctx, args):
     return sorted(str(path) for path in paths if paths.isdisjoint(path.parents))
 
 
-def isolate(ctx, job):
-    source = Path(ctx['workspace']).resolve()
+def isolate(ctx, job, selected=None):
+    source = Path(ctx['workspace'])
+    if selected is None:
+        source = source.resolve()
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_needs_readable_workspace'), 2)
     upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
@@ -436,15 +836,17 @@ def isolate(ctx, job):
         raise AgentError(i18n.t('task.isolate_rejects_symlink_overlay_upper'))
     if upper.exists() and not upper.is_dir():
         raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
-    try:
-        names, mode = list_isolate_names(ctx, source)
-    except AgentError:
-        raise
-    except OSError as exc:
-        raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace')) from exc
     view = job / 'workspace'
     view.mkdir(mode=0o755)  # 外层 job 仍为 0700；映射后的非 root 用户可读该视图
     baseline, skipped, total = {}, [], 0
+    names = []
+    if selected is not None:
+        baseline, mode = copy_selected_inputs(ctx, source, view, selected)
+    else:
+        try:
+            names, mode = list_isolate_names(ctx, source)
+        except OSError as exc:
+            raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace')) from exc
     for name in names:
         relative = safe_relative(name)
         if excluded(name):
@@ -457,16 +859,7 @@ def isolate(ctx, job):
             data, st = read_regular(source, name)
         except OSError as exc:
             raise AgentError(i18n.t('task.source_workspace_symlink_or_unreadable', name=name)) from exc
-        total += st.st_size
-        if total > MAX_COPY or len(baseline) >= MAX_FILES:
-            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
-        dst = view / relative
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        with dst.open('xb') as outgoing:
-            outgoing.write(data)
-        dst.chmod(0o755 if st.st_mode & 0o111 else 0o644)
-        baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(),
-                          'executable': bool(st.st_mode & 0o111)}
+        total = record_input(view, baseline, name, data, st, total)
     # 审阅元数据在 guest 视图外。从不使用 guest 的 .git/config 跑 Git。
     # 非 Git 与脏 Git 都给合成基线，保证 task diff 可用。
     index = job / 'review.git'
@@ -478,14 +871,17 @@ def isolate(ctx, job):
     state = view / '.capbox'
     state.mkdir()
     (state / 'bin').mkdir()
-    shutil.copy2(ctx['cli'], state / 'bin/capbox')
-    shutil.copytree(ctx['lib'], state / 'lib', symlinks=False)
+    budget = PreparationBudget()
+    budget.copy(ctx['cli'], state / 'bin/capbox')
+    shutil.copytree(ctx['lib'], state / 'lib', symlinks=True,
+                    copy_function=budget.copy, ignore=budget.list_entries)
     (state / 'os').mkdir()
     # 私有独立 rootfs：不硬链到线上可变镜像 / upper。
     dest_rootfs = state / 'os' / ctx['config']['DISTRO']
-    shutil.copytree(ctx['rootfs'], dest_rootfs, symlinks=True)
+    shutil.copytree(ctx['rootfs'], dest_rootfs, symlinks=True,
+                    copy_function=budget.copy, ignore=budget.list_entries)
     if upper.exists() and upper.is_dir() and any(upper.iterdir()):
-        merge_overlay_upper(upper, dest_rootfs)
+        merge_overlay_upper(upper, dest_rootfs, budget)
     ctx = dict(ctx, workspace=str(view), rootfs=str(dest_rootfs))
     return ctx, skipped
 
@@ -503,6 +899,10 @@ def state_of(job):
     state = read_json(job / 'state.json')
     if state['status'] not in TERMINAL and not alive(state.get('worker')):
         state = dict(state, status='lost', exit_code=125)
+        if 'protection' in state:
+            state['protection'] = {**state['protection'], **protection_outcome(job)}
+        if state.get('resources', {}).get('cgroup') and 'cleanup' not in state['resources']:
+            state['resources']['cleanup'] = 'unconfirmed'
     return state
 
 
@@ -528,6 +928,22 @@ def start_task(ctx, root, args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise AgentError(i18n.t('task.start_missing_command'), 2)
+    requested = None
+    if args.isolate:
+        if os.getuid() == 0 or os.geteuid() == 0:
+            raise AgentError(i18n.t('task.agent_root_uid'), 2)
+        requested = effective(ctx, argparse.Namespace())['values']
+        for key, name in (('NET', 'net'), ('SECURITY_PROFILE', 'profile'), ('NET_ALLOW', 'net_allow')):
+            if getattr(args, name, None) is not None:
+                requested[key] = {'value': getattr(args, name), 'source': 'command'}
+        ctx = locked_context(ctx, args)
+    selected = task_inputs(ctx, args)
+    readonly_source = 'command'
+    if selected is not None:
+        if not args.workspace_readonly and getattr(args, 'input', None) is None:
+            readonly_source = 'host'
+        args.workspace_readonly = True
+    grants = host_credential_grants(ctx) if ctx.get('locked') else []
     write_dirs = writable_directories(ctx, args)
     policy = effective(ctx, args)
     if not Path(ctx['rootfs']).is_dir():
@@ -541,27 +957,60 @@ def start_task(ctx, root, args):
     state = {'task_id': task_id, 'status': 'preparing', 'created_at': time.time(),
              'exit_code': None, 'worker': identity(os.getpid()), 'isolated': args.isolate,
              'policy': policy, 'output_limit_per_stream': args.max_output_bytes}
+    if selected is not None:
+        state['input_paths'] = sorted(map(str, selected))
     if write_dirs is not None:
         state['policy']['values'].update({
-            'WORKSPACE_READONLY': {'value': '1', 'source': 'command'},
+            'WORKSPACE_READONLY': {'value': '1', 'source': readonly_source},
             'WRITE_DIRS': {'value': '\n'.join(write_dirs), 'source': 'command'},
-            'IDMAP': {'value': 'off', 'source': 'profile'},
         })
+    if requested is not None:
+        if write_dirs is not None:
+            requested.update({key: state['policy']['values'][key]
+                              for key in ('WORKSPACE_READONLY', 'WRITE_DIRS')})
+        state['protection'] = {'status': 'pending', 'requested': policy_summary(requested)}
     write_json(job / 'state.json', state)
     config = ctx['config']
-    audit_path = os.environ['CAPBOX_AGENT_AUDIT_PATH']
+    audit_path = None if getattr(args, 'diagnostic', False) else os.environ['CAPBOX_AGENT_AUDIT_PATH']
     audit_command = os.environ.get('CAPBOX_AGENT_AUDIT_CMD')
     submission = {'policy': policy_summary(state['policy']['values']), 'isolated': args.isolate}
     if audit_command:
         submission['cmd'] = audit_command
-    task_event(audit_path, config, state, 'start', **submission)
+    if audit_path:
+        task_event(audit_path, config, state, 'start', **submission)
     origin = ctx['workspace']
-    launched = None
+    launched = leaf = None
+    resource_check = None
     try:
+        if args.isolate:
+            request = {key: config[key] for key in task_cgroup.DEFAULTS}
+            # Only normalized numeric controls enter the audit timeline.
+            state['resources'] = {'mode': 'require'}
+            resource_check = 'cgroup_request'
+            expected = task_cgroup.limits(request)
+            resource_observation(audit_path, config, state, 'requested', limits=expected)
+            resource_check = 'cgroup_delegation'
+            leaf = task_cgroup.configure(task_cgroup.cgroup_parent(), task_id)
+            state['resources']['cgroup'] = str(leaf)
+            write_json(job / 'state.json', state)
+            resource_check = 'cgroup_limits'
+            actual = task_cgroup.write_limits(leaf, expected)
+            state['resources']['configured'] = actual
+            write_json(job / 'state.json', state)
+            resource_observation(audit_path, config, state, 'configured', limits=actual)
+            resource_check = None
         skipped = []
         if args.isolate:
-            ctx, skipped = isolate(ctx, job)
+            ctx, skipped = isolate(ctx, job, selected)
         env = clean_environment(ctx)
+        if leaf is not None:
+            env['CAPBOX_TASK_CGROUP'] = str(leaf)
+            env['CAPBOX_TASK_CGROUP_LIMITS'] = json.dumps(actual)
+
+
+        if grants:
+            env['CAPBOX_AGENT_CREDENTIAL_GRANTS'] = ','.join(grants)
+            env['CAPBOX_CRED_PRIVATE'] = str(root.parent)
         if write_dirs is not None:
             for name in args.write_dir:
                 (Path(ctx['workspace']) / name).mkdir(parents=True, exist_ok=True)
@@ -572,16 +1021,16 @@ def start_task(ctx, root, args):
         env['CAPBOX_NET_SESSION'] = 'task-' + task_id
         env['CAPBOX_TASK_LAUNCH_STATUS'] = str(job / 'launch.jsonl')
         env['CAPBOX_TASK_AUDIT_ID'] = task_id
-        env['CAPBOX_TASK_AUDIT_PATH'] = audit_path
+        env['CAPBOX_TASK_AUDIT_PATH'] = audit_path or str(job / 'logs/audit.jsonl')
         argv = [ctx['cli'], '--root', ctx['workspace']]
         if ctx['allow_once']:
             argv += ['--allow-old-bwrap']
         # 截止时间由本控制器掌握。GNU timeout 会另建进程组，
         # 否则取消 CLI 进程组时它会漏网。
         argv += ['exec', '--timeout', '0', '--cwd', args.cwd]
-        if args.net:
+        if args.net and not ctx.get('locked'):
             argv += ['--net', args.net]
-        if args.profile:
+        if args.profile and not ctx.get('locked'):
             argv += ['--profile', args.profile]
         argv += ['--'] + command
         write_json(job / 'plan.json', {'argv': argv, 'env': env, 'timeout': args.timeout,
@@ -604,20 +1053,44 @@ def start_task(ctx, root, args):
         while time.monotonic() < deadline:
             observed = read_json(job / 'state.json')
             if observed['status'] != 'preparing':
-                emit(public_state(job))
-                return 0
+                return job
             if worker.poll() is not None:
                 raise AgentError(i18n.t('task.supervisor_did_not_start'))
             time.sleep(0.02)
         raise AgentError(i18n.t('task.supervisor_start_timed_out'))
-    except BaseException:
+    except BaseException as exc:
         if launched is not None and launched.poll() is None:
             launched.kill()
             launched.wait()
         state.update(status='failed', exit_code=1, finished_at=time.time(), failure_reason='launch_failed')
-        task_event(audit_path, config, state, 'fail')
+        if 'protection' in state:
+            state['protection'].update(status='failed', check=resource_check or 'prepare')
+        if resource_check:
+            resource_observation(audit_path, config, state, 'failed', check=resource_check)
+        if leaf is not None:
+            record_resource_cleanup(leaf, audit_path, config, state)
+        if args.isolate and launched is None and (job / 'workspace').exists():
+            shutil.rmtree(job / 'workspace', ignore_errors=True)
+        if audit_path:
+            task_event(audit_path, config, state, 'fail')
         write_json(job / 'state.json', state)
+        if resource_check and isinstance(exc, (OSError, ValueError)):
+            if getattr(args, 'diagnostic', False):
+                return job
+            raise AgentError(i18n.t('launch.agent_protection_failed', check=resource_check), 5) from exc
         raise
+
+
+def resource_observation(audit_path, config, state, phase, **fields):
+    if audit_path:
+        task_event(audit_path, config, state, 'observed',
+                   observation={'kind': 'resources', 'phase': phase, **fields})
+
+
+def record_resource_cleanup(leaf, audit_path, config, state):
+    result = task_cgroup.cleanup(leaf)
+    state['resources']['cleanup'] = result
+    resource_observation(audit_path, config, state, 'cleanup', result=result)
 
 
 def pdeathsig(parent):
@@ -644,6 +1117,22 @@ def launch_outcome(job, code):
         return None
 
 
+def protection_outcome(job):
+    try:
+        with (job / 'launch.jsonl').open() as stream:
+            for line in stream:
+                if not line.startswith('{'):
+                    continue
+                record = json.loads(line)
+                if record.get('phase') == 'protection_verified':
+                    return {'status': 'verified', 'checks': record['checks']}
+                if record.get('phase') == 'protection_failed':
+                    return {'status': 'failed', 'check': record['check']}
+    except (OSError, ValueError, KeyError):
+        pass
+    return {'status': 'failed', 'check': 'launch'}
+
+
 def worker(root, task_id):
     job = job_path(root, task_id)
     lock = os.open(job / 'worker.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -658,35 +1147,66 @@ def worker(root, task_id):
         task_event(audit_path, plan['config'], state, 'start')
     write_json(job / 'state.json', state)
     proc, streams = None, {}
+    leaf = Path(state['resources']['cgroup']) if 'resources' in state else None
+
+    parent = os.getpid()
+
+    def child_setup():
+        pdeathsig(parent)
+        if leaf is not None:
+            task_cgroup.join(leaf, state['resources']['configured'])
+            resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_COPY, MAX_COPY))
+
     dropped = {'stdout': 0, 'stderr': 0}
     reason, terminating_at = None, None
     start = time.monotonic()
+    next_artifact_check = start
+    selector = None
     try:
-        parent = os.getpid()
         proc = subprocess.Popen(plan['argv'], env=plan['env'], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True, close_fds=True,
-                                preexec_fn=lambda: pdeathsig(parent))
+                                preexec_fn=child_setup)
+        if leaf is not None:
+            resource_observation(audit_path, plan['config'], state, 'entered', pid=proc.pid)
         selector = selectors.DefaultSelector()
         for stream, pipe in (('stdout', proc.stdout), ('stderr', proc.stderr)):
             fd = os.open(job / (stream + '.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             streams[stream] = [os.fdopen(fd, 'wb', buffering=0), 0]
             os.set_blocking(pipe.fileno(), False)
             selector.register(pipe, selectors.EVENT_READ, stream)
+        group_stopped = False
         while selector.get_map() or proc.poll() is None:
             now = time.monotonic()
-            if reason is None:
+            if reason is None and (leaf is None or proc.poll() is None):
                 if (job / 'cancel').exists():
                     reason = 'cancelled'
                 elif plan['timeout'] and now - start >= plan['timeout']:
                     reason = 'timed_out'
+                elif leaf is not None and now >= next_artifact_check:
+                    next_artifact_check = now + 1
+                    try:
+                        check_artifact_budget(plan['workspace'])
+                    except (AgentError, OSError, RecursionError):
+                        reason = 'artifact_limit'
                 if reason:
                     terminating_at = now
                     try:
                         os.killpg(proc.pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass
-            if terminating_at and now - terminating_at > 1:
+            if leaf is not None and (reason or proc.poll() is not None):
+                if terminating_at is None:
+                    terminating_at = now
+                if not group_stopped:
+                    try:
+                        task_cgroup.kill(leaf)
+                        group_stopped = True
+                    except OSError:
+                        pass  # Cleanup verifies and reports if the cgroup stays populated.
+                if now - terminating_at > 3:
+                    break
+            elif terminating_at and now - terminating_at > 1:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -703,15 +1223,21 @@ def worker(root, task_id):
                 output.write(data[:keep])
                 streams[stream][1] += keep
                 dropped[stream] += len(data) - keep
-        code = proc.wait()
+        code = proc.poll()
+        if code is None:
+            code = -signal.SIGKILL
         code = 128 - code if code < 0 else code
         if reason == 'cancelled':
             code = 143
         elif reason == 'timed_out':
             code = 124
-        state.update(status=reason or ('succeeded' if code == 0 else 'failed'), exit_code=code)
+        elif reason == 'artifact_limit':
+            code = 125
+        terminal = reason if reason in ('cancelled', 'timed_out') else ('succeeded' if code == 0 else 'failed')
+        state.update(status=terminal, exit_code=code)
         if reason:
-            state['failure_reason'] = {'cancelled': 'cancelled', 'timed_out': 'execution_timeout'}[reason]
+            state['failure_reason'] = {'cancelled': 'cancelled', 'timed_out': 'execution_timeout',
+                                       'artifact_limit': 'artifact_limit'}[reason]
         elif code:
             outcome = launch_outcome(job, code)
             if outcome:
@@ -722,13 +1248,53 @@ def worker(root, task_id):
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            proc.wait()
+            if leaf is None:
+                proc.wait()
         state.update(status='failed', exit_code=125, error=type(exc).__name__)
         if proc is None:
             state['failure_reason'] = 'launch_failed'
     finally:
+        if selector is not None:
+            selector.close()
+        if proc is not None:
+            proc.stdout.close()
+            proc.stderr.close()
         for output, _size in streams.values():
             output.close()
+        if 'protection' in state:
+            state['protection'].update(protection_outcome(job))
+            if proc is None and leaf is not None:
+                state['protection']['check'] = 'cgroup_entry_or_exec'
+                resource_observation(audit_path, plan['config'], state, 'failed',
+                                     check='cgroup_entry_or_exec')
+            if state['protection']['status'] == 'verified':
+                evidence = state['protection']['checks']['cgroup']
+                state['resources']['verified'] = evidence
+                resource_observation(audit_path, plan['config'], state, 'verified', **evidence)
+                enforced = locked_policy().keys() | {'WORKSPACE_READONLY', 'WRITE_DIRS'}
+                state['protection']['effective'] = policy_summary(
+                    {key: value for key, value in state['policy']['values'].items() if key in enforced})
+            elif not reason:
+                check = state['protection'].get('check', '')
+                if proc is not None and check.startswith('cgroup_'):
+                    resource_observation(audit_path, plan['config'], state, 'failed', check=check)
+                if state['exit_code'] == 0:
+                    state.update(status='failed', exit_code=5)
+                state['failure_reason'] = 'launch_failed'
+        if leaf is not None:
+            record_resource_cleanup(leaf, audit_path, plan['config'], state)
+            if proc is not None:
+                proc.poll()
+            if state['resources']['cleanup'] == 'removed':
+                shutil.rmtree(job / 'runtime', ignore_errors=True)
+                try:
+                    check_artifact_budget(plan['workspace'])
+                except (AgentError, OSError, RecursionError):
+                    shutil.rmtree(plan['workspace'], ignore_errors=True)
+                    if state['exit_code'] == 0:
+                        state.update(status='failed', exit_code=125, failure_reason='artifact_limit')
+            else:
+                state.update(status='failed', exit_code=125, failure_reason='resource_cleanup_incomplete')
         state.update(finished_at=time.time(), dropped_bytes=dropped)
         if audit_path:
             task_event(audit_path, plan['config'], state,
@@ -866,15 +1432,30 @@ def diff_summary(job, scan_secrets=False):
     new = sorted(set(current) - set(baseline))
     origin = Path(plan['origin'])
     conflicts = []
-    for name in set(baseline) | set(new):
-        old = baseline.get(name)
+    for name, old in baseline.items():
         try:
             data, st = read_regular(origin, name)
-            if old is None or hashlib.sha256(data).hexdigest() != old['sha256'] or bool(st.st_mode & 0o111) != old['executable']:
+            if hashlib.sha256(data).hexdigest() != old['sha256'] or bool(st.st_mode & 0o111) != old['executable']:
                 conflicts.append(name)
         except (OSError, AgentError):
-            if old is not None:
-                conflicts.append(name)
+            conflicts.append(name)
+    if new:
+        try:
+            origin_fd = os.open(origin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            conflicts.extend(new)
+        else:
+            try:
+                for name in new:
+                    try:
+                        relative_stat(origin_fd, name)
+                    except FileNotFoundError:
+                        continue
+                    except (OSError, AgentError):
+                        pass  # 无法安全核验源路径，按冲突处理。
+                    conflicts.append(name)
+            finally:
+                os.close(origin_fd)
     conflicts.sort()
     changed = sorted(name for name in set(current) | set(baseline)
                      if current.get(name) != baseline.get(name))
@@ -885,8 +1466,8 @@ def diff_task(ctx, job, as_json, scan_secrets):
     summary, new = diff_summary(job, scan_secrets)
     view, index = job / 'workspace', job / 'review.git'
     if new:
-        payload = b''.join(name.encode() + b'\0' for name in new)
-        git(ctx, ['add', '--intent-to-add', '--force', '--pathspec-from-file=-',
+        payload = b''.join(os.fsencode(name) + b'\0' for name in new)
+        git(ctx, ['--literal-pathspecs', 'add', '--intent-to-add', '--force', '--pathspec-from-file=-',
                   '--pathspec-file-nul'], work=view, index=index, data=payload)
     diff_args = ['diff', '--binary', '--no-ext-diff', '--no-textconv']
     if scan_secrets:
@@ -933,9 +1514,35 @@ def nonnegative(value):
     return number
 
 
+def doctor_agent(ctx, root):
+    args = argparse.Namespace(command=['--', ':'], isolate=True,
+                              workspace_readonly=True, write_dir=[], net=None,
+                              profile=None, net_allow=None, cwd='/workspace',
+                              timeout=30, max_output_bytes=65536, diagnostic=True)
+    job = start_task(ctx, root, args)
+    try:
+        while True:
+            state = state_of(job)
+            if state['status'] in TERMINAL:
+                break
+            time.sleep(0.05)
+        protection = state['protection']
+        if protection['status'] == 'pending':
+            protection = {**protection, 'status': 'failed', 'check': 'supervisor'}
+        emit({'kind': 'agent_doctor', 'policy': state['policy'], 'protection': protection,
+              'resources': state.get('resources')})
+        return return_code(state) or (0 if protection['status'] == 'verified' else 5)
+    finally:
+        if state_of(job).get('resources', {}).get('cleanup') not in (
+                'incomplete', 'populated', 'unconfirmed'):
+            shutil.rmtree(job)
+
+
 def parser():
     p = i18n.I18nArgumentParser(prog='capbox', description=i18n.t('task.parser_description'))
     families = p.add_subparsers(dest='family', required=True)
+    doctor = families.add_parser('doctor')
+    doctor.add_argument('--json', action='store_true')
     task = families.add_parser('task', help=i18n.t('task.help_family'))
     commands = task.add_subparsers(dest='action', required=True)
     start = commands.add_parser('start', help=i18n.t('task.help_start'))
@@ -948,6 +1555,7 @@ def parser():
     start.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
     start.add_argument('--workspace-readonly', action='store_true', help=i18n.t('task.help_workspace_readonly'))
     start.add_argument('--write-dir', action='append', default=[], help=i18n.t('task.help_write_dir'))
+    start.add_argument('--input', action='append', metavar='PATH', help=i18n.t('task.help_input'))
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
     start.add_argument('command', nargs=argparse.REMAINDER)
     listing = commands.add_parser('list')
@@ -983,6 +1591,7 @@ def parser():
         cmd.add_argument('--net', choices=['none', 'restricted', 'open', 'host'])
         cmd.add_argument('--net-allow', help=i18n.t('task.help_net_allow'))
         cmd.add_argument('--profile', choices=['compat', 'untrusted', 'strict'])
+        cmd.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
         if action == 'check':
             cmd.add_argument('target')
             cmd.add_argument('--resolve', action='store_true', help=i18n.t('policy.help_resolve'))
@@ -996,14 +1605,25 @@ def main(argv=None):
     args = parser().parse_args(argv)
     ctx = context()
     if args.family == 'policy':
+        if args.isolate:
+            ctx = locked_context(ctx, args)
         result = network_check(ctx, args) if args.action == 'check' else effective(ctx, args)
         emit(result)
         return 1 if result.get('decision') == 'deny' else 0
     root = private_dir(private_dir(Path(os.environ['CAPBOX_AGENT_PRIVATE'])) / 'tasks', create=True)
+    if args.family == 'doctor':
+        try:
+            return doctor_agent(ctx, root)
+        except AgentError as exc:
+            emit({'kind': 'agent_doctor',
+                  'protection': {'status': 'failed', 'check': 'prepare',
+                                 'detail': str(exc)}})
+            return exc.code
     if args.action == 'start':
         if args.max_output_bytes > 64 * 1024 * 1024:
             raise AgentError(i18n.t('task.log_limit_exceeds_64mib'), 2)
-        return start_task(ctx, root, args)
+        emit(public_state(start_task(ctx, root, args)))
+        return 0
     if args.action == 'list':
         jobs = [public_state(job_path(root, d.name)) for d in sorted(root.iterdir())
                 if re.fullmatch('[0-9a-f]{32}', d.name)]
@@ -1085,6 +1705,8 @@ def main(argv=None):
             raise AgentError(i18n.t('task.cannot_remove_running'))
         if state['status'] == 'lost':
             raise AgentError(i18n.t('task.lost_requires_manual_confirm'))
+        if state.get('resources', {}).get('cleanup') in ('incomplete', 'populated', 'unconfirmed'):
+            raise AgentError(i18n.t('task.cgroup_cleanup_incomplete'))
         shutil.rmtree(job)
         emit({'kind': 'removed', 'task_id': args.task_id})
     return 0

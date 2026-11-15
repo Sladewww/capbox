@@ -21,7 +21,7 @@ CapBox —— 工作区内持久化的 root Linux 容器
   init [--distro alpine|ubuntu] [--agent|--trusted] [--force] [--from URL|路径]
                                     脚手架（如需）+ 下载解包 rootfs，注入镜像源，跑首次引导
   status [--json]                   查看 distro / rootfs / daemon / 网络状态
-  doctor                            逐项自检（bwrap、userns 全权限、rootfs、镜像源…）
+  doctor [--agent --json]           逐项自检（bwrap、userns 全权限、rootfs、镜像源…）
   clean [--all]                     清理缓存与日志；--all 一并删除 rootfs
 
 执行
@@ -254,7 +254,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 用法: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
                       [--net {none,restricted,open,host}] [--net-allow NET_ALLOW]
                       [--profile {compat,untrusted,strict}] [--isolate] [--workspace-readonly]
-                      [--write-dir WRITE_DIR] [--max-output-bytes MAX_OUTPUT_BYTES]
+                      [--write-dir WRITE_DIR] [--input PATH] [--max-output-bytes MAX_OUTPUT_BYTES]
                       ...
 
 位置参数:
@@ -273,6 +273,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
   --workspace-readonly  将隔离项目工作树挂载为只读
   --write-dir WRITE_DIR
                         开放已有项目相对目录的写入权限（可重复）
+  --input PATH          复制指定的项目相对路径并将工作树挂载为只读（可重复）
   --max-output-bytes MAX_OUTPUT_BYTES
 ```
 
@@ -329,8 +330,8 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox mcp --help
 
 ```text
-用法: capbox mcp [-h] [--profile {untrusted,strict}] [--net {none,restricted}]
-               [--workspace-mode {isolated,shared}] [--max-timeout MAX_TIMEOUT]
+用法: capbox mcp [-h] [--profile {strict}] [--net {none,restricted}] [--workspace-mode {isolated}]
+               [--max-timeout MAX_TIMEOUT]
                {serve}
 
 位置参数:
@@ -338,11 +339,10 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 
 选项:
   -h, --help            显示此帮助并退出
-  --profile {untrusted,strict}
-                        安全配置档（默认: untrusted）
+  --profile {strict}    安全配置档（默认: strict）
   --net {none,restricted}
-                        网络模式（默认: none；拒绝 open）
-  --workspace-mode {isolated,shared}
+                        网络模式（固定: none）
+  --workspace-mode {isolated}
                         任务工作区（默认: isolated）
   --max-timeout MAX_TIMEOUT
                         任务超时上限秒数（默认: 600）

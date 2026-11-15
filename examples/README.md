@@ -1,7 +1,6 @@
 # 示例
 
-- `mcpServers.capbox.json`：日常 MCP 客户端入口。裸 `mcp serve` 固定为 **isolated** 工作区、**untrusted** 配置、**无网络**、600 秒超时、每路流 8MiB。工具不能抬高策略或改 root。
-- `mcpServers.capbox.restricted.json`：同样默认，另加显式 `--net restricted`，配合 [宿主凭据代理](../docs/credentials.md)。先在宿主配置 `secret set` / `CAPBOX_NET_ALLOW`；不要把真实密钥写进这些文件。
+- `mcpServers.capbox.json`：日常 MCP 客户端入口。裸 `mcp serve` 固定为 **isolated** 工作区、**strict** 配置、**无网络**、600 秒超时、每路流 8MiB。工具不能抬高策略或改 root。
 
 使用前把绝对路径 `command` 与 `--root` 换成你的路径。见 [docs/envkit.md](../docs/envkit.md)。
 
