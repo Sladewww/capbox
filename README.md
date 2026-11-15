@@ -12,7 +12,7 @@ CapBox shares the host kernel. Keep unrelated secrets outside the workspace, and
 
 ## Environment tools (setup, bundles, MCP)
 
-Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits. MCP daily entry (`isolated` / `untrusted` / `none`) is in [outer Linux sandbox path](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex).
+Use `setup check/plan` for host prerequisites and upgrade guidance, `bundle pack/verify/check/restore` for content-locked offline environments, and `mcp serve` for fixed-scope stdio tools. See [Environment tools](docs/envkit.md) for usage and limits. MCP daily entry (`isolated` / `strict` / `none`) is in [outer Linux sandbox path](docs/envkit.md#5-five-minute-path-capbox-as-an-outer-linux-sandbox-claude-code--codex).
 
 ## Offline audit reports
 
@@ -167,4 +167,4 @@ MIT — [LICENSE](LICENSE).
 
 ### Host credential proxy
 
-Real API keys stay on the host; restricted mode injects them via the allowlist proxy. See [docs/credentials.md](docs/credentials.md). For the daily MCP entry (`mcp serve`, default isolated/untrusted/none) plus `--net restricted`, see [docs/envkit.md](docs/envkit.md) and [examples/](examples/).
+Real API keys stay on the host; restricted mode injects them via the allowlist proxy. See [docs/credentials.md](docs/credentials.md). See [docs/envkit.md](docs/envkit.md) for the MCP entry and its host-enforced network policy.

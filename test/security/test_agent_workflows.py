@@ -36,6 +36,90 @@ class Fixture(unittest.TestCase):
 
 
 class PolicyTests(Fixture):
+    def test_isolated_host_policy_caps_project_and_environment(self):
+        self.run_cli('config', 'set', 'CAPBOX_ROOTFS_RO', '0', check=True)
+        self.env.update(CAPBOX_NET='open', CAPBOX_SECURITY_PROFILE='compat',
+                        CAPBOX_IDMAP='on', CAPBOX_LANDLOCK='off')
+        result = self.run_cli('policy', 'show', '--isolate', check=True)
+        values = json.loads(result.stdout)['values']
+        for key, value in {'NET': 'none', 'SECURITY_PROFILE': 'strict', 'IDMAP': 'off',
+                           'LANDLOCK': 'on', 'ROOTFS_RO': '1'}.items():
+            self.assertEqual(values[key], {'value': value, 'source': 'host'})
+        regular = json.loads(self.run_cli('policy', 'show', check=True).stdout)['values']
+        self.assertEqual(regular['NET'], {'value': 'open', 'source': 'env'})
+        self.assertEqual(regular['SECURITY_PROFILE'], {'value': 'compat', 'source': 'env'})
+
+    def test_isolated_policy_rejects_weakening_paths(self):
+        for flag, value in (('--net', 'open'), ('--profile', 'compat'),
+                            ('--net-allow', 'example.com')):
+            with self.subTest(flag=flag):
+                result = self.run_cli('policy', 'show', '--isolate', flag, value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        for key, value in (('CAPBOX_BWRAP_EXTRA', '--share-net'),
+                           ('CAPBOX_BWRAP_NO_PIDNS', '1'),
+                           ('CAPBOX_FS_BINDS', '.:/workspace/extra:rw'),
+                           ('CAPBOX_BWRAP', '/bin/true')):
+            with self.subTest(key=key):
+                self.env[key] = value
+                result = self.run_cli('policy', 'show', '--isolate')
+                self.env.pop(key)
+                self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_isolated_restricted_requires_host_allowlist(self):
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        args = ('policy', 'show', '--isolate', '--net', 'restricted')
+        policy = template / 'agent-network.allow'
+        (self.ws / policy.name).write_text('example.com')
+        self.env['CAPBOX_NET_ALLOW'] = 'example.com,evil.invalid'
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+        policy.write_text('example.com')
+        result = self.run_cli(*args, '--net-allow', 'example.com:443', check=True)
+        self.assertEqual(json.loads(result.stdout)['values']['NET_ALLOW'],
+                         {'source': 'command', 'value': 'example.com:443'})
+        self.assertEqual(self.run_cli(*args, '--net-allow', 'evil.invalid').returncode, 2)
+        policy.chmod(0o666)
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+
+    def test_isolated_policy_uses_host_template(self):
+        common = self.ws / '.capbox/lib/common.sh'
+        original = common.read_bytes()
+        common.write_text('exit 82\n')
+        self.run_cli('policy', 'show', '--isolate', check=True)
+        self.assertEqual(self.run_cli('config', 'get', 'CAPBOX_NET').returncode, 82)
+        common.write_bytes(original)
+        result = subprocess.run([str(self.ws / '.capbox/bin/capbox'), '--root', str(self.ws),
+                                 'policy', 'show', '--isolate'], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    @unittest.skipIf(os.getuid() == 0, 'locked tasks require a non-root host UID')
+    def test_missing_agent_probe_fails_before_payload(self):
+        template = self.base / 'template'
+        shutil.copytree(REPO / 'bin', template / 'bin')
+        shutil.copytree(REPO / 'lib', template / 'lib')
+        (template / 'lib/guest/capbox-agent-probe.c').unlink()
+        rootfs = self.ws / '.capbox/os/alpine'
+        (rootfs / 'bin').mkdir(parents=True, exist_ok=True)
+        shutil.copy2('/bin/true', rootfs / 'bin/sh')
+        self.cli[0] = str(template / 'bin/capbox')
+        started = self.run_cli('task', 'start', '--isolate', '--', 'touch', 'sentinel', check=True)
+        task = json.loads(started.stdout)['task_id']
+        try:
+            waited = self.run_cli('task', 'wait', task, '--timeout', '20')
+            self.assertNotEqual(waited.returncode, 0)
+            state = json.loads(waited.stdout)
+            self.assertEqual(state['failure_reason'], 'launch_failed')
+            self.assertEqual(state['protection']['status'], 'failed')
+            audit = self.run_cli('audit', 'query', '--task-id', task, check=True)
+            result = json.loads(audit.stdout)['task']
+            self.assertEqual(result['protection'], state['protection'])
+            self.assertEqual(result['diff']['changed_files'], [])
+        finally:
+            self.run_cli('task', 'rm', task)
+
     def test_sources_override_without_mutation(self):
         self.run_cli('config', 'set', 'CAPBOX_NET', 'open', check=True)
         d=json.loads(self.run_cli('policy','show').stdout)
@@ -241,7 +325,9 @@ class TaskTests(Fixture):
 
     def wait(self,task,code=0,timeout=15):
         r=self.run_cli('task','wait',task,'--timeout',str(timeout),'--json')
-        self.assertEqual(r.returncode,code,r.stdout+r.stderr)
+        if r.returncode != code:
+            logs = self.run_cli('task', 'logs', task, '--stream', 'stderr')
+            self.fail(f'expected task exit {code}, got {r.returncode}\n{r.stdout}{r.stderr}{logs.stdout}')
         return json.loads(r.stdout)
 
     def git(self,*args):
@@ -260,9 +346,9 @@ class TaskTests(Fixture):
         self.env['CAPBOX_NET'] = 'open'
         (self.ws / '.capbox/logs/audit.jsonl').write_text(
             '{"ts":"2026-11-08T00:00:00Z","kind":"exec","status":"ok","cmd":"legacy"}\n')
-        timed = self.start('--isolate', '--timeout', '4', '--net', 'open',
+        timed = self.start('--isolate', '--timeout', '8', '--net', 'none',
                            '--', 'sleep', '30')
-        done = self.start('--isolate', '--timeout', '20', '--profile', 'compat',
+        done = self.start('--isolate', '--timeout', '20', '--profile', 'strict',
                           '--', 'sh', '-c',
                           'test -z "${CAPBOX_TASK_AUDIT_ID:-}" && '
                           "printf '%s' private-output > /dev/null && echo task > hello.txt")
@@ -279,12 +365,14 @@ class TaskTests(Fixture):
             if task == done:
                 self.assertIn('exec', {event['kind'] for event in result['events']})
                 self.assertEqual(result['task']['policy']['SECURITY_PROFILE'],
-                                 {'value': 'compat', 'source': 'command'})
+                                 {'value': 'strict', 'source': 'host'})
                 self.assertEqual(result['task']['diff']['changed_files'], ['hello.txt'])
                 self.assertEqual(result['task']['diff']['origin_changed'], ['hello.txt'])
             else:
                 self.assertEqual(result['task']['policy']['NET'],
-                                 {'value': 'open', 'source': 'command'})
+                                 {'value': 'none', 'source': 'host'})
+                self.assertEqual(result['task']['protection']['requested']['NET'],
+                                 {'value': 'none', 'source': 'command'})
         report = self.base / 'task.html'
         self.run_cli('audit', 'report', '--task-id', done, '--output', str(report), check=True)
         self.assertIn('origin_changed', report.read_text())
@@ -411,10 +499,11 @@ class TaskTests(Fixture):
 
     def test_isolation_diff_binary_deletion_and_origin_conflict(self):
         self.init_git()
-        task=self.start('--isolate','--','sh','-c',
-            'test ! -e /workspace/.env && test ! -e /workspace/.git && '
+        task=self.start('--isolate','--','sh','-ec',
+            'test ! -e /workspace/.env; test ! -e /workspace/.git; '
             'echo task > /workspace/hello.txt; printf "\\000binary" > /workspace/new.bin; '
-            'rm /workspace/.gitignore; echo private > /etc/task-private')
+            'rm /workspace/.gitignore; '
+            'if touch /etc/task-private; then exit 1; fi; test ! -e /etc/task-private')
         self.wait(task)
         self.assertEqual((self.ws/'hello.txt').read_text(),'base\n')
         self.assertFalse((self.ws/'.capbox/os/alpine/etc/task-private').exists())
@@ -501,6 +590,59 @@ class TaskTests(Fixture):
             finally:
                 server.shutdown()
                 poll.join()
+
+    def test_isolated_restricted_uses_verified_proxy(self):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            url = f'http://127.0.0.1:{server.server_port}/'
+            (template / 'agent-network.allow').write_text(f'127.0.0.1:{server.server_port}')
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                                  'wget -T 3 -O /dev/null "$1"; '
+                                  '! HTTP_PROXY= http_proxy= all_proxy= wget -T 3 -O /dev/null "$1"',
+                                  'probe', url)
+                state = self.wait(task)
+                self.assertEqual(state['protection']['checks']['network'], 'restricted')
+            finally:
+                server.shutdown()
+                thread.join()
+
+    def test_isolated_granted_credential_is_a_placeholder(self):
+        subprocess.run(self.cli + ['secret', 'set', 'openai', '--value-stdin'],
+                       input='fixture-locked-agent-secret', text=True, env=self.env,
+                       capture_output=True, check=True, timeout=20)
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        (template / 'agent-network.allow').write_text('api.openai.com')
+        command = ('case "${OPENAI_API_KEY:-}" in capbox-sec-*) ;; *) exit 42;; esac; '
+                   'test -r "$SSL_CERT_FILE"; test "$SSL_CERT_FILE" = /run/capbox-agent-ca.pem')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                          'test -z "${OPENAI_API_KEY:-}"')
+        self.wait(task)
+        (template / 'agent-credentials.allow').write_text('service:openai\n')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec', command)
+        self.wait(task)
+        for stream in ('stdout', 'stderr'):
+            logs = self.run_cli('task', 'logs', task, '--stream', stream, check=True)
+            self.assertNotIn('fixture-locked-agent-secret', logs.stdout)
 
     def test_parallel_restricted_tasks_have_private_network_sessions(self):
         import time

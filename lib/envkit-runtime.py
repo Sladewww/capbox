@@ -37,9 +37,13 @@ def mcp_defaults():
     return module
 
 def build_mcp_parser(parent=None):
-    defaults=mcp_defaults()
     mcp=i18n.I18nArgumentParser(prog='capbox mcp', parents=[] if parent is None else [parent], add_help=True)
-    # main() 与测试共用；选项与默认值集中在此。
+    add_mcp_arguments(mcp)
+    return mcp
+
+
+def add_mcp_arguments(mcp):
+    defaults=mcp_defaults()
     mcp.add_argument('action', choices=['serve'])
     mcp.add_argument('--profile', choices=list(defaults.ALLOWED_PROFILES),
                      default=defaults.DEFAULT_PROFILE,
@@ -52,7 +56,6 @@ def build_mcp_parser(parent=None):
                      help=i18n.t('mcp.help_workspace_mode'))
     mcp.add_argument('--max-timeout', type=int, default=defaults.DEFAULT_MAX_TIMEOUT,
                      help=i18n.t('mcp.help_max_timeout'))
-    return mcp
 
 BUNDLE_SCHEMA = 'capbox.bundle.v1'
 FILES = ('rootfs.tar.gz', 'package.lock', 'recipe.env')
@@ -496,22 +499,15 @@ def main():
         s=actions.add_parser(action);s.add_argument('path');s.add_argument('--json',action='store_true')
         if action=='pack':s.add_argument('--recipe')
         else:s.add_argument('--manifest-sha256')
-    defaults=mcp_defaults()
-    mcp=families.add_parser('mcp')
-    mcp.add_argument('action',choices=['serve'])
-    mcp.add_argument('--profile',choices=list(defaults.ALLOWED_PROFILES),default=defaults.DEFAULT_PROFILE,
-                     help=i18n.t('mcp.help_profile'))
-    mcp.add_argument('--net',choices=list(defaults.ALLOWED_NET),default=defaults.DEFAULT_NET,
-                     help=i18n.t('mcp.help_net'))
-    mcp.add_argument('--workspace-mode',choices=list(defaults.ALLOWED_WORKSPACE_MODES),
-                     default=defaults.DEFAULT_WORKSPACE_MODE,
-                     help=i18n.t('mcp.help_workspace_mode'))
-    mcp.add_argument('--max-timeout',type=int,default=defaults.DEFAULT_MAX_TIMEOUT,
-                     help=i18n.t('mcp.help_max_timeout'))
+    add_mcp_arguments(families.add_parser('mcp'))
     args=p.parse_args();ctx=context()
     if args.family=='mcp':
-        mcp_ctx=dict(ctx,config=dict(ctx['config'],PROXY=''))
-        return load_tool(ctx,'mcp-stdio').serve(mcp_ctx,args,lambda command: cli(mcp_ctx,*command,timeout=300))
+        # Let the task CLI independently resolve project configuration and the
+        # caller's environment, including launch settings outside config.env.
+        child_env = {key: value for key, value in os.environ.items()
+                     if not key.startswith('CAPBOX_ENVKIT_')}
+        return load_tool(ctx,'mcp-stdio').serve(ctx,args,lambda command: cli(
+            ctx, *command, env=child_env, timeout=300))
     if args.family=='setup':
         report=readiness(ctx,args.probe)
         if args.action=='plan':report=install_plan(ctx,report,args.source)

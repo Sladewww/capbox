@@ -164,6 +164,10 @@ _capbox_declare_net() {
 # 让契约默认值被悄悄替换（曾经发生过）。
 _capbox_resolve_bwrap() {
   local builtin="/usr/bin/bwrap"
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    CAPBOX_BWRAP="$builtin"
+    return 0
+  fi
   local cfg_val="${CAPBOX_BWRAP_CFG:-}"
   case "${CAPBOX_CFG_EXPLICIT[BWRAP]:-}" in
     env)
@@ -751,7 +755,7 @@ _capbox_append_ro_cli_binds() {
     if [[ -n "$cap_guest" && "$cap_guest" == /workspace/* ]]; then
       _ro_arr+=(--ro-bind "$CAPBOX_DIR" "$cap_guest")
       for sub in run cache; do
-        [[ "${CAPBOX_TASK_WORKSPACE_READONLY:-}" != 1 ]] || break
+        [[ "${CAPBOX_TASK_WORKSPACE_READONLY:-}" != 1 && "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] || break
         sub_host="$CAPBOX_DIR/$sub"
         mkdir -p "$sub_host" 2>/dev/null || true
         [[ -d "$sub_host" ]] || continue
@@ -1029,7 +1033,11 @@ run_bwrap_oneshot() {
   local -a full=()
   local _bbrc=0
   CAPBOX_BWRAP_BASELINE_CMD="$*"
-  mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    mapfile -d '' -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\0' "$?")
+  else
+    mapfile -t args < <(build_bwrap_args oneshot "$cwd"; printf 'CAPBOX_BWRAP_ARGS_RC=%s\n' "$?")
+  fi
   # 从末尾取构造结果码，避免 mapfile 吞掉 build_bwrap_args 的退出码
   if [[ ${#args[@]} -gt 0 && "${args[-1]}" == CAPBOX_BWRAP_ARGS_RC=* ]]; then
     _bbrc="${args[-1]#CAPBOX_BWRAP_ARGS_RC=}"
@@ -1048,7 +1056,8 @@ run_bwrap_oneshot() {
   [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable_apt_install_bubblewrap bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
 
   # restricted：走 net.sh 的 unshare-net + allowlist 代理桥
-  if declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] &&
+     declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
     if declare -F _net_run_bwrap_oneshot >/dev/null 2>&1; then
       _net_run_bwrap_oneshot "$cwd" "$to" "$@"
       return $?
@@ -1065,6 +1074,10 @@ run_bwrap_oneshot() {
   fi
   if declare -F _landlock_apply_argv >/dev/null 2>&1; then
     _landlock_apply_argv full || return $?
+  fi
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    _agent_launch_run "${full[@]}"
+    return $?
   fi
 
   local rc=0 use_idmap=0 idmap_rc=1
@@ -1546,6 +1559,11 @@ _capbox_doctor_check_bwrap() {
 }
 
 cmd_doctor() {
+  if [[ "${1:-}" == --agent ]]; then
+    shift
+    _agent_doctor "$@"
+    return $?
+  fi
   DOCTOR_FAILS=0
   DOCTOR_WARNS=0
   local bwrap="${CAPBOX_BWRAP:-}"

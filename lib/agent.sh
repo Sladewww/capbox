@@ -2,20 +2,22 @@
 # Agent 命令走现有 exec 启动器；私有记录永不进入 guest。
 _agent_command() {
   need_cmd python3
-  local private key
+  local private key value
   private="$(_capbox_host_state_dir)" || return 1
   local -a context=(env "CAPBOX_AGENT_PRIVATE=$private"
     "CAPBOX_AGENT_WORKSPACE=$CAPBOX_WORKSPACE" "CAPBOX_AGENT_ROOTFS=$CAPBOX_ROOTFS"
-    "CAPBOX_AGENT_CLI=$_CAPBOX_CLI_BIN_DIR/capbox" "CAPBOX_AGENT_LIB=$CAPBOX_LIB_DIR"
+    "CAPBOX_AGENT_CLI=$_CAPBOX_CLI_BIN_DIR/capbox" "CAPBOX_AGENT_LIB=${BASH_SOURCE[0]%/*}"
     "CAPBOX_AGENT_ALLOW_ONCE=${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-0}")
-  if [[ "${1:-}" == task ]]; then
+  if [[ "${1:-}" == task || "${1:-}" == doctor ]]; then
     context+=("CAPBOX_AGENT_AUDIT_PATH=$(_audit_path)" "CAPBOX_AGENT_AUDIT_CMD=")
     if [[ "${2:-}" == start ]] && _audit_enabled; then
       context+=("CAPBOX_AGENT_AUDIT_CMD=$(_audit_cmd_field "task ${*:2}")")
     fi
   fi
   for key in "${CAPBOX_CFG_KEYS[@]}"; do
-    context+=("CAPBOX_AGENT_CFG_$key=$(_cfg_value "$key")"
+    value="$(_cfg_value "$key")"
+    [[ "$key" != BWRAP ]] || value="${CAPBOX_BWRAP_CFG:-}"
+    context+=("CAPBOX_AGENT_CFG_$key=$value"
       "CAPBOX_AGENT_SOURCE_$key=${CAPBOX_CFG_EXPLICIT[$key]:-default}")
   done
   "${context[@]}" python3 "${BASH_SOURCE[0]%/*}/agent-runtime.py" "$@"
@@ -52,3 +54,5 @@ cmd_task() {
 }
 
 cmd_policy() { _agent_command policy "$@"; }
+
+_agent_doctor() { _agent_command doctor "$@"; }

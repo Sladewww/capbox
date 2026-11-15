@@ -22,10 +22,19 @@
     "task checkpoint": {"output": "JSON checkpoint_created with manifest SHA256; finished isolated task only"},
     "task restore": {"output": "JSON checkpoint_restored with new workspace path"},
     "task rm": {"output": "JSON removed acknowledgement; terminal non-lost tasks only"},
-    "policy show": {"output": "JSON requested effective policy and value sources"},
+    "doctor --agent --json": {"output": "JSON agent_doctor with the result of a locked Agent launch probe"},
+    "policy show": {"output": "JSON policy and value sources; --isolate resolves the host Agent policy"},
     "policy check": {"output": "JSON HTTP(S) policy decision", "exit": "0 allow/conditional; 1 deny; 2 invalid input"}
   },
   "states": ["preparing", "running", "succeeded", "failed", "cancelled", "timed_out", "lost"],
+  "protection": {
+    "scope": "Optional for isolated tasks and Agent doctor results",
+    "status": ["pending", "verified", "failed"],
+    "requested": "Submitted values and sources before enforcing the host policy",
+    "effective": "Host policy values when verified",
+    "checks": "Launch evidence when verified",
+    "check": "Failed verification stage"
+  },
   "output_event": {"schema": "capbox.agent.v1", "type": "output", "task_id": "32 lowercase hex characters", "stream": "stdout or stderr", "offset": 0, "next_offset": 3, "data_base64": "YWJj"},
   "scope": "local host lifetime; host credential proxy rewrites allowlisted HTTP(S) headers with placeholders in guest env; no memory checkpoint, network control server, or automatic patch apply"
 }

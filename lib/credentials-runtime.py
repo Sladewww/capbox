@@ -9,6 +9,7 @@ HTTP(S) 请求头。v1 不做 OAuth 浏览器流程，也不依赖系统钥匙�
 from __future__ import annotations
 
 import argparse
+import fcntl
 import getpass
 import hashlib
 import json
@@ -436,12 +437,20 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         print(json.dumps({'schema': SCHEMA, 'active': False, 'reason': 'no-secrets',
             'hint': i18n.t('cred.hint_empty_store')}, ensure_ascii=True))
         return 0
+    grants = set(args.grant or [])
+    locked = args.output_dir is not None
+    if locked and not grants:
+        raise CredError(i18n.t('cred.failed_prepare_credentials_session'), 2)
     inject: Dict[str, Any] = {'schema': SCHEMA, 'entries': []}
+    if locked:
+        inject['https_only'] = True
     guest_env: Dict[str, str] = {}
     skipped = []
     cache: Dict[str, Tuple[str, float]] = {}
     needs_mitm = False
     for rec in records:
+        if locked and f"{rec['kind']}:{rec['name']}" not in grants:
+            continue
         domains = [d for d in rec['domains'] if allowlist_covers(d, allow)]
         if not domains:
             skipped.append({'name': rec['name'], 'reason': 'domains-not-in-NET_ALLOW'})
@@ -463,6 +472,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         else:
             entry['value'] = resolve_secret(rec, cache)
         for env_name in rec['env']:
+            if locked and env_name in guest_env:
+                raise CredError(i18n.t('cred.failed_prepare_credentials_session'), 2)
             token = placeholder()
             guest_env[env_name] = token
             entry['placeholders'][env_name] = token
@@ -474,10 +485,16 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         return 0
     session = args.session or secrets.token_hex(8)
     root = cred_dir()
-    session_dir = root / 'sessions' / session
-    if session_dir.exists():
-        shutil.rmtree(session_dir)
-    session_dir.mkdir(mode=0o700)
+    if locked:
+        session_dir = Path(args.output_dir)
+        info = session_dir.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise CredError(i18n.t('cred.failed_prepare_credentials_session'), 2)
+    else:
+        session_dir = root / 'sessions' / session
+        if session_dir.exists():
+            shutil.rmtree(session_dir)
+        session_dir.mkdir(mode=0o700)
     inject_path = session_dir / 'inject.json'
     env_path = session_dir / 'guest.env'
     write_json(inject_path, inject)
@@ -488,7 +505,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             fh.write(f'{key}={guest_env[key]}\n')
     ca_cert = None
     if needs_mitm:
-        key_path, cert_path = ensure_mitm_ca(root / 'ca')
+        lock_fd = os.open(root / 'ca.lock', os.O_CREAT | os.O_NOFOLLOW | os.O_RDWR, 0o600)
+        with os.fdopen(lock_fd, 'rb+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            key_path, cert_path = ensure_mitm_ca(root / 'ca')
         ca_cert = str(cert_path)
         # guest 信任包路径（系统证书 + CapBox CA）由 shell 组装。
         inject['ca_cert'] = ca_cert
@@ -541,6 +561,8 @@ def build_parser() -> argparse.ArgumentParser:
     prep = sub.add_parser('prepare', help=i18n.t('cred.help_prepare'))
     prep.add_argument('--allow', required=True)
     prep.add_argument('--session')
+    prep.add_argument('--output-dir', help=argparse.SUPPRESS)
+    prep.add_argument('--grant', action='append', help=argparse.SUPPRESS)
     prep.set_defaults(func=cmd_prepare)
     return p
 

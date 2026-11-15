@@ -51,7 +51,11 @@ _envkit_command() {
       "CAPBOX_SETUP_CGROUP=$cgroup"
       "CAPBOX_SETUP_CGROUP_DETAIL=$cgroup_detail")
   fi
-  "${context[@]}" python3 "$lib/envkit-runtime.py" "$@"
+  if [[ "${1:-}" == mcp ]]; then
+    "${context[@]}" python3 -I "$lib/envkit-runtime.py" "$@"
+  else
+    "${context[@]}" python3 "$lib/envkit-runtime.py" "$@"
+  fi
 }
 
 cmd_setup() { _envkit_command setup "$@"; }
@@ -66,6 +70,10 @@ cmd_mcp() {
   case "${1:-}" in
     -h | --help) _envkit_command mcp "$@"; return $? ;;
   esac
+  if [[ "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-0}" == 1 ]]; then
+    i18n_err mcp.old_bwrap_override_rejected
+    return 2
+  fi
   local t0 rc=0
   t0=$(date +%s%3N 2>/dev/null || date +%s)
   _envkit_command mcp "$@"

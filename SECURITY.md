@@ -79,6 +79,10 @@ CapBox 的信任边界是：**容器内是 root，但不是宿主 root**。guest
 
 ## 用户命名空间与 capability
 
+宿主 Agent 策略覆盖 `task start --isolate` 和 MCP 的 guest 执行。策略随项目外的可信模板载入，无项目级策略路径。使用模板的绝对路径和 `--root PROJECT` 启动，并保证模板与宿主运行工具由操作者控制。任务运行在私有副本中，宿主策略和启动验证记录均在任务写入范围外。启动用户的真实和有效 UID 必须非 0。启动前检查 guest 的实际 UID/GID 映射、命名空间和 procfs。具体调用及证据见 [Agent 工作流](docs/agent-workflows.md)。
+
+普通 `exec`、`run`、`do`、`shell`、共享任务、`up`、服务、`pkg`、`image docker run` 和普通 `doctor` 沿用现有策略。初始化、包与镜像下载、检查点恢复、审计查询和 MCP 的状态、日志、取消及 diff 不启动受保护的 guest 命令。
+
 - guest uid 0 ≠ 宿主 uid 0；权限来自 user namespace 映射。
 - `compat`：`--cap-add ALL`，无 seccomp。
 - `untrusted`/`strict`：显式 `--cap-drop` + 真实 seccomp BPF；多 UID idmap 启用时跳过 `--disable-userns`（与 bwrap `userns-block-fd` 不兼容，属 Linux/bwrap 边界，见 `doctor`）。

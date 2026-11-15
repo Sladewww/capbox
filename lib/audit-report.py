@@ -88,6 +88,26 @@ def normalise(data, number, counters):
             reason = data.get('failure_reason')
             if reason in ('launch_failed', 'execution_timeout', 'cancelled', 'nonzero_exit'):
                 event['failure_reason'] = reason
+            protection = data.get('protection')
+            if isinstance(protection, dict):
+                status = protection.get('status')
+                if status in ('pending', 'verified', 'failed'):
+                    proof = {'status': status}
+                    for key in ('requested', 'effective'):
+                        if key in protection:
+                            proof[key] = policy_summary(protection[key])
+                    check = protection.get('check')
+                    if isinstance(check, str) and re.fullmatch(r'[a-z0-9_]{1,64}', check):
+                        proof['check'] = check
+                    checks = protection.get('checks')
+                    if isinstance(checks, dict):
+                        proof['checks'] = {
+                            k: v for k, v in checks.items()
+                            if re.fullmatch(r'[a-z0-9_]{1,64}', k)
+                            and (type(v) is bool or type(v) is int
+                                 or isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_. -]{1,64}', v))
+                        }
+                    event['protection'] = proof
             if task_status == 'preparing':
                 event['policy'] = policy_summary(data.get('policy'))
                 if type(data.get('isolated')) is bool:
@@ -183,7 +203,7 @@ def snapshot(path, args):
                     task['exit_code'] = event.get('exit')
                     if 'failure_reason' in event:
                         task['failure_reason'] = event['failure_reason']
-                    for key in ('policy', 'isolated'):
+                    for key in ('policy', 'isolated', 'protection'):
                         if key in event:
                             task[key] = event[key]
             if args.since is not None and event['time'] < args.since:
