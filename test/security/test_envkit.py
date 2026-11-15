@@ -168,7 +168,7 @@ class MCPTests(Fixture):
         self.assertEqual(args.max_timeout, 600)
         self.assertEqual(MCP_DEFAULTS.MAX_OUTPUT_BYTES, 8 * 1024 * 1024)
         import contextlib, io
-        for flag, value in (('--net', 'open'), ('--net', 'restricted'),
+        for flag, value in (('--net', 'open'),
                             ('--profile', 'untrusted'), ('--workspace-mode', 'shared')):
             with self.subTest(flag=flag, value=value):
                 with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
@@ -196,6 +196,18 @@ class MCPTests(Fixture):
         self.assertIn('--workspace-readonly', command)
         self.assertIn('--write-dir=build', command)
         self.assertEqual(command[command.index('--max-output-bytes') + 1], str(MCP_DEFAULTS.MAX_OUTPUT_BYTES))
+
+    def test_restricted_server_passes_mode_and_task_subset(self):
+        calls = []
+        args = ENVKIT.build_mcp_parser().parse_args(['serve', '--net', 'restricted'])
+        payload = {'values': {'SECURITY_PROFILE': {'value': 'strict'},
+                              'NET': {'value': 'restricted'}}}
+        proc = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr='')
+        server = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda cmd: calls.append(cmd) or proc)
+        for tool, params in (('capbox_execute', {'argv': ['true']}), ('capbox_policy', {})):
+            server.call(tool, {**params, 'net_allow': 'example.com:443'})
+            self.assertIn('--net=restricted', calls[-1])
+            self.assertIn('--net-allow=example.com:443', calls[-1])
 
     def test_old_bwrap_global_override_is_rejected(self):
         proc = self.run_cli('--allow-old-bwrap', 'mcp', 'serve')

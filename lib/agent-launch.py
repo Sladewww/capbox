@@ -1,6 +1,7 @@
 """Verify the locked sandbox in the actual command process before releasing it."""
 from __future__ import annotations
 
+from contextlib import contextmanager, ExitStack
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -155,15 +158,81 @@ def prepare(argv, status_fd, helper, rootfs, workspace, probe_fd):
     guest = argv[split + 1:]
     require(guest[:4] == ['/run/capbox-landlock', '--rules', '/run/capbox-landlock.rules', '--']
             and len(guest) > 4, 'landlock')
-    argv = [*argv[:split], '--ro-bind', helper, PROBE,
+    mode = os.environ.get('CAPBOX_NET', 'none')
+    require(mode in ('none', 'restricted'), 'resolved_policy')
+    require(bool(os.environ.get('CAPBOX_NET_ALLOW')) == (mode == 'restricted'), 'resolved_policy')
+    proxy_args = []
+    if mode == 'restricted':
+        for name in ('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
+            proxy_args.extend(('--setenv', name, 'http://127.0.0.1:18787'))
+    argv = [*argv[:split], *proxy_args, '--ro-bind', helper, PROBE,
             '--setenv', 'CAPBOX_AGENT_WORKSPACE_READONLY', str(int(workspace_readonly)), '--',
             *guest[:4], PROBE, str(probe_fd), *guest[4:]]
     return argv, int(seccomp[0][0])
 
 
+@contextmanager
+def supervised(command):
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL) as child:
+        try:
+            yield child
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+
+
+def wait_ready(child, path):
+    deadline = time.monotonic() + 5
+    while child.poll() is None:
+        if path.is_file():
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.025)
+    raise LaunchError('restricted_proxy_setup')
+
+
+@contextmanager
+def restricted_proxy(pid, mode):
+    if mode == 'none':
+        yield
+        return
+    helper = str(Path(__file__).resolve().with_name('net-proxy.py'))
+    python = '/usr/bin/python3'
+    with tempfile.TemporaryDirectory(prefix='capbox-agent-net-', dir='/tmp') as folder, ExitStack() as stack:
+        private = Path(folder)
+        sock = str(private / 'proxy.sock')
+        proxy_ready, bridge_ready = private / 'proxy.ready', private / 'bridge.ready'
+        command = [python, '-I', helper, 'proxy', '--sock', sock, '--ready', str(proxy_ready),
+                   '--allow', os.environ['CAPBOX_NET_ALLOW']]
+        task_id = os.environ.get('CAPBOX_TASK_AUDIT_ID')
+        audit_path = os.environ.get('CAPBOX_TASK_AUDIT_PATH')
+        if task_id and audit_path and os.environ.get('CAPBOX_AUDIT', 'summary') not in ('0', 'off', 'false', 'no', 'NONE', 'none'):
+            command.extend(('--task-id', task_id, '--audit-path', audit_path))
+        try:
+            proxy = stack.enter_context(supervised(command))
+            wait_ready(proxy, proxy_ready)
+            bridge = stack.enter_context(supervised([
+                python, '-I', helper, 'enter-net', '--child', str(pid), '--',
+                python, '-I', helper, 'bridge', '--sock', sock,
+                '--listen', '127.0.0.1:18787', '--ready', str(bridge_ready),
+            ]))
+            wait_ready(bridge, bridge_ready)
+            require(proxy.poll() is None, 'restricted_proxy_setup')
+        except OSError as exc:
+            raise LaunchError('restricted_proxy_setup') from exc
+        yield
+
+
 def launch(status_fd, helper, rootfs, workspace, argv):
     host, guest = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    with host, guest:
+    with host, guest, ExitStack() as network:
         host.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
         host.settimeout(30)
         argv, seccomp_fd = prepare(argv, status_fd, helper, rootfs, workspace, guest.fileno())
@@ -190,10 +259,12 @@ def launch(status_fd, helper, rootfs, workspace, argv):
                     membership = task_cgroup.verify(leaf, pid, limits)
                 except (OSError, KeyError, ValueError) as exc:
                     raise LaunchError('cgroup_membership') from exc
+                mode = os.environ.get('CAPBOX_NET', 'none')
+                network.enter_context(restricted_proxy(pid, mode))
                 record(status_fd, 'protection_verified', checks={
                     'cgroup': {'membership': membership, 'limits': limits, 'pid': pid},
                     'profile': 'strict', 'uid_map': 'single', 'gid_map': 'single',
-                    'network': 'none', 'pid_namespace': 'private', 'procfs': 'read-only',
+                    'network': mode, 'pid_namespace': 'private', 'procfs': 'read-only',
                     'rootfs': 'read-only', 'landlock': 'on', 'seccomp': 'on',
                     'workspace': ('read-only' if os.environ.get('CAPBOX_TASK_WORKSPACE_READONLY') == '1'
                                   else 'writable'),

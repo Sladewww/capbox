@@ -49,7 +49,7 @@ capbox policy check --net restricted --resolve https://example.com/
 
 ## 隔离工作区与可审阅 diff
 
-`task start --isolate` 和 `mcp serve` 使用项目外可信 CapBox 模板的宿主策略。请用模板的绝对路径调用，传入 `--root` 选择项目。首版锁定 `strict`、单 UID、无网、只读 rootfs 和 Landlock。工作区副本可写，也可用 `--workspace-readonly` 和 `--write-dir` 收窄。项目中的 rootfs 可写设置、网络和安全档不会放宽宿主策略。任务显式请求更宽策略、配置额外 bind、指定自定义 bwrap，或传入关闭 PID namespace 的低层参数时会被拒绝。
+`task start --isolate` 和 `mcp serve` 使用项目外可信 CapBox 模板的宿主策略。请用模板的绝对路径调用，传入 `--root` 选择项目。首版锁定 `strict`、单 UID、只读 rootfs 和 Landlock，默认无网。工作区副本可写，也可用 `--workspace-readonly` 和 `--write-dir` 收窄。项目中的 rootfs 可写设置、网络和安全档不会放宽宿主策略。任务显式请求更宽策略、配置额外 bind、指定自定义 bwrap，或传入关闭 PID namespace 的低层参数时会被拒绝。
 
 `capbox policy show --isolate --json` 显示解析后的宿主策略。`capbox doctor --agent --json` 用同一启动路径检查已初始化的项目。提交成功仅表示监督器接受任务。终态 `protection` 字段记录请求、验证状态和已验证的策略。验证失败会在执行用户命令前停止；`audit query --task-id` 可从持久日志查询结果。
 
@@ -146,7 +146,13 @@ CAPBOX_NET_ALLOW='*.example.com,packages.example.org:8443' \
 
 任务代理先用宿主白名单验证请求的规则，再按这些规则放行。只写主机名时允许端口 80 和 443。通配符匹配子域名。
 
-共享任务省略 `--net-allow` 时沿用现有配置的范围。隔离任务与 MCP 使用无网宿主策略。
+共享任务省略 `--net-allow` 时沿用现有配置的范围。隔离任务默认无网。宿主可在工作区外可信模板的根目录创建 `agent-network.allow`（与 `bin/` 并列），写入逗号分隔的允许规则。文件须由运行用户或 root 拥有，且组和其他用户不可写。显式指定 `--net restricted` 才启用此列表；`--net-allow` 只能收窄。代理和桥在验证启动边界后就绪，随后才执行命令。
+
+```sh
+printf '%s\n' 'packages.example.org:443' > /path/to/template/agent-network.allow
+/path/to/template/bin/capbox --root /path/to/project task start --isolate \
+  --net restricted --net-allow packages.example.org:443 -- wget https://packages.example.org/
+```
 
 ## 冷检查点
 

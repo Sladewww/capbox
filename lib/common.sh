@@ -1056,7 +1056,8 @@ run_bwrap_oneshot() {
   [[ -x "${CAPBOX_BWRAP:-}" ]] || i18n_die 5 common.bwrap_unavailable_apt_install_bubblewrap bwrap="$(i18n_or "${CAPBOX_BWRAP:-}" val.unset)"
 
   # restricted：走 net.sh 的 unshare-net + allowlist 代理桥
-  if declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] &&
+     declare -F _net_mode >/dev/null 2>&1 && [[ "$(_net_mode)" == "restricted" ]]; then
     if declare -F _net_run_bwrap_oneshot >/dev/null 2>&1; then
       _net_run_bwrap_oneshot "$cwd" "$to" "$@"
       return $?

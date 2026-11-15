@@ -329,7 +329,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 ## capbox mcp --help
 
 ```text
-用法: capbox mcp [-h] [--profile {strict}] [--net {none}] [--workspace-mode {isolated}]
+用法: capbox mcp [-h] [--profile {strict}] [--net {none,restricted}] [--workspace-mode {isolated}]
                [--max-timeout MAX_TIMEOUT]
                {serve}
 
@@ -339,7 +339,8 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 选项:
   -h, --help            显示此帮助并退出
   --profile {strict}    安全配置档（默认: strict）
-  --net {none}          网络模式（固定: none）
+  --net {none,restricted}
+                        网络模式（固定: none）
   --workspace-mode {isolated}
                         任务工作区（默认: isolated）
   --max-timeout MAX_TIMEOUT
