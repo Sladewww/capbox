@@ -1065,7 +1065,8 @@ run_bwrap_oneshot() {
   fi
 
   full=("$CAPBOX_BWRAP" "${args[@]}" -- "$@")
-  if declare -F _resources_wrap_argv >/dev/null 2>&1; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] &&
+      declare -F _resources_wrap_argv >/dev/null 2>&1; then
     _resources_wrap_argv full || return $?
   fi
   if declare -F _security_wrap_argv >/dev/null 2>&1; then
