@@ -91,6 +91,31 @@ class SecretStoreTests(Fixture):
         self.assertFalse(json.loads(out2)['active'])
 
 
+    def test_agent_credentials_select_only_explicit_grants(self):
+        for service in ('openai', 'anthropic'):
+            subprocess.run(self.cli + ['secret', 'set', service, '--value-stdin'],
+                           input='fixture-' + service, text=True, env=self.env,
+                           capture_output=True, check=True, timeout=20)
+        directory = self.base / 'prepared'
+        directory.mkdir(mode=0o700)
+        result = subprocess.run([
+            '/usr/bin/python3', '-I', str(REPO / 'lib/credentials-runtime.py'),
+            'prepare', '--allow', 'api.openai.com,api.anthropic.com',
+            '--output-dir', str(directory), '--grant', 'service:openai',
+        ], env={**self.env, 'CAPBOX_CRED_PRIVATE': self.host_private()},
+            text=True, capture_output=True, check=True, timeout=20)
+        payload = json.loads(result.stdout)
+        self.assertEqual(set(payload['placeholders']), {'OPENAI_API_KEY'})
+        self.assertNotIn('fixture-openai', result.stdout)
+        inject = json.loads((directory / 'inject.json').read_text())
+        self.assertTrue(inject['https_only'])
+        self.assertEqual([entry['name'] for entry in inject['entries']], ['openai'])
+        token = payload['placeholders']['OPENAI_API_KEY']
+        _, violation = net_proxy.rewrite_headers_for_credentials(
+            ['GET / HTTP/1.1', 'X-Other: ' + token], 'api.openai.com', inject, {}, False)
+        self.assertIsNotNone(violation)
+
+
 class ProxyRewriteTests(unittest.TestCase):
     def test_parallel_proxy_denials_record_only_target_port_and_reason(self):
         from argparse import Namespace

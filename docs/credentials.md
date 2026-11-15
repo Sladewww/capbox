@@ -73,7 +73,9 @@ capbox secret set github --command 'gh auth token'
 
 ## MCP 日常路径
 
-MCP 默认无网。宿主可为隔离任务和 MCP 显式授权受限出站。宿主凭据注入目前适用于本页介绍的普通 CLI restricted 入口。MCP 客户端配置和工具参数中不要填写密钥。
+MCP 默认无网。为隔离任务或 MCP 启用凭据注入时，先在可信模板配置 `agent-network.allow` 并显式请求 `--net restricted`。再在同一目录创建 `agent-credentials.allow`，每行写一个已保存的凭据标识，例如 `service:openai` 或 `custom:mytok`。文件须由运行用户或 root 拥有，且组和其他用户不可写。
+
+代理只为出站范围内已授权的凭据生成任务专用占位符，并只在验证上游证书的 HTTPS 连接中替换指定请求头。配置访问权限时，应按任务可使用该凭据在上游执行的操作判断。MCP 客户端配置和工具参数中不要填写密钥。
 
 ## 相关
 

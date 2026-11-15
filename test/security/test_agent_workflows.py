@@ -696,6 +696,27 @@ class TaskTests(Fixture):
                 server.shutdown()
                 thread.join()
 
+    def test_isolated_granted_credential_is_a_placeholder(self):
+        subprocess.run(self.cli + ['secret', 'set', 'openai', '--value-stdin'],
+                       input='fixture-locked-agent-secret', text=True, env=self.env,
+                       capture_output=True, check=True, timeout=20)
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        (template / 'agent-network.allow').write_text('api.openai.com')
+        command = ('case "${OPENAI_API_KEY:-}" in capbox-sec-*) ;; *) exit 42;; esac; '
+                   'test -r "$SSL_CERT_FILE"; test "$SSL_CERT_FILE" = /run/capbox-agent-ca.pem')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                          'test -z "${OPENAI_API_KEY:-}"')
+        self.wait(task)
+        (template / 'agent-credentials.allow').write_text('service:openai\n')
+        task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec', command)
+        self.wait(task)
+        for stream in ('stdout', 'stderr'):
+            logs = self.run_cli('task', 'logs', task, '--stream', stream, check=True)
+            self.assertNotIn('fixture-locked-agent-secret', logs.stdout)
+
     def test_parallel_restricted_tasks_have_private_network_sessions(self):
         import time
         self.env['CAPBOX_NET_ALLOW']='example.com'
