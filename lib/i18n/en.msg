@@ -1642,6 +1642,12 @@ task.help_restore_checkpoint=Restore a local task checkpoint into a new project
 doctor.userns_host_failed=User namespace launch failed: {detail}
 doctor.userns_insufficient=The probe did not obtain uid 0 and full capabilities
 doctor.userns_no_detail=bwrap failed or timed out without diagnostics
+doctor.apparmor_enabled=Host AppArmor is enabled.
+doctor.apparmor_disabled=Host AppArmor is disabled.
+doctor.apparmor_unknown=Host AppArmor status is unavailable in this session.
+doctor.apparmor_userns_setting=Host kernel.apparmor_restrict_unprivileged_userns={value}.
+doctor.apparmor_guest=AppArmor label reported by the guest shell: {label}
+doctor.apparmor_guest_unknown=Guest AppArmor label unavailable.
 doctor.userns_next=Check host user namespace policy and AppArmor or container restrictions for this bwrap binary.
 doctor.netns_ready=Isolated network namespace probe passed
 doctor.netns_probe_failed=Isolated network namespace launch failed: {detail}

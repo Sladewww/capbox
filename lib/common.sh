@@ -1498,6 +1498,21 @@ _doctor_strip_marker() {
   rm -f -- "$tmp"
 }
 
+# Report observable AppArmor state independently of the bwrap userns probe.
+_doctor_report_apparmor_host() {
+  local enabled="" userns=""
+  { IFS= read -r enabled < /sys/module/apparmor/parameters/enabled; } 2>/dev/null || true
+  case "$enabled" in
+    Y) _doctor_pass_i18n doctor.apparmor_enabled ;;
+    N) printf 'INFO  %s\n' "$(i18n_get doctor.apparmor_disabled)" ;;
+    *) printf 'INFO  %s\n' "$(i18n_get doctor.apparmor_unknown)" ;;
+  esac
+  { IFS= read -r userns < /proc/sys/kernel/apparmor_restrict_unprivileged_userns; } 2>/dev/null || true
+  if [[ "$userns" == 0 || "$userns" == 1 ]]; then
+    printf 'INFO  %s\n' "$(i18n_fmt doctor.apparmor_userns_setting value="$userns")"
+  fi
+}
+
 # Probe the host tools without a project rootfs. Keep kernel diagnostics for the caller.
 _doctor_probe_userns() {
   local bwrap="${CAPBOX_BWRAP:-}" out uid capeff
@@ -1590,6 +1605,8 @@ cmd_doctor() {
   _bwrap_ver_ok="${CAPBOX_DOCTOR_BWRAP_VER_OK:-0}"
   _bwrap_launch_ok="${CAPBOX_DOCTOR_BWRAP_LAUNCH_OK:-0}"
   _bwrap_baseline_fail="${CAPBOX_DOCTOR_BWRAP_BASELINE_FAIL:-0}"
+
+  _doctor_report_apparmor_host
 
   # 2) Host namespace checks are independent of rootfs preparation.
   local _host_launch_ok=0
@@ -1751,6 +1768,7 @@ cmd_doctor() {
     _image_doctor_report
   fi
 
+  local _guest_apparmor=""
   # 9) 环境变量清空（--clearenv 白名单）
   # 版本不够时不跑 oneshot：build_bwrap_args 会拒绝，探针会误报成「环境变量未清空」。
   if (( _bwrap_launch_ok == 1 && _host_launch_ok == 1 )) && rootfs_ready && [[ -x "${CAPBOX_BWRAP:-}" ]]; then
@@ -1765,10 +1783,16 @@ cmd_doctor() {
            echo NO_WHITELIST
            exit 1
          fi
-         echo OK'
+         echo OK
+         if IFS= read -r label 2>/dev/null < /proc/self/attr/apparmor/current && test -n "$label"; then
+           printf "APPARMOR=%s\n" "$label"
+         fi'
     )" || env_rc=$?
-    if [[ "$env_rc" -eq 0 && "$env_probe" == *OK* ]]; then
+    if [[ "$env_rc" -eq 0 && ( "$env_probe" == OK || "$env_probe" == OK$'\n'APPARMOR=* ) ]]; then
       _doctor_pass_i18n doctor.env_cleared
+      if [[ "$env_probe" == OK$'\n'APPARMOR=* ]]; then
+        _guest_apparmor="${env_probe#*$'\n'APPARMOR=}"
+      fi
     else
       _doctor_fail_i18n doctor.env_not_cleared rc="$env_rc" out="${env_probe:-<empty>}"
     fi
@@ -1780,6 +1804,11 @@ cmd_doctor() {
     _doctor_warn_i18n doctor.skip_guest_host_probe
   else
     _doctor_warn_i18n doctor.skip_env_no_rootfs
+  fi
+  if [[ -n "$_guest_apparmor" ]]; then
+    printf 'INFO  %s\n' "$(i18n_fmt doctor.apparmor_guest label="$_guest_apparmor")"
+  else
+    printf 'INFO  %s\n' "$(i18n_get doctor.apparmor_guest_unknown)"
   fi
 
   # 10) 缺失配置路径预占（CVE-2026-25725 同类：guest 不得创建宿主会读的 config/services）

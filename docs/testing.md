@@ -90,3 +90,53 @@ CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.p
 ```
 
 第一条测试宿主范围、Git 复制规则、路径替换、并发副本和部分补丁。有宿主 C 编译器时还会从选中的文件编译并运行程序。第三条需要支持 Agent 强隔离的 Linux 宿主和已准备好的 Alpine rootfs。两个 guest 用各自的输入打包，并检查只读输入、私有输出和二进制补丁。
+
+## Bubblewrap 内核面探针
+
+在普通 Linux 用户会话安装 Bubblewrap 0.12.0 或更新版、libseccomp、Python、Node/npm、Go 和 apt，运行：
+
+```sh
+bash test/seccomp-compat.sh
+```
+
+脚本以只读方式使用宿主运行时，在临时目录写入 fixture。它分别运行无 CapBox 过滤器的对照和两种加固档的生成产物，检查生效的过滤器数量、若干拒绝规则、线程、离线 npm、apt 模拟和 Unix socket。损坏的 BPF 必须在执行 guest 标记命令前被拒绝。网络探针检查命名空间标识、回环、宿主监听器和外部路由，并记录继承的描述符。该脚本直接运行 bwrap，结果应与配置了对应安全档和 `CAPBOX_NET=none` 的实际 CapBox 工作负载一起验证。
+
+| 宿主 | 实测 |
+|---|---|
+| Debian 13 x86_64、Linux 6.18.57、glibc 2.41、Bubblewrap 0.12.0，外层已有一个过滤器 | Python 3.12.14 线程、Node 24.22.1 Worker、npm 11.9.0 离线安装、apt 3.0.3 模拟检查通过。加固档观察到第二个过滤器。损坏的 BPF 被拒绝。 |
+| 同一宿主 | 外层拒绝创建 AF_UNIX 和 NETLINK_ROUTE socket。Unix socket 与 `net=none` 成功路径未验证。未取得可用 Go 工具链。未读到 AppArmor 状态或 guest 标签。 |
+| Ubuntu 24.04/26.04、aarch64、Alpine/musl | 待实测。 |
+
+在上述受限宿主复跑已通过的子集：
+
+```sh
+CAPBOX_PROBE_SKIP_IPC=1 CAPBOX_PROBE_SKIP_GO=1 CAPBOX_PROBE_NETWORK=0 bash test/seccomp-compat.sh
+```
+
+这台宿主上三档的 `clone3(NULL, 0)` 均返回 `EINVAL`，线程负载通过。保留现有 `clone3` 行为。后续可跨 glibc、musl 和架构验证 `ENOSYS` 回退，以及传统 `clone` 的命名空间标志限制。按地址族过滤也待有完整网络和 IPC 实测后评估。
+
+显式打开的宿主 FD 9 在启用 PID namespace 的 bwrap guest 中仍可见。用 `untrusted`、单 UID、`net=open` 的 CapBox `exec` 也观察到了同一结果。`net=none` 通过 `--unshare-net` 请求新网络命名空间，不启用 restricted 专用的代理目录挂载。共享启动器的描述符清理应在宿主策略入口合入后验证。需要覆盖原有 stdio、seccomp、UID 映射及启动握手使用的 FD，并测试继承的宿主 socket 和普通 FD。
+
+真实 CLI 的加载失败探针可在已初始化的一次性项目中复跑。项目用 `untrusted`、单 UID 和当前宿主支持的网络模式，临时运行目录要在工作区外：
+
+```sh
+(
+  export XDG_RUNTIME_DIR="$(mktemp -d /tmp/cb.XXXX)"
+  trap 'rm -rf -- "$XDG_RUNTIME_DIR"' EXIT
+  capbox exec -- /bin/sh -c 'test -e /proc/self/fd/9 && echo "FD 9 visible"' 9</dev/null
+  bpf="$(find "$XDG_RUNTIME_DIR" -name seccomp-untrusted.bpf -print -quit)"
+  test -n "$bpf" || exit 1
+  printf 'invalid\n' > "$bpf"
+  if capbox exec -- /bin/sh -c ': > /workspace/seccomp-payload-ran'; then exit 1; fi
+  test ! -e seccomp-payload-ran
+)
+```
+
+本次 CapBox `exec` 返回 1，bwrap 报告 `PR_SET_SECCOMP` 返回 `EINVAL`，guest 标记未创建。`EINVAL` 也可能来自其他加载条件，诊断保留 bwrap 的原始输出。
+
+### AppArmor 诊断
+
+`capbox doctor` 分别报告当前会话可读的宿主 AppArmor 状态、实际 bwrap user namespace 探针及 guest shell 的 AppArmor 标签。guest 探针没有运行或属性不可读时，标签未知。bwrap 失败时根据原始错误和内核日志判断原因。
+
+- Ubuntu 24.04 及之后，检查 `sysctl kernel.apparmor_restrict_unprivileged_userns`、`sudo aa-status` 与 `sudo journalctl -k -b`。核对拒绝事件、实际 bwrap 路径和附着的策略。发行版说明见 [Ubuntu AppArmor 文档](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/)。
+- Debian，先用 `sudo aa-status` 和 `sudo journalctl -k -b` 确认加载状态及拒绝事件。若运行于容器内，另在外层核对安全策略和日志。

@@ -113,7 +113,7 @@ UNTRUSTED = [
     "kexec_load", "kexec_file_load", "bpf", "userfaultfd",
     "open_by_handle_at", "name_to_handle_at",
     "keyctl", "add_key", "request_key",
-    "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "mount_setattr",
+    "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "fspick", "mount_setattr",
     "unshare", "setns",
     "io_uring_setup", "io_uring_enter", "io_uring_register",
 ]
