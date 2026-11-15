@@ -1640,6 +1640,12 @@ task.help_restore_checkpoint=将本地任务检查点恢复到新项目
 doctor.userns_host_failed=用户命名空间启动失败：{detail}
 doctor.userns_insufficient=探针未取得 uid 0 与全量 capability
 doctor.userns_no_detail=bwrap 失败或超时，未返回诊断信息
+doctor.apparmor_enabled=宿主 AppArmor 已启用。
+doctor.apparmor_disabled=宿主 AppArmor 已停用。
+doctor.apparmor_unknown=当前会话无法读取宿主 AppArmor 状态。
+doctor.apparmor_userns_setting=宿主 kernel.apparmor_restrict_unprivileged_userns={value}。
+doctor.apparmor_guest=guest shell 报告的 AppArmor 标签为 {label}。
+doctor.apparmor_guest_unknown=未取得 guest AppArmor 标签。
 doctor.userns_next=检查此 bwrap 二进制适用的宿主 user namespace、AppArmor 或外层容器策略。
 doctor.netns_ready=隔离网络命名空间探测通过
 doctor.netns_probe_failed=隔离网络命名空间启动失败：{detail}
