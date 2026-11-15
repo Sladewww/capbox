@@ -13,7 +13,7 @@ TASK_ID = re.compile(r'[0-9a-f]{32}')
 TASK_STATES = {'preparing', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out', 'lost'}
 POLICY_FIELDS = (
     'SECURITY_PROFILE', 'NET', 'NET_ALLOW', 'IDMAP', 'EXEC_UID', 'EXEC_GID',
-    'MEMORY_MAX', 'CPU_MAX', 'PIDS_MAX', 'DISK_MAX', 'RESOURCES_MODE',
+    'MEMORY_MAX', 'CPU_MAX', 'PIDS_MAX', 'SWAP_MAX', 'DISK_MAX', 'RESOURCES_MODE',
     'FS_HIDE', 'FS_BINDS', 'OVERLAY', 'ROOTFS_RO', 'LANDLOCK',
     'WORKSPACE_READONLY', 'WRITE_DIRS',
 )

@@ -90,6 +90,10 @@ def environment(ctx):
         if k == 'ALLOW_OLD_BWRAP' or (k == 'ROOTFS_RO' and ctx['sources'][k] == 'default'):
             continue
         env['CAPBOX_'+k] = v
+    for key in ('CGROUP_ROOT', 'CPU_MAX', 'MEMORY_MAX', 'PIDS_MAX', 'SWAP_MAX'):
+        host = 'CAPBOX_TASK_HOST_' + key
+        if host in os.environ:
+            env[host] = os.environ[host]
     if 'CAPBOX_CGROUP_ROOT' in os.environ:
         env['CAPBOX_CGROUP_ROOT'] = os.environ['CAPBOX_CGROUP_ROOT']
     return env

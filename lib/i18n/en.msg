@@ -1283,6 +1283,7 @@ task.log_limit_exceeds_64mib=the per-stream log limit cannot exceed 64MiB
 task.single_log_read_limit_1mib=a single log read is limited to 1MiB
 task.hint_client_wait_timeout=Client wait timed out (the task was not cancelled). Continue with status/logs/wait, or cancel explicitly.
 task.cannot_remove_running=cannot remove a running task; cancel/wait first
+task.cgroup_cleanup_incomplete=Task cgroup cleanup is incomplete. Inspect the cgroup in task status first.
 task.lost_requires_manual_confirm=a lost task needs manual confirmation that the outer session has ended; the first edition does not clean it up automatically
 task.operation_failed=[capbox] task operation failed: {type}: {exc}
 envkit.requires_python_3_10=[capbox] this feature requires host Python 3.10+

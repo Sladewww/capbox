@@ -215,3 +215,31 @@ if capbox task restore "$base/checkpoint" "$base/rejected" --manifest-sha256 "$p
 fi
 test ! -e "$base/rejected"
 ```
+
+### 隔离任务的 cgroup v2
+
+`task start --isolate` 和 MCP 执行使用宿主的 `RESOURCES_MODE=require`。
+启动器在 guest 执行用户命令前核对实际额度、启动器和 guest 的 cgroup 归属。
+默认额度为 1 核、512 MiB 和 128 个 PID（包含线程）。
+宿主启动环境可以通过 `CAPBOX_TASK_HOST_CPU_MAX`、`CAPBOX_TASK_HOST_MEMORY_MAX`、
+`CAPBOX_TASK_HOST_PIDS_MAX` 调整额度。`CAPBOX_TASK_HOST_SWAP_MAX` 单独设置 swap，
+`0` 禁用 swap，留空时沿用上级 cgroup 的限制。内存和 swap 额度按内核页向下取整。
+项目配置和 MCP 调用参数不提供这些宿主设置。
+
+默认在调用进程的 cgroup 的父级下为每个任务创建独立子组。宿主也可以通过
+`CAPBOX_TASK_HOST_CGROUP_ROOT` 提供已委派的父组。父组必须已经启用
+`cpu memory pids`，并允许创建子组、迁移进程、写控制文件和执行 `cgroup.kill`。
+systemd 可以负责提供委派。硬限制证据来自内核读回和进程归属核验。
+`doctor --agent` 执行相同检查。`task status` 保存核验值和清理结果，审计时间线用
+`task_id` 关联 `requested`、`configured`、`entered`、`verified` 与 `cleanup`。
+缺少委派时，任务在工作区复制前失败。
+
+| 阶段 | 边界 |
+| --- | --- |
+| 工作区准备 | 在任务 cgroup 外。源工作区复制上限为 100 MiB、10,000 个文件。Git 清单输出上限为 8 MiB。模板、基础 rootfs 和 overlay 上层的合计复制上限为 4 GiB、200,000 个条目。 |
+| 启动、guest 和后代 | 同一任务 cgroup 覆盖 CLI、启动探针、Bubblewrap、guest 和后代。隔离任务固定离线，因此没有任务代理进程。 |
+| 产物 | guest 的单个常规文件有 100 MiB 上限。监督器检查可写工作区，超过 256 MiB 或 20,000 个条目时终止任务，清理进程后再次检查并尝试移除超限副本。检查之间的峰值和打开后已删除的文件不受聚合检查约束。需要硬磁盘总额的宿主应为任务状态所在文件系统配置独立配额。 |
+| 日志 | 宿主监督器在任务 cgroup 外截断 stdout/stderr，每路默认保留 8 MiB，允许配置到 64 MiB。长期保留的任务和审计日志占用宿主存储。 |
+
+`cleanup=removed` 表示内核报告任务 cgroup 已无进程，且子组已移除。
+清理失败会使任务返回 125，保留证据供宿主确认。`lost` 任务可能需要宿主清理。

@@ -95,7 +95,9 @@
       const proof = task.protection;
       const lines = [proof.status];
       if (proof.check) lines.push(proof.check);
-      for (const [name, value] of Object.entries(proof.checks ?? {})) lines.push(name + '=' + value);
+      for (const [name, value] of Object.entries(proof.checks ?? {})) {
+        lines.push(name + '=' + (typeof value === 'object' ? JSON.stringify(value) : value));
+      }
       field(fields, t('task_protection'), lines.join('\n'));
     }
     if (task.diff) {

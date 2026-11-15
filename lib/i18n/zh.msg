@@ -1282,6 +1282,7 @@ task.log_limit_exceeds_64mib=每路日志上限不能超过 64MiB
 task.single_log_read_limit_1mib=单次日志读取上限为 1MiB
 task.hint_client_wait_timeout=客户端等待超时（未取消任务）。继续 status/logs/wait，或显式 cancel。
 task.cannot_remove_running=不能删除运行中的任务；请先 cancel/wait
+task.cgroup_cleanup_incomplete=任务 cgroup 清理未完成。请先检查 task status 中的 cgroup。
 task.lost_requires_manual_confirm=lost 任务需人工确认外层会话已结束，首版不自动清理
 task.operation_failed=[capbox] 任务操作失败: {type}: {exc}
 envkit.requires_python_3_10=[capbox] 此功能需要宿主 Python 3.10+
