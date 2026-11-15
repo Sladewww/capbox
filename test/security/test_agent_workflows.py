@@ -307,7 +307,9 @@ class TaskTests(Fixture):
 
     def wait(self,task,code=0,timeout=15):
         r=self.run_cli('task','wait',task,'--timeout',str(timeout),'--json')
-        self.assertEqual(r.returncode,code,r.stdout+r.stderr)
+        if r.returncode != code:
+            logs = self.run_cli('task', 'logs', task, '--stream', 'stderr')
+            self.fail(f'expected task exit {code}, got {r.returncode}\n{r.stdout}{r.stderr}{logs.stdout}')
         return json.loads(r.stdout)
 
     def git(self,*args):
@@ -350,7 +352,9 @@ class TaskTests(Fixture):
                 self.assertEqual(result['task']['diff']['origin_changed'], ['hello.txt'])
             else:
                 self.assertEqual(result['task']['policy']['NET'],
-                                 {'value': 'open', 'source': 'command'})
+                                 {'value': 'none', 'source': 'host'})
+                self.assertEqual(result['task']['protection']['requested']['NET'],
+                                 {'value': 'none', 'source': 'command'})
         report = self.base / 'task.html'
         self.run_cli('audit', 'report', '--task-id', done, '--output', str(report), check=True)
         self.assertIn('origin_changed', report.read_text())
@@ -477,10 +481,11 @@ class TaskTests(Fixture):
 
     def test_isolation_diff_binary_deletion_and_origin_conflict(self):
         self.init_git()
-        task=self.start('--isolate','--','sh','-c',
-            'test ! -e /workspace/.env && test ! -e /workspace/.git && '
+        task=self.start('--isolate','--','sh','-ec',
+            'test ! -e /workspace/.env; test ! -e /workspace/.git; '
             'echo task > /workspace/hello.txt; printf "\\000binary" > /workspace/new.bin; '
-            'rm /workspace/.gitignore; echo private > /etc/task-private')
+            'rm /workspace/.gitignore; '
+            'if touch /etc/task-private; then exit 1; fi; test ! -e /etc/task-private')
         self.wait(task)
         self.assertEqual((self.ws/'hello.txt').read_text(),'base\n')
         self.assertFalse((self.ws/'.capbox/os/alpine/etc/task-private').exists())
