@@ -119,6 +119,11 @@ class PolicyTests(Fixture):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]['protection']['check'], 'cgroup_delegation')
         self.assertEqual(tasks[0]['output_bytes']['stdout'], 0)
+        audit = self.run_cli('audit', 'query', '--task-id', tasks[0]['task_id'], check=True)
+        observations = [event['observation'] for event in json.loads(audit.stdout)['events']
+                        if 'observation' in event]
+        self.assertEqual([item['phase'] for item in observations], ['requested', 'failed'])
+        self.assertEqual(observations[-1]['check'], 'cgroup_delegation')
 
     def test_sources_override_without_mutation(self):
         self.run_cli('config', 'set', 'CAPBOX_NET', 'open', check=True)
