@@ -129,6 +129,17 @@ class InputSelectionTests(unittest.TestCase):
         with self.assertRaises(self.agent.AgentError):
             self.copy(self.base / 'view', 'src')
 
+    def test_replaced_workspace_ancestor_is_rejected(self):
+        self.put('src/main', 'outside the submitted workspace')
+        alias = self.base / 'alias'
+        alias.symlink_to(self.base, target_is_directory=True)
+        view = self.base / 'view'
+        view.mkdir()
+        with self.assertRaises(OSError):
+            self.agent.copy_selected_inputs(self.ctx, alias / self.ws.name, view,
+                                             self.agent.input_paths(['src']))
+        self.assertEqual(list(view.iterdir()), [])
+
     def test_concurrent_private_copies_and_partial_patch(self):
         self.put('a/modify', 'before\n')
         self.put('a/remove', 'remove this\n')

@@ -301,6 +301,18 @@ def relative_stat(root_fd, name):
         return os.fstat(fd)
 
 
+def open_workspace_root(source):
+    # source was canonicalized at submission. Do not follow later replacements
+    # of either the workspace itself or any of its ancestors.
+    system_root = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with open_relative(system_root, source.relative_to('/').as_posix(),
+                           os.O_RDONLY | os.O_DIRECTORY) as fd:
+            return os.dup(fd)
+    finally:
+        os.close(system_root)
+
+
 def read_pinned_regular(fd, name):
     before = os.fstat(fd)
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -492,7 +504,7 @@ def copy_selected_inputs(ctx, source, view, selected):
     if not selected:
         return baseline, 'empty'
     name = str(min(selected))
-    root_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_fd = open_workspace_root(source)
     try:
         initial = {}
         for path in sorted(selected):
@@ -546,7 +558,11 @@ def copy_selected_inputs(ctx, source, view, selected):
                 raise AgentError(i18n.t('task.file_changed_during_read', name=name))
             if stat.S_ISREG(info.st_mode) and name not in baseline:
                 raise AgentError(i18n.t('task.input_not_in_view', name=repr(name)), 2)
-        current_root = source.lstat()
+        current_fd = open_workspace_root(source)
+        try:
+            current_root = os.fstat(current_fd)
+        finally:
+            os.close(current_fd)
         pinned_root = os.fstat(root_fd)
         if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
             raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace'))
@@ -654,7 +670,9 @@ def writable_directories(ctx, args):
 
 
 def isolate(ctx, job, selected=None):
-    source = Path(ctx['workspace']).resolve()
+    source = Path(ctx['workspace'])
+    if selected is None:
+        source = source.resolve()
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_needs_readable_workspace'), 2)
     upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
