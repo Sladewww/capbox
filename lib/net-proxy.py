@@ -424,7 +424,11 @@ def rewrite_headers_for_credentials(
                 if log:
                     print(f"capbox-net CRED_DENY {msg}", file=sys.stderr)
                 return header_lines, msg
+            if inject.get("https_only") and name.strip().lower() != entry.get("header", "").lower():
+                return header_lines, "credential header denied"
             secret = _resolve_entry_value(entry, cache)
+            if inject.get("https_only") and any(ord(char) < 32 or ord(char) == 127 for char in secret):
+                return header_lines, "credential value denied"
             new_value = new_value.replace(token, secret)
         rebuilt.append(f"{name.strip()}: {new_value.lstrip()}")
     return rebuilt, None
@@ -632,7 +636,8 @@ def handle_client(conn: socket.socket, allow: List[str], log: bool, inject: Opti
 
         skip = {"proxy-connection", "proxy-authorization", "connection", "keep-alive", "te", "transfer-encoding"}
         # 凭据占位符改写（仅 header 值）。
-        rewritten, violation = rewrite_headers_for_credentials(lines, host, inject, cache, log)
+        rewritten, violation = rewrite_headers_for_credentials(
+            lines, host, {} if inject.get("https_only") else inject, cache, log)
         if violation:
             if on_deny:
                 on_deny(host, port, 'credential_denied')

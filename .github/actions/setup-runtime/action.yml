@@ -8,7 +8,7 @@ runs:
       run: |
         set -euo pipefail
         sudo apt-get update -qq
-        sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates gcc libc6-dev python3 libseccomp2
+        sudo apt-get install -y -qq bubblewrap curl tar uidmap e2fsprogs ca-certificates gcc libc6-dev python3 python3-cryptography libseccomp2
         ver="$(bwrap --version 2>/dev/null | head -n 1 || true)"
         echo "distro bwrap: ${ver:-missing} ($(command -v bwrap || echo none))"
         ok=0

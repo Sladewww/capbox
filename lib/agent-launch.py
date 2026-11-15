@@ -5,6 +5,7 @@ from contextlib import contextmanager, ExitStack
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -171,10 +172,46 @@ def prepare(argv, status_fd, helper, rootfs, workspace, probe_fd):
     return argv, int(seccomp[0][0])
 
 
+def prepare_credentials(argv, directory):
+    grants = os.environ.get('CAPBOX_AGENT_CREDENTIAL_GRANTS', '')
+    if not grants:
+        return argv, None
+    require(os.environ.get('CAPBOX_NET') == 'restricted', 'credentials_prepare')
+    helper = Path(__file__).resolve().with_name('credentials-runtime.py')
+    command = ['/usr/bin/python3', '-I', str(helper), 'prepare',
+               '--allow', os.environ['CAPBOX_NET_ALLOW'], '--output-dir', str(directory)]
+    for grant in grants.split(','):
+        command.extend(('--grant', grant))
+    try:
+        proc = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, check=True, timeout=20, cwd='/')
+        prepared = json.loads(proc.stdout)
+        if not prepared['active']:
+            return argv, None
+        bundle = directory / 'ca-bundle.pem'
+        ca = Path(prepared['ca_cert']).read_bytes()
+        roots = next((p.read_bytes() for p in (
+            Path('/etc/ssl/certs/ca-certificates.crt'), Path('/etc/ssl/cert.pem'),
+            Path('/etc/pki/tls/certs/ca-bundle.crt')) if p.is_file()), b'')
+        bundle.write_bytes(roots + b'\n' + ca)
+        guest_bundle = '/run/capbox-agent-ca.pem'
+        extra = ['--ro-bind', str(bundle), guest_bundle]
+        for name, value in prepared['placeholders'].items():
+            require(re.fullmatch(r'[A-Z_][A-Z0-9_]*', name)
+                    and re.fullmatch(r'capbox-sec-[0-9a-f]{32}', value), 'credentials_prepare')
+            extra.extend(('--setenv', name, value))
+        for name in ('SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'):
+            extra.extend(('--setenv', name, guest_bundle))
+        split = argv.index('--', argv.index(BWRAP) + 1)
+        return [*argv[:split], *extra, *argv[split:]], directory / 'inject.json'
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        raise LaunchError('credentials_prepare') from exc
+
+
 @contextmanager
 def supervised(command):
     with subprocess.Popen(command, stdin=subprocess.DEVNULL,
-                          stdout=subprocess.DEVNULL) as child:
+                          stdout=subprocess.DEVNULL, cwd='/') as child:
         try:
             yield child
         finally:
@@ -199,7 +236,7 @@ def wait_ready(child, path):
 
 
 @contextmanager
-def restricted_proxy(pid, mode):
+def restricted_proxy(pid, mode, inject_map):
     if mode == 'none':
         yield
         return
@@ -211,6 +248,8 @@ def restricted_proxy(pid, mode):
         proxy_ready, bridge_ready = private / 'proxy.ready', private / 'bridge.ready'
         command = [python, '-I', helper, 'proxy', '--sock', sock, '--ready', str(proxy_ready),
                    '--allow', os.environ['CAPBOX_NET_ALLOW']]
+        if inject_map is not None:
+            command.extend(('--inject-map', str(inject_map)))
         task_id = os.environ.get('CAPBOX_TASK_AUDIT_ID')
         audit_path = os.environ.get('CAPBOX_TASK_AUDIT_PATH')
         if task_id and audit_path and os.environ.get('CAPBOX_AUDIT', 'summary') not in ('0', 'off', 'false', 'no', 'NONE', 'none'):
@@ -236,6 +275,11 @@ def launch(status_fd, helper, rootfs, workspace, argv):
         host.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
         host.settimeout(30)
         argv, seccomp_fd = prepare(argv, status_fd, helper, rootfs, workspace, guest.fileno())
+        credential_dir = network.enter_context(tempfile.TemporaryDirectory(
+            prefix='credentials-', dir=Path(helper).parent)) if os.environ.get('CAPBOX_AGENT_CREDENTIAL_GRANTS') else None
+        inject_map = None
+        if credential_dir:
+            argv, inject_map = prepare_credentials(argv, Path(credential_dir))
         with subprocess.Popen(argv, pass_fds=(status_fd, seccomp_fd, guest.fileno())) as proc:
             guest.close()
             try:
@@ -260,7 +304,7 @@ def launch(status_fd, helper, rootfs, workspace, argv):
                 except (OSError, KeyError, ValueError) as exc:
                     raise LaunchError('cgroup_membership') from exc
                 mode = os.environ.get('CAPBOX_NET', 'none')
-                network.enter_context(restricted_proxy(pid, mode))
+                network.enter_context(restricted_proxy(pid, mode, inject_map))
                 record(status_fd, 'protection_verified', checks={
                     'cgroup': {'membership': membership, 'limits': limits, 'pid': pid},
                     'profile': 'strict', 'uid_map': 'single', 'gid_map': 'single',
