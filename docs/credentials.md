@@ -73,7 +73,7 @@ capbox secret set github --command 'gh auth token'
 
 ## MCP 日常路径
 
-MCP 的宿主 Agent 策略将网络固定为 `none`。宿主凭据代理适用于本页介绍的普通 CLI restricted 入口。MCP 客户端配置和工具参数中不要填写密钥。
+MCP 默认无网。宿主可为隔离任务和 MCP 显式授权受限出站。宿主凭据注入目前适用于本页介绍的普通 CLI restricted 入口。MCP 客户端配置和工具参数中不要填写密钥。
 
 ## 相关
 

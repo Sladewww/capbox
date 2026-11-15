@@ -129,6 +129,36 @@ def context():
             'allow_once': env.get('CAPBOX_AGENT_ALLOW_ONCE') == '1'}
 
 
+def host_network_policy(lib, args, ctx):
+    mode = getattr(args, 'net', None) or 'none'
+    requested = getattr(args, 'net_allow', None)
+    if mode == 'none' and requested is None:
+        return {'NET': 'none', 'NET_ALLOW': ''}
+    if mode != 'restricted':
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='NET'), 2)
+
+    policy = lib.parent / 'agent-network.allow'
+    module = net_module(ctx)
+    try:
+        fd = os.open(policy, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
+                raise ValueError()
+            raw = stream.read(8193)
+            if len(raw) > 8192:
+                raise ValueError()
+            allowed = module.parse_allowlist(raw.decode('ascii'))
+            if not module.allowlist_subset(allowed, allowed):
+                raise ValueError()
+    except (OSError, ValueError) as exc:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='NET'), 2) from exc
+    rules = allowed if requested is None else module.parse_allowlist(requested)
+    if not rules or not module.allowlist_subset(rules, allowed):
+        raise AgentError(i18n.t('task.net_allow_outside_host'), 2)
+    return {'NET': mode, 'NET_ALLOW': ','.join(rules)}
+
+
 def locked_context(ctx, args):
     workspace = Path(ctx['workspace'])
     cli = Path(ctx['cli']).resolve()
@@ -138,11 +168,9 @@ def locked_context(ctx, args):
         raise AgentError(i18n.t('task.agent_external_template'), 2)
     if ctx['config'].get('DISTRO') not in ('alpine', 'ubuntu'):
         raise AgentError(i18n.t('task.agent_policy_conflict', key='DISTRO'), 2)
-    for key, value in (('SECURITY_PROFILE', getattr(args, 'profile', None)),
-                       ('NET', getattr(args, 'net', None)),
-                       ('NET_ALLOW', getattr(args, 'net_allow', None))):
-        if value is not None and value != AGENT_POLICY[key]:
-            raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
+    if getattr(args, 'profile', None) not in (None, 'strict'):
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='SECURITY_PROFILE'), 2)
+    policy = {**AGENT_POLICY, **host_network_policy(lib, args, ctx)}
     config = ctx['config']
     for key in ('FS_BINDS', 'UID_MAP', 'GID_MAP', 'SETGROUPS', 'DISK_MAX', 'ALLOW_OLD_BWRAP'):
         if config.get(key) not in (None, '', AGENT_POLICY[key]):
@@ -156,8 +184,9 @@ def locked_context(ctx, args):
         neutral = ('', '0') if key in ('BWRAP_NO_PIDNS', 'BWRAP_NO_DIE_WITH_PARENT') else ('',)
         if os.environ.get('CAPBOX_' + key, '') not in neutral:
             raise AgentError(i18n.t('task.agent_policy_conflict', key=key), 2)
-    return dict(ctx, locked=True, config={**config, **AGENT_POLICY},
-                sources={**ctx['sources'], **dict.fromkeys(AGENT_POLICY, 'host')})
+    return dict(ctx, locked=True, config={**config, **policy},
+                sources={**ctx['sources'], **dict.fromkeys(policy, 'host'),
+                         **({'NET_ALLOW': 'command'} if getattr(args, 'net_allow', None) is not None else {})})
 
 
 def effective(ctx, args):
