@@ -97,6 +97,8 @@ bundle 使用既有安全镜像解压语义（含权限/属主净化）；不承
 
 MCP 执行与 CLI `task start --isolate` 共用宿主策略。工作区副本沿用 Git 脏树、非 Git 遍历和 overlay 合并规则。每个任务默认至多运行 600 秒，每路流保留 8 MiB。服务端可配置 `--max-timeout`，工具请求只可在这个上限内选择任务超时。
 
+`capbox_execute` 可传入 `input_paths: ["src", "Makefile"]`（1–256 项）和 `write_dirs: ["build"]`。输入范围受宿主的 `agent-inputs.json` 限制，采用选择范围时自动启用只读工作树。省略 `input_paths` 时使用宿主默认范围。详见 [选择隔离任务的输入](agent-workflows.md#选择隔离任务的输入)。
+
 使用 `mcpServers` 块的客户端示例：
 
 ```json

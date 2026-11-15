@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Public CLI contracts, including real guest execution when a rootfs is supplied."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -9,9 +13,178 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]
 ROOTFS = Path(os.environ.get('CAPBOX_TEST_ROOTFS', REPO / 'os/alpine'))
+
+
+class InputSelectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('capbox_agent', REPO / 'lib/agent-runtime.py')
+        cls.agent = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.agent)
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='cb-inputs-')
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.ws = self.base / 'project'
+        self.ws.mkdir()
+        self.ctx = {'workspace': str(self.ws), 'config': {'DISTRO': 'alpine'},
+                    'cli': str(REPO / 'bin/capbox'), 'lib': str(REPO / 'lib'),
+                    'locked': True}
+
+    def put(self, name, value):
+        file = self.ws / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(value)
+
+    def git(self, *args):
+        self.agent.git(self.ctx, list(args), work=self.ws)
+
+    def copy(self, view, *paths):
+        view.mkdir()
+        return self.agent.copy_selected_inputs(self.ctx, self.ws, view,
+                                               self.agent.input_paths(list(paths)))[0]
+
+    def test_host_policy_from_external_template(self):
+        template = self.base / 'template'
+        template.mkdir()
+        ctx = dict(self.ctx, lib=str(template / 'lib'), cli=str(template / 'bin/capbox'),
+                   sources={}, allow_once=False)
+        parser = self.agent.parser()
+        args = parser.parse_args(['task', 'start', '--isolate', '--', 'true'])
+        ctx = self.agent.locked_context(ctx, args)
+        self.put('agent-inputs.json', '["private"]')
+        self.assertIsNone(self.agent.task_inputs(ctx, args))
+        policy = template / 'agent-inputs.json'
+        policy.write_text('["src", "build/config"]')
+        self.assertEqual(self.agent.task_inputs(ctx, args), self.agent.input_paths(['src', 'build/config']))
+        args.input = ['src/main.c']
+        self.assertEqual(self.agent.task_inputs(ctx, args), self.agent.input_paths(args.input))
+        for path in ('src2', 'build', '../src', '/src', 'src/.env', 'src//main.c'):
+            with self.subTest(path=path):
+                args.input = [path]
+                with self.assertRaises(self.agent.AgentError):
+                    self.agent.task_inputs(ctx, args)
+        args.input = None
+        policy.write_text('[]')
+        self.assertEqual(self.agent.task_inputs(ctx, args), set())
+        for malformed in ('{', '[null]', '["/src"]'):
+            policy.write_text(malformed)
+            with self.assertRaises(self.agent.AgentError):
+                self.agent.task_inputs(ctx, args)
+        policy.unlink()
+        policy.symlink_to(self.ws / policy.name)
+        with self.assertRaises(self.agent.AgentError):
+            self.agent.task_inputs(ctx, args)
+
+    def test_git_selection_and_credentials(self):
+        self.git('init', '-q')
+        self.put('.gitignore', '*.ignored\n')
+        self.put('src/tracked.ignored', 'old')
+        self.put('src/deleted', 'gone')
+        self.put('src/.env', 'credential')
+        self.git('add', '-f', 'src/tracked.ignored', 'src/deleted', 'src/.env')
+        (self.ws / 'src/deleted').unlink()
+        self.put('src/tracked.ignored', 'dirty')
+        self.put('src/new', 'untracked')
+        self.put('src/local.ignored', 'ignored')
+        self.put('src-other/hidden', 'out of scope')
+        (self.ws / 'src-other/link').symlink_to(self.base)
+
+        view = self.base / 'view'
+        self.assertEqual(set(self.copy(view, 'src', 'src/new')), {'src/tracked.ignored', 'src/new'})
+        self.assertEqual((view / 'src/tracked.ignored').read_text(), 'dirty')
+        self.assertFalse((view / 'src-other').exists())
+        with self.assertRaises(self.agent.AgentError):
+            self.copy(self.base / 'ignored', 'src/local.ignored')
+
+    def test_refuses_links_special_files_and_replacement(self):
+        self.put('src/main', 'original')
+        (self.ws / 'alias').symlink_to(self.ws / 'src')
+        os.link(self.ws / 'src/main', self.ws / 'hard')
+        os.mkfifo(self.ws / 'fifo')
+        for index, name in enumerate(('alias', 'alias/main', 'hard', 'src', 'fifo')):
+            with self.subTest(name=name), self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / str(index), name)
+        (self.ws / 'hard').unlink()
+        original_read = self.agent.read_pinned_regular
+
+        def replace_after_open(fd, name):
+            data = original_read(fd, name)
+            (self.ws / 'src').rename(self.ws / 'old')
+            (self.ws / 'src').symlink_to(self.ws / 'old')
+            return data
+
+        with patch.object(self.agent, 'read_pinned_regular', replace_after_open):
+            with self.assertRaises(self.agent.AgentError):
+                self.copy(self.base / 'race', 'src/main')
+
+    def test_broken_git_metadata_does_not_fall_back_to_filesystem(self):
+        self.put('.git', 'gitdir: ./missing\n')
+        self.put('src/local', 'copying without Git rules would include this file\n')
+        with self.assertRaises(self.agent.AgentError):
+            self.copy(self.base / 'view', 'src')
+
+    def test_concurrent_private_copies_and_partial_patch(self):
+        self.put('a/modify', 'before\n')
+        self.put('a/remove', 'remove this\n')
+        self.put('a/hidden', 'unselected source text\n')
+        self.put('b/file', 'other task\n')
+        rootfs = self.base / 'state/os/alpine'
+        rootfs.mkdir(parents=True)
+        ctx = dict(self.ctx, rootfs=str(rootfs))
+
+        def prepare(label, paths):
+            job = self.base / label
+            job.mkdir()
+            self.agent.isolate(ctx, job, self.agent.input_paths(paths))
+            return job
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            one = executor.submit(prepare, 'one', ['a/modify', 'a/remove'])
+            two = executor.submit(prepare, 'two', ['b'])
+            job, other = one.result(), two.result()
+        view = job / 'workspace'
+        (view / 'a/modify').write_text('after\n')
+        (view / 'a/remove').unlink()
+        self.assertFalse((view / 'a/hidden').exists())
+        (view / 'a/hidden').write_text('new task output\n')
+        (view / 'a/:(literal)new').write_text('new file\n')
+        self.put('a/modify', 'host change\n')
+        self.assertFalse((other / 'workspace/a').exists())
+        self.assertFalse((view / 'b').exists())
+
+        self.agent.write_json(job / 'state.json', {'status': 'succeeded', 'isolated': True})
+        self.agent.write_json(job / 'plan.json', {'origin': str(self.ws)})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.agent.diff_task(ctx, job, True, False)
+        diff = json.loads(output.getvalue())
+        self.assertEqual(diff['changed_files'], ['a/:(literal)new', 'a/hidden', 'a/modify', 'a/remove'])
+        self.assertEqual(diff['origin_changed'], ['a/hidden', 'a/modify'])
+        patch_bytes = base64.b64decode(diff['patch_base64'])
+        self.assertIn(b'deleted file mode', patch_bytes)
+        self.assertIn(b'+new task output', patch_bytes)
+        self.assertIn(b'+after', patch_bytes)
+        self.assertNotIn(b'unselected source text', patch_bytes)
+        self.assertNotIn(b'host change', patch_bytes)
+        self.assertNotIn(b'b/file', patch_bytes)
+
+    @unittest.skipUnless(shutil.which('cc'), 'requires a host C compiler')
+    def test_build_from_selected_inputs(self):
+        self.put('src/main.c', '#include "value.h"\nint main(void) { return VALUE; }\n')
+        self.put('src/value.h', '#define VALUE 7\n')
+        self.put('src/unselected.c', '#error file outside the input selection\n')
+        view = self.base / 'build-view'
+        self.copy(view, 'src/main.c', 'src/value.h')
+        (view / 'out').mkdir()
+        subprocess.run(['cc', 'src/main.c', '-o', 'out/example'], cwd=view, check=True)
+        self.assertEqual(subprocess.run([view / 'out/example']).returncode, 7)
+        self.assertFalse((self.ws / 'out').exists())
+        self.assertFalse((view / 'src/unselected.c').exists())
 
 
 class Fixture(unittest.TestCase):
@@ -423,6 +596,46 @@ class TaskTests(Fixture):
         diff = json.loads(self.run_cli('task', 'diff', task, '--json', check=True).stdout)
         self.assertEqual(diff['changed_files'], ['out/sub/result'])
         self.assertFalse((self.ws / 'out/sub/result').exists())
+
+    def test_selected_inputs_in_concurrent_guest_builds(self):
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        (template / 'agent-inputs.json').write_text('["src"]')
+        self.cli[0] = str(template / 'bin/capbox')
+        (self.ws / 'src').mkdir()
+        (self.ws / 'out').mkdir()
+        (self.ws / 'out/private').write_text('host data')
+        for name in ('a', 'b'):
+            (self.ws / 'src' / name).write_text(name + '\n')
+        denied = self.run_cli('task', 'start', '--isolate', '--input', 'out/private', '--', 'true')
+        self.assertEqual(denied.returncode, 2, denied.stderr)
+
+        def build(name, absent):
+            return self.start('--isolate', '--input', 'src/' + name, '--write-dir', 'out', '--',
+                              'sh', '-eu', '-c',
+                              'test ! -e "src/$2"; test ! -e out/private; '
+                              'if (echo overwrite > "src/$1") 2>/dev/null; then exit 1; fi; '
+                              'tar -cf out/package.tar -C src "$1"; '
+                              'test "$(tar -xOf out/package.tar "$1")" = "$1"',
+                              'build', name, absent)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            a = executor.submit(build, 'a', 'b')
+            b = executor.submit(build, 'b', 'a')
+            tasks = [(a.result(), 'a'), (b.result(), 'b')]
+        patches = []
+        for task, name in tasks:
+            state = self.wait(task)
+            self.assertEqual(state['input_paths'], ['src/' + name])
+            self.assertEqual(state['protection']['status'], 'verified')
+            diff = json.loads(self.run_cli('task', 'diff', task, '--json', check=True).stdout)
+            self.assertEqual(diff['changed_files'], ['out/package.tar'])
+            self.assertEqual(diff['origin_changed'], [])
+            patches.append(diff['patch_base64'])
+        self.assertNotEqual(*patches)
+        self.assertFalse((self.ws / 'out/package.tar').exists())
+        self.assertEqual((self.ws / 'out/private').read_text(), 'host data')
 
     def test_readonly_worktree_rejects_unsafe_paths_and_mounts(self):
         (self.ws / 'out/sub').mkdir(parents=True)

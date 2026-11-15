@@ -40,3 +40,14 @@ CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.p
 | 同一环境，实际隔离任务 | 外层阻止 Bubblewrap 建立 loopback 所需的 NETLINK_ROUTE 套接字。退出码为 5，记录 `bubblewrap_or_landlock_setup`，命令未执行。通过独立探针也确认该环境缺少 Landlock。 |
 
 CI 的 acceptance 作业会在其实际安装的 Bubblewrap 版本下复跑。若发行版自带版本低于 0.12.0，CI 使用已固定校验和的 0.13.1。
+
+### 隔离任务的输入范围
+
+```sh
+python3 test/security/test_agent_workflows.py InputSelectionTests
+python3 test/security/test_envkit.py MCPTests
+CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.py \
+  TaskTests.test_selected_inputs_in_concurrent_guest_builds
+```
+
+第一条测试宿主范围、Git 复制规则、路径替换、并发副本和部分补丁。有宿主 C 编译器时还会从选中的文件编译并运行程序。第三条需要支持 Agent 强隔离的 Linux 宿主和已准备好的 Alpine rootfs。两个 guest 用各自的输入打包，并检查只读输入、私有输出和二进制补丁。

@@ -101,6 +101,7 @@ def tools(maximum):
         ('capbox_execute',i18n.t('mcp.tool_execute_desc'),
          obj({**scope,'argv':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':256},
               'workspace_readonly':{'type':'boolean'},
+              'input_paths':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':256},
               'write_dirs':{'type':'array','items':{'type':'string'},'minItems':0,'maxItems':256},
               'cwd':{'type':'string'},'timeout':{'type':'integer','minimum':1,'maximum':maximum}},['argv']),False),
         ('capbox_status',i18n.t('mcp.tool_status_desc'),obj({'task_id':task},['task_id']),True),
@@ -155,6 +156,7 @@ class Server:
                      '--cwd',cwd,
                      '--max-output-bytes',str(MAX_OUTPUT_BYTES)]
             if arguments.get('workspace_readonly'):command+=['--workspace-readonly']
+            command+=['--input='+path for path in arguments.get('input_paths', [])]
             command+=['--write-dir='+path for path in arguments.get('write_dirs', [])]
             if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
             # env + -- 即使只有单个字符串参数也保持 argv 语义。
