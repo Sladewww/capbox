@@ -315,6 +315,8 @@ def open_workspace_root(source):
 
 def read_pinned_regular(fd, name):
     before = os.fstat(fd)
+    if stat.S_ISLNK(before.st_mode):
+        raise OSError(errno.ELOOP, os.strerror(errno.ELOOP), name)
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
         raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
     if before.st_size > MAX_COPY:
