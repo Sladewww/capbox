@@ -129,6 +129,34 @@ def context():
             'allow_once': env.get('CAPBOX_AGENT_ALLOW_ONCE') == '1'}
 
 
+def trusted_policy_bytes(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
+            raise ValueError()
+        raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        return raw
+
+
+def host_credential_grants(ctx):
+    if ctx['config']['NET'] != 'restricted':
+        return []
+    path = Path(ctx['lib']).resolve().parent / 'agent-credentials.allow'
+    try:
+        names = trusted_policy_bytes(path).decode('ascii').split()
+        if any(not re.fullmatch(r'(service|custom):[a-zA-Z0-9][a-zA-Z0-9_.-]*', name)
+               for name in names):
+            raise ValueError()
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        raise AgentError(i18n.t('task.agent_policy_conflict', key='agent-credentials.allow'), 2) from exc
+    return sorted(set(names))
+
+
 def host_network_policy(lib, args, ctx):
     mode = getattr(args, 'net', None) or 'none'
     requested = getattr(args, 'net_allow', None)
@@ -140,17 +168,9 @@ def host_network_policy(lib, args, ctx):
     policy = lib.parent / 'agent-network.allow'
     module = net_module(ctx)
     try:
-        fd = os.open(policy, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
-                raise ValueError()
-            raw = stream.read(8193)
-            if len(raw) > 8192:
-                raise ValueError()
-            allowed = module.parse_allowlist(raw.decode('ascii'))
-            if not module.allowlist_subset(allowed, allowed):
-                raise ValueError()
+        allowed = module.parse_allowlist(trusted_policy_bytes(policy).decode('ascii'))
+        if not module.allowlist_subset(allowed, allowed):
+            raise ValueError()
     except (OSError, ValueError) as exc:
         raise AgentError(i18n.t('task.agent_policy_conflict', key='NET'), 2) from exc
     rules = allowed if requested is None else module.parse_allowlist(requested)
@@ -617,6 +637,7 @@ def start_task(ctx, root, args):
             if getattr(args, name, None) is not None:
                 requested[key] = {'value': getattr(args, name), 'source': 'command'}
         ctx = locked_context(ctx, args)
+    grants = host_credential_grants(ctx) if ctx.get('locked') else []
     write_dirs = writable_directories(ctx, args)
     policy = effective(ctx, args)
     if not Path(ctx['rootfs']).is_dir():
@@ -656,6 +677,9 @@ def start_task(ctx, root, args):
         if args.isolate:
             ctx, skipped = isolate(ctx, job)
         env = clean_environment(ctx)
+        if grants:
+            env['CAPBOX_AGENT_CREDENTIAL_GRANTS'] = ','.join(grants)
+            env['CAPBOX_CRED_PRIVATE'] = str(root.parent)
         if write_dirs is not None:
             for name in args.write_dir:
                 (Path(ctx['workspace']) / name).mkdir(parents=True, exist_ok=True)
