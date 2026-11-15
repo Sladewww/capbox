@@ -264,6 +264,24 @@ class PolicyTests(Fixture):
                 self.env.pop(key)
                 self.assertEqual(result.returncode, 2, result.stderr)
 
+    def test_isolated_restricted_requires_host_allowlist(self):
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        args = ('policy', 'show', '--isolate', '--net', 'restricted')
+        policy = template / 'agent-network.allow'
+        (self.ws / policy.name).write_text('example.com')
+        self.env['CAPBOX_NET_ALLOW'] = 'example.com,evil.invalid'
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+        policy.write_text('example.com')
+        result = self.run_cli(*args, '--net-allow', 'example.com:443', check=True)
+        self.assertEqual(json.loads(result.stdout)['values']['NET_ALLOW'],
+                         {'source': 'command', 'value': 'example.com:443'})
+        self.assertEqual(self.run_cli(*args, '--net-allow', 'evil.invalid').returncode, 2)
+        policy.chmod(0o666)
+        self.assertEqual(self.run_cli(*args).returncode, 2)
+
     def test_isolated_policy_uses_host_template(self):
         common = self.ws / '.capbox/lib/common.sh'
         original = common.read_bytes()
@@ -883,6 +901,38 @@ class TaskTests(Fixture):
             finally:
                 server.shutdown()
                 poll.join()
+
+    def test_isolated_restricted_uses_verified_proxy(self):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        template = self.base / 'template'
+        for directory in ('bin', 'lib'):
+            shutil.copytree(REPO / directory, template / directory)
+        self.cli[0] = str(template / 'bin/capbox')
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            url = f'http://127.0.0.1:{server.server_port}/'
+            (template / 'agent-network.allow').write_text(f'127.0.0.1:{server.server_port}')
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                task = self.start('--isolate', '--net', 'restricted', '--', 'sh', '-ec',
+                                  'wget -T 3 -O /dev/null "$1"; '
+                                  '! HTTP_PROXY= http_proxy= all_proxy= wget -T 3 -O /dev/null "$1"',
+                                  'probe', url)
+                state = self.wait(task)
+                self.assertEqual(state['protection']['checks']['network'], 'restricted')
+            finally:
+                server.shutdown()
+                thread.join()
 
     def test_parallel_restricted_tasks_have_private_network_sessions(self):
         import time

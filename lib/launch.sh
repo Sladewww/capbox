@@ -32,13 +32,13 @@ _agent_launch_config_ok() {
   if [[ "$1" != oneshot || -z "${_task_status_fd:-}" ||
         "${CAPBOX_SECURITY_PROFILE:-}" != strict || "${CAPBOX_IDMAP:-}" != off ||
         "${CAPBOX_RESOURCES_MODE:-}" != require ||
-        "${CAPBOX_NET:-}" != none || "${CAPBOX_ROOTFS_RO:-}" != 1 ||
+        ( "${CAPBOX_NET:-}" != none && "${CAPBOX_NET:-}" != restricted ) || "${CAPBOX_ROOTFS_RO:-}" != 1 ||
         "${CAPBOX_OVERLAY:-}" != off || "${CAPBOX_LANDLOCK:-}" != on ||
         "${CAPBOX_EXEC_UID:-}" != 0 || "${CAPBOX_EXEC_GID:-}" != 0 ||
         "${CAPBOX_BWRAP:-}" != /usr/bin/bwrap ||
         "${CAPBOX_BWRAP_NO_PIDNS:-0}" != 0 || "${CAPBOX_BWRAP_NO_DIE_WITH_PARENT:-0}" != 0 ||
         "${CAPBOX_ALLOW_OLD_BWRAP:-0}" != 0 || -n "${CAPBOX_ALLOW_OLD_BWRAP_ONCE:-}" ||
-        -n "${CAPBOX_BWRAP_EXTRA:-}${CAPBOX_FS_BINDS:-}${CAPBOX_NET_ALLOW:-}${CAPBOX_PROXY:-}" ||
+        -n "${CAPBOX_BWRAP_EXTRA:-}${CAPBOX_FS_BINDS:-}${CAPBOX_PROXY:-}" ||
         -n "${CAPBOX_UID_MAP:-}${CAPBOX_GID_MAP:-}${CAPBOX_SETGROUPS:-}${CAPBOX_DISK_MAX:-}" ||
         -n "${CAPBOX_EXEC_UID_OVERRIDE:-}${CAPBOX_EXEC_GID_OVERRIDE:-}${CAPBOX_OCI_ENV_FILE:-}" ||
         -n "${CAPBOX_CRED_CA_CERT:-}${CAPBOX_CRED_GUEST_ENV_FILE:-}" ]]; then
@@ -161,7 +161,9 @@ build_bwrap_args() {
   a+=(--clearenv)
 
   # ---- 命名空间 / 网络三档 ----
-  if declare -F _net_append_bwrap_args >/dev/null 2>&1; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 ]]; then
+    a+=(--unshare-net)
+  elif declare -F _net_append_bwrap_args >/dev/null 2>&1; then
     _net_append_bwrap_args a || return $?
   else
     case "${CAPBOX_NET:-open}" in
@@ -253,7 +255,7 @@ build_bwrap_args() {
   # 再挂一次，保证最后盖住 logs 的是只读绑定。
   _capbox_ro_protect_logs a || return $?
 
-  if declare -F _net_append_ready_bind >/dev/null 2>&1; then
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" != 1 ]] && declare -F _net_append_ready_bind >/dev/null 2>&1; then
     _net_append_ready_bind a || return $?
   fi
 

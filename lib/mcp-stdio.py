@@ -158,11 +158,13 @@ class Server:
             if arguments.get('workspace_readonly'):command+=['--workspace-readonly']
             command+=['--input='+path for path in arguments.get('input_paths', [])]
             command+=['--write-dir='+path for path in arguments.get('write_dirs', [])]
+            if getattr(self.args, 'net', 'none') == 'restricted':command+=['--net=restricted']
             if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
             # env + -- 即使只有单个字符串参数也保持 argv 语义。
             command+=['--','env','--',*arguments['argv']]
         elif name=='capbox_policy':
             command=['policy','show','--isolate']
+            if getattr(self.args, 'net', 'none') == 'restricted':command+=['--net=restricted']
             if 'net_allow' in arguments:command+=['--net-allow='+arguments['net_allow']]
         else:
             action={'capbox_status':'status','capbox_logs':'logs','capbox_cancel':'cancel','capbox_diff':'diff'}[name]

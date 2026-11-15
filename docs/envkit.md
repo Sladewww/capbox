@@ -114,7 +114,7 @@ MCP 执行与 CLI `task start --isolate` 共用宿主策略。工作区副本沿
 
 仓库内副本见 [examples/mcpServers.capbox.json](../examples/mcpServers.capbox.json)。
 
-`capbox_policy` 显示启动预览。以 `capbox_status` 和任务审计记录查看启动结果。MCP 参数 `--profile`、`--net`、`--workspace-mode` 只接受 `strict`、`none`、`isolated`；旧客户端配置中的 `untrusted`、`restricted`、`shared` 参数需移除。工具参数 `net_allow` 在无网策略下返回错误。
+`capbox_policy` 显示启动预览。以 `capbox_status` 和任务审计记录查看启动结果。MCP 固定使用 `strict` 和 `isolated`，默认 `--net none`。宿主可按[隔离任务网络说明](agent-workflows.md)配置 `agent-network.allow`，再用 `mcp serve --net restricted` 启动。工具参数 `net_allow` 只能收窄宿主列表，在无网模式下会返回错误。
 
 客户端配置格式各异。本服务器实现 [stdio 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[初始化/版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。支持协议版本 `2025-11-25` 与 `2025-06-18`；未知版本协商到已支持的最新版。不宣告 MCP 可选的 task 增强协议：task ID 是 CapBox 工具结果。
 
