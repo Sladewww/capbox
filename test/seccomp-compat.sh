@@ -7,7 +7,7 @@ trap 'rm -rf -- "$work"' EXIT
 # Host binaries are used as workloads. The mount is read-only except for this fixture.
 box=(bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc --dev /dev
   --bind "$work" "$work" --chdir "$work" --clearenv --setenv PATH "$PATH"
-  --setenv HOME "$work" --setenv PROBE_SKIP_IPC "${CAPBOX_PROBE_SKIP_IPC:-0}")
+  --setenv HOME "$work" --setenv TMPDIR "$work" --setenv PROBE_SKIP_IPC "${CAPBOX_PROBE_SKIP_IPC:-0}")
 python="$(command -v python3)"
 cat > "$work/probe.py" <<'PY'
 import ctypes
