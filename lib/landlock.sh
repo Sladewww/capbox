@@ -29,7 +29,11 @@ _landlock_src() {
 # 二进制放在工作区外面。guest 可写的 run/、state/ 不能当宿主执行体。
 _landlock_private_dir() {
   local private d
-  private="$(_capbox_host_state_dir)" || return 1
+  if [[ "${CAPBOX_AGENT_LOCKED:-}" == 1 && "${CAPBOX_TASK_LAUNCH_STATUS:-}" == */launch.jsonl ]]; then
+    private="${CAPBOX_TASK_LAUNCH_STATUS%/*}/runtime"
+  else
+    private="$(_capbox_host_state_dir)" || return 1
+  fi
   d="$private/landlock"
   mkdir -p "$d" || return 1
   [[ ! -L "$d" && -d "$d" ]] || return 1

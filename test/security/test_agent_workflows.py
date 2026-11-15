@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = Path(__file__).resolve().parents[2]
@@ -95,7 +96,7 @@ class PolicyTests(Fixture):
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 2, result.stderr)
 
-    @unittest.skipIf(os.getuid() == 0, 'locked tasks require a non-root host UID')
+    @unittest.skipUnless(os.getenv('CAPBOX_TEST_DELEGATED'), 'requires the delegated test service')
     def test_missing_agent_probe_fails_before_payload(self):
         template = self.base / 'template'
         shutil.copytree(REPO / 'bin', template / 'bin')
@@ -113,12 +114,34 @@ class PolicyTests(Fixture):
             state = json.loads(waited.stdout)
             self.assertEqual(state['failure_reason'], 'launch_failed')
             self.assertEqual(state['protection']['status'], 'failed')
+            self.assertEqual(state['resources']['cleanup'], 'removed')
+            self.assertFalse(Path(state['resources']['cgroup']).exists())
             audit = self.run_cli('audit', 'query', '--task-id', task, check=True)
             result = json.loads(audit.stdout)['task']
             self.assertEqual(result['protection'], state['protection'])
             self.assertEqual(result['diff']['changed_files'], [])
         finally:
             self.run_cli('task', 'rm', task)
+
+    @unittest.skipIf(os.getuid() == 0, 'locked tasks require a non-root host UID')
+    def test_missing_cgroup_delegation_refuses_before_execution(self):
+        rootfs = self.ws / '.capbox/os/alpine/bin'
+        rootfs.mkdir(parents=True, exist_ok=True)
+        shutil.copy2('/bin/true', rootfs / 'sh')
+        self.env['CAPBOX_TASK_HOST_CGROUP_ROOT'] = str(self.base)
+        result = self.run_cli('task', 'start', '--isolate', '--', 'touch', 'sentinel')
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn('cgroup_delegation', result.stderr)
+        self.assertFalse((self.ws / 'sentinel').exists())
+        tasks = json.loads(self.run_cli('task', 'list', check=True).stdout)['tasks']
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]['protection']['check'], 'cgroup_delegation')
+        self.assertEqual(tasks[0]['output_bytes']['stdout'], 0)
+        audit = self.run_cli('audit', 'query', '--task-id', tasks[0]['task_id'], check=True)
+        observations = [event['observation'] for event in json.loads(audit.stdout)['events']
+                        if 'observation' in event]
+        self.assertEqual([item['phase'] for item in observations], ['requested', 'failed'])
+        self.assertEqual(observations[-1]['check'], 'cgroup_delegation')
 
     def test_sources_override_without_mutation(self):
         self.run_cli('config', 'set', 'CAPBOX_NET', 'open', check=True)
@@ -341,6 +364,49 @@ class TaskTests(Fixture):
         self.git('add','hello.txt','.gitignore')
         self.git('add','-f','.env')
 
+    def test_task_cgroup_limits_membership_and_cancel(self):
+        self.env.update(CAPBOX_TASK_HOST_CPU_MAX='50%', CAPBOX_TASK_HOST_MEMORY_MAX='256Mi',
+                        CAPBOX_TASK_HOST_PIDS_MAX='64', CAPBOX_TASK_HOST_SWAP_MAX='0',
+                        CAPBOX_MEMORY_MAX='max', CAPBOX_RESOURCES_MODE='warn')
+        expected = {'cpu.max': '50000 100000', 'memory.max': '268435456',
+                    'pids.max': '64', 'memory.swap.max': '0'}
+        first = self.start('--isolate', '--', 'sh', '-c', 'sleep 60 & echo ready; wait')
+        first_running = json.loads(self.run_cli('task', 'status', first, check=True).stdout)
+        leaf = Path(first_running['resources']['cgroup'])
+        self.assertEqual({key: (leaf / key).read_text().strip() for key in expected}, expected)
+        second = self.start('--isolate', '--', 'true')
+        second_resources = self.wait(second)['resources']
+        self.assertNotEqual(second_resources['cgroup'], str(leaf))
+        self.assertEqual(second_resources['verified']['limits'], expected)
+        self.assertTrue(leaf.is_dir())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if 'ready' in self.run_cli('task', 'logs', first, check=True).stdout:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail('guest did not reach the command gate')
+        pids = [int(pid) for pid in (leaf / 'cgroup.procs').read_text().split()]
+        self.assertGreaterEqual(len(pids), 2)
+        membership = str(leaf).removeprefix('/sys/fs/cgroup')
+        for pid in pids:
+            self.assertIn(f'0::{membership}', Path(f'/proc/{pid}/cgroup').read_text().splitlines())
+        self.run_cli('task', 'cancel', first, check=True)
+        result = self.wait(first, 143)['resources']
+        self.assertEqual(result['verified']['membership'], membership)
+        self.assertIn(result['verified']['pid'], pids)
+        self.assertEqual(result['cleanup'], 'removed')
+        self.assertFalse(leaf.exists())
+        for pid in pids:
+            entry = Path(f'/proc/{pid}/cgroup')
+            if entry.exists():
+                try:
+                    self.assertNotIn(f'0::{membership}', entry.read_text().splitlines())
+                except ProcessLookupError:
+                    pass
+        print(json.dumps({'limits': expected, 'membership': membership,
+                          'observed_pids': pids, 'cleanup': result['cleanup']}, sort_keys=True))
+
     def test_parallel_isolated_task_audit_survives_runtime_cleanup(self):
         self.init_git()
         self.env['CAPBOX_NET'] = 'open'
@@ -352,8 +418,11 @@ class TaskTests(Fixture):
                           '--', 'sh', '-c',
                           'test -z "${CAPBOX_TASK_AUDIT_ID:-}" && '
                           "printf '%s' private-output > /dev/null && echo task > hello.txt")
-        self.assertEqual(self.wait(done)['status'], 'succeeded')
-        self.assertEqual(self.wait(timed, 124)['status'], 'timed_out')
+        for task, status, code in ((done, 'succeeded', 0), (timed, 'timed_out', 124)):
+            finished = self.wait(task, code)
+            self.assertEqual(finished['status'], status)
+            self.assertEqual(finished['resources']['cleanup'], 'removed')
+            self.assertFalse(Path(finished['resources']['cgroup']).exists())
         (self.ws / 'hello.txt').write_text('source edit\n')
         for task, status, code in ((timed, 'timed_out', 124), (done, 'succeeded', 0)):
             r = self.run_cli('audit', 'query', '--task-id', task, check=True)
@@ -361,6 +430,10 @@ class TaskTests(Fixture):
             self.assertEqual(result['task']['status'], status)
             self.assertEqual(result['task']['exit_code'], code)
             self.assertTrue(all(event['task_id'] == task for event in result['events']))
+            resource_phases = [event['observation']['phase'] for event in result['events']
+                               if isinstance(event.get('observation'), dict)
+                               and event['observation'].get('kind') == 'resources']
+            self.assertEqual(resource_phases, ['requested', 'configured', 'entered', 'verified', 'cleanup'])
             self.assertNotIn('legacy', r.stdout)
             if task == done:
                 self.assertIn('exec', {event['kind'] for event in result['events']})

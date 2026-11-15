@@ -16,6 +16,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import i18n
+import task_cgroup
 
 BWRAP = '/usr/bin/bwrap'
 PROBE = '/run/capbox-agent-probe'
@@ -137,6 +138,8 @@ def prepare(argv, status_fd, helper, rootfs, workspace, probe_fd):
 
     if workspace_readonly:
         require((workspace, '/workspace') in options.get('--ro-bind', []), 'final_mounts')
+    require(options.get('--ro-bind', []).count(
+        (str(workspace_path / '.capbox'), '/workspace/.capbox')) == 1, 'final_mounts')
     landlock_paths = {'/run/capbox-landlock', '/run/capbox-landlock.rules'}
     for source, dest in options.get('--ro-bind', []):
         if dest in landlock_paths:
@@ -292,9 +295,18 @@ def launch(status_fd, helper, rootfs, workspace, argv):
                 pid, uid, gid = PEER_CREDENTIALS.unpack(value)
                 require(pid > 0, 'peer_identity')
                 host_evidence(pid, uid, gid)
+                try:
+                    leaf = Path(os.environ['CAPBOX_TASK_CGROUP'])
+                    limits = json.loads(os.environ['CAPBOX_TASK_CGROUP_LIMITS'])
+                    require({'cpu.max', 'memory.max', 'pids.max'} <= limits.keys(), 'cgroup_limits')
+                    task_cgroup.verify(leaf, os.getpid(), limits)
+                    membership = task_cgroup.verify(leaf, pid, limits)
+                except (OSError, KeyError, ValueError) as exc:
+                    raise LaunchError('cgroup_membership') from exc
                 mode = os.environ.get('CAPBOX_NET', 'none')
                 network.enter_context(restricted_proxy(pid, mode, inject_map))
                 record(status_fd, 'protection_verified', checks={
+                    'cgroup': {'membership': membership, 'limits': limits, 'pid': pid},
                     'profile': 'strict', 'uid_map': 'single', 'gid_map': 'single',
                     'network': mode, 'pid_namespace': 'private', 'procfs': 'read-only',
                     'rootfs': 'read-only', 'landlock': 'on', 'seccomp': 'on',

@@ -59,3 +59,23 @@ python3 test/security/test_credentials.py
 - 未绑定的主机即使走 HTTPS，也只能收到占位符。
 
 该文件其余用例覆盖宿主密钥库权限、`prepare` 的显式授权子集、guest 环境变量只含占位符，以及代理拒绝审计只记录目标和原因。
+
+### 隔离任务 cgroup v2
+
+在具备 systemd、cgroup v2 委派、可用 Bubblewrap 和 Alpine rootfs 的 Linux 主机上，
+从仓库根目录用普通用户运行：
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid="$(id -u)" --property=Delegate=yes \
+  --working-directory="$PWD" bash test/security/run-delegated-agent-tests.sh
+```
+
+默认从 `os/alpine` 取 rootfs。使用其他位置时可在 `systemd-run` 命令里加
+`--setenv=CAPBOX_TEST_ROOTFS=/absolute/path/to/alpine`。测试直接读取
+`cpu.max`、`memory.max`、`pids.max`、`memory.swap.max`、`cgroup.procs` 和
+`/proc/<pid>/cgroup`，打印额度、归属、宿主 PID 和清理结果。
+缺委派路径单独运行：
+
+```bash
+python3 test/security/test_agent_workflows.py PolicyTests.test_missing_cgroup_delegation_refuses_before_execution
+```

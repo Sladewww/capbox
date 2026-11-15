@@ -56,6 +56,29 @@ def constant(_value):
     raise ValueError(i18n.t('audit.not_a_json_number'))
 
 
+def resource_fields(data):
+    result = {}
+    limits = data.get('limits')
+    if isinstance(limits, dict):
+        result['limits'] = {
+            key: value for key, value in limits.items()
+            if key in ('cpu.max', 'memory.max', 'pids.max', 'memory.swap.max')
+            and isinstance(value, str) and re.fullmatch(r'[0-9]{1,19}( [0-9]{1,7})?', value)
+        }
+    membership = data.get('membership')
+    if isinstance(membership, str) and re.fullmatch(r'/[A-Za-z0-9_./@:-]{1,1024}', membership):
+        result['membership'] = redact(membership)
+    pid = data.get('pid')
+    if type(pid) is int and 0 < pid <= 2147483647:
+        result['pid'] = pid
+    check = data.get('check')
+    if isinstance(check, str) and re.fullmatch(r'cgroup_[a-z0-9_]{1,48}', check):
+        result['check'] = check
+    if data.get('result') in ('removed', 'incomplete', 'populated', 'unconfirmed'):
+        result['result'] = data['result']
+    return result
+
+
 def normalise(data, number, counters):
     if not isinstance(data, dict):
         raise ValueError(i18n.t('audit.record_not_an_object'))
@@ -83,10 +106,18 @@ def normalise(data, number, counters):
     task_id, task_status = data.get('task_id'), data.get('task_status')
     if isinstance(task_id, str) and TASK_ID.fullmatch(task_id):
         event['task_id'] = task_id
+        observed = data.get('observation')
+        if isinstance(observed, dict) and observed.get('kind') == 'resources':
+            phase = observed.get('phase')
+            if phase in ('requested', 'configured', 'entered', 'verified', 'cleanup', 'failed'):
+                fields = resource_fields(observed)
+                event['observation'] = {'kind': 'resources', 'phase': phase, **fields}
+                event['detail'] = 'cgroup ' + phase + (' ' + json.dumps(fields) if fields else '')
         if event['kind'] == 'task' and isinstance(task_status, str) and task_status in TASK_STATES:
             event['task_status'] = task_status
             reason = data.get('failure_reason')
-            if reason in ('launch_failed', 'execution_timeout', 'cancelled', 'nonzero_exit'):
+            if reason in ('launch_failed', 'execution_timeout', 'cancelled', 'nonzero_exit',
+                          'artifact_limit', 'resource_cleanup_incomplete'):
                 event['failure_reason'] = reason
             protection = data.get('protection')
             if isinstance(protection, dict):
@@ -107,6 +138,8 @@ def normalise(data, number, counters):
                             and (type(v) is bool or type(v) is int
                                  or isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_. -]{1,64}', v))
                         }
+                        if isinstance(checks.get('cgroup'), dict):
+                            proof['checks']['cgroup'] = resource_fields(checks['cgroup'])
                     event['protection'] = proof
             if task_status == 'preparing':
                 event['policy'] = policy_summary(data.get('policy'))

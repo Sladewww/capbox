@@ -31,6 +31,7 @@ _agent_launch_config_ok() {
   fi
   if [[ "$1" != oneshot || -z "${_task_status_fd:-}" ||
         "${CAPBOX_SECURITY_PROFILE:-}" != strict || "${CAPBOX_IDMAP:-}" != off ||
+        "${CAPBOX_RESOURCES_MODE:-}" != require ||
         ( "${CAPBOX_NET:-}" != none && "${CAPBOX_NET:-}" != restricted ) || "${CAPBOX_ROOTFS_RO:-}" != 1 ||
         "${CAPBOX_OVERLAY:-}" != off || "${CAPBOX_LANDLOCK:-}" != on ||
         "${CAPBOX_EXEC_UID:-}" != 0 || "${CAPBOX_EXEC_GID:-}" != 0 ||
@@ -50,11 +51,13 @@ _agent_launch_run() {
   local src private dir helper broker rc=0
   src="$(dirname -- "${BASH_SOURCE[0]}")"
   broker="$src/agent-launch.py"
-  private="$(_capbox_host_state_dir)" || {
+  private="${CAPBOX_TASK_LAUNCH_STATUS:-}"
+  if [[ "$private" != */launch.jsonl ]] ||
+      ! mkdir -p -m 700 -- "${private%/*}/runtime"; then
     _agent_launch_failure host_runtime
     return 5
-  }
-  dir="$(mktemp -d "$private/agent-launch.XXXXXX")" || {
+  fi
+  dir="$(mktemp -d "${private%/*}/runtime/agent-launch.XXXXXX")" || {
     _agent_launch_failure host_runtime
     return 5
   }
