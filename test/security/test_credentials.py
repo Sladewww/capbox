@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 
 from test_agent_workflows import Fixture, REPO, ROOTFS
 import shutil
@@ -278,165 +279,493 @@ class GuestPlaceholderTests(Fixture):
         self.assertEqual(r2.returncode, 1)
 
 
-class HttpsMitmTests(unittest.TestCase):
-    def test_connect_get_placeholder_becomes_real_header(self):
-        # Client trusts CapBox MITM CA; proxy trusts a separate upstream CA.
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        from cryptography.x509.oid import NameOID
-        import datetime as dt
-        import ipaddress
+def _make_test_ca(cn):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    import datetime as dt
 
-        token = 'capbox-sec-' + ('33' * 16)
-        received = {}
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    now = dt.datetime.now(dt.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject).issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=1))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(
+            digital_signature=True, key_cert_sign=True, crl_sign=True,
+            content_commitment=False, key_encipherment=False, data_encipherment=False,
+            key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    return key, cert
 
-        def make_ca(cn):
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
-            now = dt.datetime.now(dt.timezone.utc)
-            cert = (
-                x509.CertificateBuilder()
-                .subject_name(subject).issuer_name(subject)
-                .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(now - dt.timedelta(minutes=1))
-                .not_valid_after(now + dt.timedelta(days=1))
-                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-                .add_extension(x509.KeyUsage(
-                    digital_signature=True, key_cert_sign=True, crl_sign=True,
-                    content_commitment=False, key_encipherment=False, data_encipherment=False,
-                    key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
-                .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
-                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
-                .sign(key, hashes.SHA256())
-            )
-            return key, cert
 
-        def make_leaf(cn, ca_key, ca_cert):
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
-            now = dt.datetime.now(dt.timezone.utc)
+def _make_test_leaf(cn, ca_key, ca_cert):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    import datetime as dt
+    import ipaddress
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    now = dt.datetime.now(dt.timezone.utc)
+    try:
+        san = [x509.IPAddress(ipaddress.ip_address(cn))]
+    except ValueError:
+        san = [x509.DNSName(cn)]
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject).issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=1))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName(san), critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    return key, cert
+
+
+def _write_key_cert(directory, name, key, cert):
+    from cryptography.hazmat.primitives import serialization
+
+    directory = Path(directory)
+    key_path = directory / f'{name}.key'
+    cert_path = directory / f'{name}.crt'
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    for path in (key_path, cert_path):
+        os.chmod(path, 0o600)
+    return key_path, cert_path
+
+
+def _read_one_request(conn):
+    data = b''
+    while b'\r\n\r\n' not in data:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return data
+        data += chunk
+    head, sep, rest = data.partition(b'\r\n\r\n')
+    length = 0
+    for line in head.split(b'\r\n'):
+        if line.lower().startswith(b'content-length:'):
+            length = int(line.split(b':', 1)[1].strip())
+            break
+    body = rest
+    while len(body) < length:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        body += chunk
+    return head + sep + body[:length]
+
+
+def _serve_tls_once(ctx, received):
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(('127.0.0.1', 0))
+        received['port'] = server.getsockname()[1]
+        server.listen(1)
+        received['ready'].set()
+        raw, _ = server.accept()
+        try:
+            conn = ctx.wrap_socket(raw, server_side=True)
+        except (ssl.SSLError, OSError) as exc:
+            received['tls_error'] = type(exc).__name__
+            raw.close()
+            return
+        with conn:
             try:
-                san = [x509.IPAddress(ipaddress.ip_address(cn))]
-            except ValueError:
-                san = [x509.DNSName(cn)]
-            cert = (
-                x509.CertificateBuilder()
-                .subject_name(subject).issuer_name(ca_cert.subject)
-                .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(now - dt.timedelta(minutes=1))
-                .not_valid_after(now + dt.timedelta(days=1))
-                .add_extension(x509.SubjectAlternativeName(san), critical=False)
-                .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
-                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
-                .sign(ca_key, hashes.SHA256())
-            )
-            return key, cert
-
-        up_ca_key, up_ca_cert = make_ca('Upstream Test CA')
-        up_key, up_cert = make_leaf('127.0.0.1', up_ca_key, up_ca_cert)
-        mitm_ca_key, mitm_ca_cert = make_ca('CapBox Test CA')
-
-        def upstream():
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-            with tempfile.TemporaryDirectory() as tmp:
-                k = Path(tmp) / 'k.pem'; c = Path(tmp) / 'c.pem'
-                k.write_bytes(up_key.private_bytes(
-                    serialization.Encoding.PEM,
-                    serialization.PrivateFormat.TraditionalOpenSSL,
-                    serialization.NoEncryption()))
-                c.write_bytes(up_cert.public_bytes(serialization.Encoding.PEM))
-                ctx.load_cert_chain(c, k)
-                srv = socket.socket()
-                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                srv.bind(('127.0.0.1', 0))
-                received['port'] = srv.getsockname()[1]
-                srv.listen(1)
-                received['ready'].set()
-                raw, _ = srv.accept()
-                conn = ctx.wrap_socket(raw, server_side=True)
-                data = b''
-                while b'\r\n\r\n' not in data:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                received['req'] = data.decode('iso-8859-1', 'replace')
+                request = _read_one_request(conn)
+            except (ssl.SSLError, OSError):
+                request = b''
+            if request:
+                received['request'] = request
+            try:
                 conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok')
-                conn.close(); srv.close()
+            except (ssl.SSLError, OSError):
+                pass
+    finally:
+        server.close()
 
-        received['ready'] = threading.Event()
-        threading.Thread(target=upstream, daemon=True).start()
-        self.assertTrue(received['ready'].wait(2))
-        port = received['port']
 
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            ca_key_path = tmp / 'mitm.key'; ca_cert_path = tmp / 'mitm.crt'
-            up_ca_path = tmp / 'up-ca.crt'
-            ca_key_path.write_bytes(mitm_ca_key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption()))
-            ca_cert_path.write_bytes(mitm_ca_cert.public_bytes(serialization.Encoding.PEM))
-            up_ca_path.write_bytes(up_ca_cert.public_bytes(serialization.Encoding.PEM))
-            for path in (ca_key_path, ca_cert_path, up_ca_path):
-                os.chmod(path, 0o600)
-            inject = {
-                'schema': 'capbox.credentials.v1',
-                'ca_key': str(ca_key_path),
-                'ca_cert': str(ca_cert_path),
-                'entries': [{
-                    'name': 'custom', 'domains': ['127.0.0.1'],
-                    'header': 'Authorization', 'format': '%s',
-                    'value': 'MITM-SECRET',
-                    'placeholders': {'TOK': token},
-                }],
-            }
-            inject_path = tmp / 'inject.json'
-            inject_path.write_text(json.dumps(inject)); os.chmod(inject_path, 0o600)
-            sock = tmp / 'p.sock'; ready = tmp / 'ready'
-            env = os.environ.copy()
-            env['SSL_CERT_FILE'] = str(up_ca_path)
-            proc = subprocess.Popen([
-                'python3', str(NP_PATH), 'proxy',
-                '--sock', str(sock), '--allow', f'127.0.0.1:{port}',
-                '--inject-map', str(inject_path), '--ready', str(ready), '--log'
-            ], stderr=subprocess.PIPE, env=env)
+def _serve_http_once(received):
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(('127.0.0.1', 0))
+        received['port'] = server.getsockname()[1]
+        server.listen(1)
+        received['ready'].set()
+        conn, _ = server.accept()
+        with conn:
             try:
-                for _ in range(50):
-                    if ready.exists() and sock.exists():
-                        break
-                    time.sleep(0.05)
-                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                client.connect(str(sock))
-                client.sendall(f'CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
-                resp = b''
-                while b'\r\n\r\n' not in resp:
-                    resp += client.recv(4096)
-                self.assertIn(b'200', resp.split(b'\r\n', 1)[0])
-                ctx = ssl.create_default_context()
-                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_REQUIRED
-                ctx.load_verify_locations(cafile=str(ca_cert_path))
-                tls = ctx.wrap_socket(client, server_hostname='127.0.0.1')
-                tls.sendall(
-                    f'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n'.encode()
-                )
-                tls.recv(4096)
+                request = _read_one_request(conn)
+            except OSError:
+                request = b''
+            if request:
+                received['request'] = request
+            try:
+                conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok')
+            except OSError:
+                pass
+    finally:
+        server.close()
+
+
+class HttpsCredentialInjectionTests(unittest.TestCase):
+    """End-to-end MITM: verify the upstream certificate, then inject only the configured header.
+
+    The proxy trusts a test upstream CA and mints guest-facing certificates from a
+    separate CapBox CA. Each case runs a real proxy process over an AF_UNIX socket and
+    records exactly what the test upstream received.
+    """
+
+    TOKEN = 'capbox-sec-' + ('33' * 16)
+    # Test-only replacement value, generated at runtime so no credential literal lives in
+    # the repository. The inject map is written 0600 inside a temporary directory.
+    REPLACEMENT = 'E2E-' + uuid.uuid4().hex
+
+    @classmethod
+    def setUpClass(cls):
+        from cryptography.hazmat.primitives import serialization
+
+        cls._tmp = tempfile.TemporaryDirectory(prefix='cb-mitm-')
+        root = Path(cls._tmp.name)
+
+        up_ca_key, up_ca_cert = _make_test_ca('Upstream Test CA')
+        cls.up_key, cls.up_cert = _make_test_leaf('127.0.0.1', up_ca_key, up_ca_cert)
+        cls.wrong_key, cls.wrong_cert = _make_test_leaf('wrong.example', up_ca_key, up_ca_cert)
+        mitm_ca_key, mitm_ca_cert = _make_test_ca('CapBox Test CA')
+        _, unrelated_ca_cert = _make_test_ca('Unrelated Test CA')
+
+        cls.up_key_path, cls.up_cert_path = _write_key_cert(root, 'up', cls.up_key, cls.up_cert)
+        cls.wrong_key_path, cls.wrong_cert_path = _write_key_cert(root, 'wrong', cls.wrong_key, cls.wrong_cert)
+        cls.mitm_key_path, cls.mitm_cert_path = _write_key_cert(root, 'mitm', mitm_ca_key, mitm_ca_cert)
+
+        # The proxy verifies the upstream chain with this file.
+        cls.up_ca_path = root / 'up-ca.crt'
+        cls.up_ca_path.write_bytes(up_ca_cert.public_bytes(serialization.Encoding.PEM))
+        # A different CA the proxy trusts; the test upstream chain must fail against it.
+        cls.unrelated_ca_path = root / 'unrelated-ca.crt'
+        cls.unrelated_ca_path.write_bytes(unrelated_ca_cert.public_bytes(serialization.Encoding.PEM))
+        for path in (cls.up_ca_path, cls.unrelated_ca_path):
+            os.chmod(path, 0o600)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def _start_upstream(self, cert_path=None, key_path=None):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(str(cert_path or self.up_cert_path), str(key_path or self.up_key_path))
+        received = {'ready': threading.Event()}
+        thread = threading.Thread(target=_serve_tls_once, args=(ctx, received), daemon=True)
+        thread.start()
+        self.assertTrue(received['ready'].wait(3), 'TLS upstream did not start')
+        return received, thread
+
+    def _start_http_upstream(self):
+        received = {'ready': threading.Event()}
+        thread = threading.Thread(target=_serve_http_once, args=(received,), daemon=True)
+        thread.start()
+        self.assertTrue(received['ready'].wait(3), 'HTTP upstream did not start')
+        return received, thread
+
+    def _inject_map(self, directory, domains=('127.0.0.1',), https_only=True):
+        inject = {
+            'schema': 'capbox.credentials.v1',
+            'ca_key': str(self.mitm_key_path),
+            'ca_cert': str(self.mitm_cert_path),
+            'entries': [{
+                'name': 'custom', 'domains': list(domains),
+                'header': 'Authorization', 'format': '%s',
+                'value': self.REPLACEMENT,
+                'placeholders': {'TOK': self.TOKEN},
+            }],
+        }
+        if https_only:
+            inject['https_only'] = True
+        path = Path(directory) / 'inject.json'
+        path.write_text(json.dumps(inject))
+        os.chmod(path, 0o600)
+        return path
+
+    def _start_proxy(self, directory, port, inject_path, ssl_cert_file):
+        directory = Path(directory)
+        sock_path = directory / 'proxy.sock'
+        ready_path = directory / 'ready'
+        env = os.environ.copy()
+        env['SSL_CERT_FILE'] = str(ssl_cert_file)
+        proc = subprocess.Popen([
+            'python3', str(NP_PATH), 'proxy',
+            '--sock', str(sock_path), '--allow', f'127.0.0.1:{port}',
+            '--inject-map', str(inject_path), '--ready', str(ready_path), '--log',
+        ], stderr=subprocess.PIPE, env=env)
+        deadline = time.time() + 5
+        while time.time() < deadline and not (ready_path.exists() and sock_path.exists()):
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode('iso-8859-1', 'replace')
+                self.fail(f'proxy exited before ready: {stderr}')
+            time.sleep(0.02)
+        if not (ready_path.exists() and sock_path.exists()):
+            proc.kill()
+            self.fail('proxy did not become ready')
+        return proc, sock_path
+
+    def _stop_proxy(self, proc):
+        proc.terminate()
+        try:
+            _, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _, stderr = proc.communicate()
+        log = (stderr or b'').decode('iso-8859-1', 'replace')
+        self.assertNotIn(self.REPLACEMENT, log, 'proxy log leaked the real credential')
+        return log
+
+    def _connect_via_proxy(self, sock_path, port):
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(5)
+        client.connect(str(sock_path))
+        client.sendall(f'CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
+        response = b''
+        while b'\r\n\r\n' not in response:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+        return client, response
+
+    def _client_tls(self, client, ca_path):
+        ctx = ssl.create_default_context(cafile=str(ca_path))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        return ctx.wrap_socket(client, server_hostname='127.0.0.1')
+
+    def _read_all(self, tls):
+        data = b''
+        try:
+            while True:
+                chunk = tls.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        except (ssl.SSLError, OSError):
+            pass
+        finally:
+            try:
                 tls.close()
-                deadline = time.time() + 3
-                while 'req' not in received and time.time() < deadline:
-                    time.sleep(0.05)
-                self.assertIn('req', received)
-                self.assertIn('MITM-SECRET', received['req'])
-                self.assertNotIn(token, received['req'])
+            except OSError:
+                pass
+        return data
+
+    _UNAVAILABLE = object()
+
+    def _captured(self, received, thread):
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), 'upstream thread did not finish')
+        return received.get('request', self._UNAVAILABLE)
+
+    def test_verified_upstream_injects_only_configured_header(self):
+        received, thread = self._start_upstream()
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp)
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.up_ca_path)
+            try:
+                client, connect_response = self._connect_via_proxy(sock_path, received['port'])
+                self.assertIn(b'200', connect_response.split(b'\r\n', 1)[0])
+                tls = self._client_tls(client, self.mitm_cert_path)
+                body = f'{{"echo":"{self.TOKEN}"}}'.encode()
+                tls.sendall(
+                    (f'POST /v1/models?trace={self.TOKEN} HTTP/1.1\r\n'
+                     f'Host: 127.0.0.1:{received["port"]}\r\n'
+                     f'Authorization: Bearer {self.TOKEN}\r\n'
+                     'X-Request-Id: ordinary\r\n'
+                     f'Content-Length: {len(body)}\r\n'
+                     'Connection: close\r\n\r\n').encode() + body)
+                response = self._read_all(tls)
             finally:
-                proc.terminate(); proc.wait(timeout=5)
+                self._stop_proxy(proc)
+        request = self._captured(received, thread)
+        self.assertIsNot(request, self._UNAVAILABLE, 'verified upstream received no request')
+        self.assertIn(b'200', response)
+        head, _, sent_body = request.partition(b'\r\n\r\n')
+        lines = head.split(b'\r\n')
+        self.assertIn(b'Authorization: Bearer ' + self.REPLACEMENT.encode(), lines)
+        # Placeholder survives in the request target and body; it never reaches another header.
+        self.assertIn(self.TOKEN.encode(), lines[0])
+        self.assertNotIn(self.TOKEN.encode(), b'\r\n'.join(lines[1:]))
+        self.assertIn(b'X-Request-Id: ordinary', lines)
+        self.assertIn(self.TOKEN.encode(), sent_body)
+        self.assertNotIn(self.REPLACEMENT.encode(), sent_body)
+
+    def test_cleartext_http_never_injects_locked_credentials(self):
+        received, thread = self._start_http_upstream()
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp)
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.up_ca_path)
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(5)
+                client.connect(str(sock_path))
+                client.sendall(
+                    (f'GET http://127.0.0.1:{received["port"]}/ HTTP/1.1\r\n'
+                     f'Host: 127.0.0.1:{received["port"]}\r\n'
+                     f'Authorization: Bearer {self.TOKEN}\r\n'
+                     'Connection: close\r\n\r\n').encode())
+                response = b''
+                try:
+                    while True:
+                        chunk = client.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                except OSError:
+                    pass
+                client.close()
+            finally:
+                self._stop_proxy(proc)
+        request = self._captured(received, thread)
+        self.assertIsNot(request, self._UNAVAILABLE, 'cleartext upstream received no request')
+        self.assertIn(b'200', response)
+        self.assertIn(self.TOKEN.encode(), request)
+        self.assertNotIn(self.REPLACEMENT.encode(), request)
+
+    def test_untrusted_upstream_aborts_before_credential(self):
+        received, thread = self._start_upstream()
+        log = None
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp)
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.unrelated_ca_path)
+            try:
+                client, connect_response = self._connect_via_proxy(sock_path, received['port'])
+                self.assertIn(b'200', connect_response.split(b'\r\n', 1)[0])
+                tls = self._client_tls(client, self.mitm_cert_path)
+                response = b''
+                try:
+                    tls.sendall(
+                        (f'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+                         f'Authorization: Bearer {self.TOKEN}\r\n'
+                         'Connection: close\r\n\r\n').encode())
+                    while True:
+                        chunk = tls.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                except (ssl.SSLError, OSError):
+                    pass
+                finally:
+                    try:
+                        tls.close()
+                    except OSError:
+                        pass
+            finally:
+                log = self._stop_proxy(proc)
+        thread.join(5)
+        self.assertIn('tls_error', received)
+        self.assertIn('MITM error', log or '')
+        self.assertIn('CERTIFICATE_VERIFY_FAILED', log or '')
+        self.assertNotIn('request', received)
+        self.assertNotIn(self.REPLACEMENT.encode(), response)
+
+    def test_upstream_hostname_mismatch_aborts_before_credential(self):
+        received, thread = self._start_upstream(self.wrong_cert_path, self.wrong_key_path)
+        log = None
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp)
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.up_ca_path)
+            try:
+                client, connect_response = self._connect_via_proxy(sock_path, received['port'])
+                self.assertIn(b'200', connect_response.split(b'\r\n', 1)[0])
+                tls = self._client_tls(client, self.mitm_cert_path)
+                response = b''
+                try:
+                    tls.sendall(
+                        (f'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+                         f'Authorization: Bearer {self.TOKEN}\r\n'
+                         'Connection: close\r\n\r\n').encode())
+                    while True:
+                        chunk = tls.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                except (ssl.SSLError, OSError):
+                    pass
+                finally:
+                    try:
+                        tls.close()
+                    except OSError:
+                        pass
+            finally:
+                log = self._stop_proxy(proc)
+        thread.join(5)
+        self.assertIn('tls_error', received)
+        self.assertIn('MITM error', log or '')
+        self.assertIn('CERTIFICATE_VERIFY_FAILED', log or '')
+        self.assertNotIn('request', received)
+        self.assertNotIn(self.REPLACEMENT.encode(), response)
+
+    def test_placeholder_in_non_configured_header_is_denied_before_upstream(self):
+        received, thread = self._start_upstream()
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp)
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.up_ca_path)
+            try:
+                client, connect_response = self._connect_via_proxy(sock_path, received['port'])
+                self.assertIn(b'200', connect_response.split(b'\r\n', 1)[0])
+                tls = self._client_tls(client, self.mitm_cert_path)
+                tls.sendall(
+                    (f'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+                     f'X-Trace: {self.TOKEN}\r\n'
+                     'Connection: close\r\n\r\n').encode())
+                response = self._read_all(tls)
+            finally:
+                self._stop_proxy(proc)
+        request = self._captured(received, thread)
+        self.assertIs(request, self._UNAVAILABLE, 'upstream received a denied request')
+        self.assertIn(b'403', response)
+        self.assertNotIn(self.REPLACEMENT.encode(), response)
+
+    def test_unbound_host_never_receives_real_secret(self):
+        received, thread = self._start_upstream()
+        with tempfile.TemporaryDirectory() as tmp:
+            inject_path = self._inject_map(tmp, domains=('api.example.test',))
+            proc, sock_path = self._start_proxy(tmp, received['port'], inject_path, self.up_ca_path)
+            try:
+                client, connect_response = self._connect_via_proxy(sock_path, received['port'])
+                self.assertIn(b'200', connect_response.split(b'\r\n', 1)[0])
+                # No MITM for an unbound host: the guest talks TLS to the real upstream.
+                tls = self._client_tls(client, self.up_ca_path)
+                tls.sendall(
+                    (f'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+                     f'Authorization: Bearer {self.TOKEN}\r\n'
+                     'Connection: close\r\n\r\n').encode())
+                response = self._read_all(tls)
+            finally:
+                self._stop_proxy(proc)
+        request = self._captured(received, thread)
+        self.assertIsNot(request, self._UNAVAILABLE, 'unbound upstream received no request')
+        self.assertIn(b'200', response)
+        self.assertIn(b'Authorization: Bearer ' + self.TOKEN.encode(), request)
+        self.assertNotIn(self.REPLACEMENT.encode(), request)
 
 
 
@@ -491,7 +820,9 @@ class ProxyUnauthorizedMessageTests(unittest.TestCase):
         lines = ['GET / HTTP/1.1', f'Authorization: Bearer {token}', 'Host: evil.test', '']
         _, viol = net_proxy.rewrite_headers_for_credentials(lines, 'evil.test', inject, {}, False)
         self.assertIsNotNone(viol)
-        self.assertIn('凭据未绑定', viol)
+        # Language-agnostic: the message names the host, the binding and the next step.
+        self.assertIn('evil.test', viol)
+        self.assertIn('openai', viol)
         self.assertIn('NET_ALLOW', viol)
         self.assertNotIn('REAL-OPENAI', viol)
 
