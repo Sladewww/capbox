@@ -916,7 +916,7 @@ def worker(root, task_id):
         group_stopped = False
         while selector.get_map() or proc.poll() is None:
             now = time.monotonic()
-            if reason is None and proc.poll() is None:
+            if reason is None and (leaf is None or proc.poll() is None):
                 if (job / 'cancel').exists():
                     reason = 'cancelled'
                 elif plan['timeout'] and now - start >= plan['timeout']:
