@@ -254,7 +254,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
 用法: capbox task start [-h] [--json] [--timeout TIMEOUT] [--cwd CWD]
                       [--net {none,restricted,open,host}] [--net-allow NET_ALLOW]
                       [--profile {compat,untrusted,strict}] [--isolate] [--workspace-readonly]
-                      [--write-dir WRITE_DIR] [--max-output-bytes MAX_OUTPUT_BYTES]
+                      [--write-dir WRITE_DIR] [--input PATH] [--max-output-bytes MAX_OUTPUT_BYTES]
                       ...
 
 位置参数:
@@ -273,6 +273,7 @@ exec --image NAME 只换这一次的 rootfs，不套用 OCI 配置。
   --workspace-readonly  将隔离项目工作树挂载为只读
   --write-dir WRITE_DIR
                         开放已有项目相对目录的写入权限（可重复）
+  --input PATH          复制指定的项目相对路径并将工作树挂载为只读（可重复）
   --max-output-bytes MAX_OUTPUT_BYTES
 ```
 

@@ -6,6 +6,7 @@
 """
 import argparse
 import base64
+from contextlib import contextmanager
 import ctypes
 import errno
 import fcntl
@@ -47,6 +48,7 @@ MAX_COPY = 100 * 1024 * 1024
 MAX_PREP_ENTRIES = 200_000
 MAX_PREP_BYTES = 4 * 1024**3
 MAX_ARTIFACT_BYTES = 256 * 1024**2
+MAX_INPUT_PATHS = 256
 EXCLUDED = {'.git', '.capbox', '.env', '.secrets', '.ssh', '.aws', '.azure',
             '.gnupg', '.kube', '.docker'}
 # 宿主模板拥有这些值。项目配置和请求均不能替换它们。
@@ -332,30 +334,123 @@ def excluded(name):
                for part in PurePosixPath(name).parts)
 
 
-def read_regular(root, name):
-    """相对钉住的目录逐级打开每一段，从不跟随链接。"""
+def path_signature(st):
+    return st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+@contextmanager
+def open_relative(root_fd, name, flags):
     parts = safe_relative(name).parts
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.dup(root_fd)
     try:
         for part in parts[:-1]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = child
-        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        with os.fdopen(fd, 'rb') as f:
-            before = os.fstat(f.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-                raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
-            if before.st_size > MAX_COPY:
-                raise AgentError(i18n.t('task.file_exceeds_work_copy_limit', name=name))
-            data = f.read(MAX_COPY + 1)
-            after = os.fstat(f.fileno())
-            signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-            if len(data) > MAX_COPY or signature(before) != signature(after):
-                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
-            return data, before
+        fd = os.open(parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            yield fd
+        finally:
+            os.close(fd)
     finally:
         os.close(directory)
+
+
+def relative_stat(root_fd, name):
+    # O_PATH pins the entry without opening a FIFO, device or symlink target.
+    with open_relative(root_fd, name, os.O_PATH) as fd:
+        return os.fstat(fd)
+
+
+def open_workspace_root(source):
+    # source was canonicalized at submission. Do not follow later replacements
+    # of either the workspace itself or any of its ancestors.
+    system_root = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with open_relative(system_root, source.relative_to('/').as_posix(),
+                           os.O_RDONLY | os.O_DIRECTORY) as fd:
+            return os.dup(fd)
+    finally:
+        os.close(system_root)
+
+
+def read_pinned_regular(fd, name):
+    before = os.fstat(fd)
+    if stat.S_ISLNK(before.st_mode):
+        raise OSError(errno.ELOOP, os.strerror(errno.ELOOP), name)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise AgentError(i18n.t('task.only_regular_non_hardlink', name=name))
+    if before.st_size > MAX_COPY:
+        raise AgentError(i18n.t('task.file_exceeds_work_copy_limit', name=name))
+    with open(f'/proc/self/fd/{fd}', 'rb') as stream:
+        data = stream.read(MAX_COPY + 1)
+    after = os.fstat(fd)
+    if len(data) > MAX_COPY or path_signature(before) != path_signature(after):
+        raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+    return data, before
+
+
+def read_regular(root, name):
+    """相对钉住的目录逐级打开每一段，从不跟随链接。"""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with open_relative(root_fd, name, os.O_PATH) as fd:
+            return read_pinned_regular(fd, name)
+    finally:
+        os.close(root_fd)
+
+
+def input_paths(paths):
+    if not isinstance(paths, list) or len(paths) > MAX_INPUT_PATHS:
+        raise AgentError(i18n.t('task.input_invalid_list', limit=MAX_INPUT_PATHS), 2)
+    result = set()
+    for name in paths:
+        if not isinstance(name, str) or re.search(r'[\x00-\x1f\x7f\ud800-\udfff]', name):
+            raise AgentError(i18n.t('task.input_invalid_path'), 2)
+        try:
+            path = safe_relative(name)
+        except AgentError as exc:
+            raise AgentError(i18n.t('task.input_invalid_path'), 2) from exc
+        if excluded(name):
+            raise AgentError(i18n.t('task.input_invalid_path'), 2)
+        result.add(path)
+    return result
+
+
+def host_input_paths(ctx):
+    policy = Path(ctx['lib']).resolve().parent / 'agent-inputs.json'
+    try:
+        data, st = read_regular(policy.parent, policy.name)
+    except FileNotFoundError:
+        return None
+    except (OSError, AgentError) as exc:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2) from exc
+    if st.st_uid not in (0, os.getuid()) or st.st_mode & 0o022 or len(data) > 1024 * 1024:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2)
+    try:
+        return input_paths(json.loads(data))
+    except (ValueError, AgentError, RecursionError) as exc:
+        raise AgentError(i18n.t('task.input_invalid_host_policy'), 2) from exc
+
+
+def within_inputs(path, allowed):
+    return path in allowed or not allowed.isdisjoint(path.parents)
+
+
+def task_inputs(ctx, args):
+    requested = getattr(args, 'input', None)
+    if not args.isolate:
+        if requested is not None:
+            raise AgentError(i18n.t('task.input_requires_isolate'), 2)
+        return None
+    # locked_context has verified that this template is outside the project.
+    allowed = host_input_paths(ctx)
+    if requested is None:
+        return allowed
+    selected = input_paths(requested)
+    if allowed is not None and any(not within_inputs(path, allowed) for path in selected):
+        raise AgentError(i18n.t('task.input_outside_host'), 2)
+    return selected
 
 
 def regular_files(root, *, require_readable=False):
@@ -426,20 +521,23 @@ def is_git_workspace_root(ctx, source):
     return top == source.resolve()
 
 
+def git_worktree_names(ctx, source):
+    raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+              work=source, bounded=True)
+    names = raw.split(b'\0')
+    if names[-1] == b'':
+        names.pop()
+    if len(names) > MAX_FILES * 2:
+        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+    return sorted(set(names))
+
+
 def list_isolate_names(ctx, source):
     """返回 isolate 视图的相对路径：脏 Git 树或文件系统遍历。"""
     if is_git_workspace_root(ctx, source):
         # 已跟踪工作树文件 + 未跟踪文件，仍遵守 .gitignore。
         # 列出后 CapBox 凭据排除规则仍优先。
-        raw = git(ctx, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], work=source, bounded=True)
-        names = []
-        for item in raw.split(b'\0'):
-            if not item:
-                continue
-            if len(names) >= MAX_FILES * 2:
-                raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
-            names.append(item.decode('utf-8', 'strict'))
-        return sorted(set(names)), 'git'
+        return [item.decode('utf-8') for item in git_worktree_names(ctx, source)], 'git'
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_not_git_or_traversable'), 2)
     names = []
@@ -461,6 +559,113 @@ def list_isolate_names(ctx, source):
         # 空项目仍是合法的合成基线。
         return [], 'fs'
     return sorted(set(names)), 'fs'
+
+
+def walk_selected_files(root_fd, path, budget):
+    with open_relative(root_fd, path, os.O_RDONLY | os.O_DIRECTORY) as fd:
+        with os.scandir(fd) as children:
+            names = []
+            for child in children:
+                budget.list_entries(path, (child.name,))
+                names.append(child.name)
+        for child in sorted(names):
+            name = f'{path}/{child}'
+            if excluded(name):
+                continue
+            info = os.stat(child, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                yield from walk_selected_files(root_fd, name, budget)
+            else:
+                yield name
+
+
+def record_input(view, baseline, name, data, info, total):
+    total += len(data)
+    if total > MAX_COPY or len(baseline) >= MAX_FILES:
+        raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
+    dst = view / name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with dst.open('xb') as outgoing:
+        outgoing.write(data)
+    executable = bool(info.st_mode & 0o111)
+    dst.chmod(0o755 if executable else 0o644)
+    baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'executable': executable}
+    return total
+
+
+def copy_selected_inputs(ctx, source, view, selected):
+    baseline, total = {}, 0
+    if not selected:
+        return baseline, 'empty'
+    name = str(min(selected))
+    root_fd = open_workspace_root(source)
+    try:
+        initial = {}
+        for path in sorted(selected):
+            name = str(path)
+            info = relative_stat(root_fd, name)
+            initial[name] = info
+            if stat.S_ISDIR(info.st_mode):
+                (view / path).mkdir(parents=True, exist_ok=True)
+            elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise AgentError(i18n.t('task.input_invalid_entry', name=repr(name)), 2)
+
+        def fs_candidates():
+            budget = PreparationBudget()
+            for path in sorted(selected):
+                if not selected.isdisjoint(path.parents):
+                    continue
+                if stat.S_ISDIR(initial[str(path)].st_mode):
+                    yield from walk_selected_files(root_fd, str(path), budget)
+                else:
+                    yield str(path)
+
+        git_source = is_git_workspace_root(ctx, source)
+        if not git_source:
+            try:
+                relative_stat(root_fd, '.git')
+            except FileNotFoundError:
+                pass
+            else:
+                # Git 元数据不可用时拒绝输入，避免绕过原本适用的忽略规则。
+                raise AgentError(i18n.t('task.git_work_copy_failed'))
+        candidates = (map(os.fsdecode, git_worktree_names(ctx, source))
+                      if git_source else fs_candidates())
+        for name in candidates:
+            path = safe_relative(name)
+            if excluded(name) or not within_inputs(path, selected):
+                continue
+            try:
+                listed = relative_stat(root_fd, name)
+            except FileNotFoundError:
+                if git_source and name not in initial:
+                    continue  # 已跟踪路径可能在工作树里已删除。
+                raise
+            with open_relative(root_fd, name, os.O_PATH) as fd:
+                if path_signature(os.fstat(fd)) != path_signature(listed):
+                    raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+                data, info = read_pinned_regular(fd, name)
+            if path_signature(relative_stat(root_fd, name)) != path_signature(info):
+                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+            total = record_input(view, baseline, name, data, info, total)
+        for name, info in initial.items():
+            if path_signature(relative_stat(root_fd, name)) != path_signature(info):
+                raise AgentError(i18n.t('task.file_changed_during_read', name=name))
+            if stat.S_ISREG(info.st_mode) and name not in baseline:
+                raise AgentError(i18n.t('task.input_not_in_view', name=repr(name)), 2)
+        current_fd = open_workspace_root(source)
+        try:
+            current_root = os.fstat(current_fd)
+        finally:
+            os.close(current_fd)
+        pinned_root = os.fstat(root_fd)
+        if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
+            raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace'))
+        return baseline, 'git' if git_source else 'fs'
+    except OSError as exc:
+        raise AgentError(i18n.t('task.input_invalid_entry', name=repr(name)), 2) from exc
+    finally:
+        os.close(root_fd)
 
 
 def is_overlay_whiteout(st):
@@ -620,8 +825,10 @@ def writable_directories(ctx, args):
     return sorted(str(path) for path in paths if paths.isdisjoint(path.parents))
 
 
-def isolate(ctx, job):
-    source = Path(ctx['workspace']).resolve()
+def isolate(ctx, job, selected=None):
+    source = Path(ctx['workspace'])
+    if selected is None:
+        source = source.resolve()
     if not source.is_dir() or source.is_symlink():
         raise AgentError(i18n.t('task.isolate_needs_readable_workspace'), 2)
     upper = Path(ctx['rootfs']).resolve().parent.parent / 'run/overlay/active/upper'
@@ -629,15 +836,17 @@ def isolate(ctx, job):
         raise AgentError(i18n.t('task.isolate_rejects_symlink_overlay_upper'))
     if upper.exists() and not upper.is_dir():
         raise AgentError(i18n.t('task.isolate_unsafe_overlay_upper'))
-    try:
-        names, mode = list_isolate_names(ctx, source)
-    except AgentError:
-        raise
-    except OSError as exc:
-        raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace')) from exc
     view = job / 'workspace'
     view.mkdir(mode=0o755)  # 外层 job 仍为 0700；映射后的非 root 用户可读该视图
     baseline, skipped, total = {}, [], 0
+    names = []
+    if selected is not None:
+        baseline, mode = copy_selected_inputs(ctx, source, view, selected)
+    else:
+        try:
+            names, mode = list_isolate_names(ctx, source)
+        except OSError as exc:
+            raise AgentError(i18n.t('task.isolate_cannot_enumerate_workspace')) from exc
     for name in names:
         relative = safe_relative(name)
         if excluded(name):
@@ -650,16 +859,7 @@ def isolate(ctx, job):
             data, st = read_regular(source, name)
         except OSError as exc:
             raise AgentError(i18n.t('task.source_workspace_symlink_or_unreadable', name=name)) from exc
-        total += st.st_size
-        if total > MAX_COPY or len(baseline) >= MAX_FILES:
-            raise AgentError(i18n.t('task.work_copy_exceeds_limit'))
-        dst = view / relative
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        with dst.open('xb') as outgoing:
-            outgoing.write(data)
-        dst.chmod(0o755 if st.st_mode & 0o111 else 0o644)
-        baseline[name] = {'sha256': hashlib.sha256(data).hexdigest(),
-                          'executable': bool(st.st_mode & 0o111)}
+        total = record_input(view, baseline, name, data, st, total)
     # 审阅元数据在 guest 视图外。从不使用 guest 的 .git/config 跑 Git。
     # 非 Git 与脏 Git 都给合成基线，保证 task diff 可用。
     index = job / 'review.git'
@@ -737,6 +937,12 @@ def start_task(ctx, root, args):
             if getattr(args, name, None) is not None:
                 requested[key] = {'value': getattr(args, name), 'source': 'command'}
         ctx = locked_context(ctx, args)
+    selected = task_inputs(ctx, args)
+    readonly_source = 'command'
+    if selected is not None:
+        if not args.workspace_readonly and getattr(args, 'input', None) is None:
+            readonly_source = 'host'
+        args.workspace_readonly = True
     grants = host_credential_grants(ctx) if ctx.get('locked') else []
     write_dirs = writable_directories(ctx, args)
     policy = effective(ctx, args)
@@ -751,9 +957,11 @@ def start_task(ctx, root, args):
     state = {'task_id': task_id, 'status': 'preparing', 'created_at': time.time(),
              'exit_code': None, 'worker': identity(os.getpid()), 'isolated': args.isolate,
              'policy': policy, 'output_limit_per_stream': args.max_output_bytes}
+    if selected is not None:
+        state['input_paths'] = sorted(map(str, selected))
     if write_dirs is not None:
         state['policy']['values'].update({
-            'WORKSPACE_READONLY': {'value': '1', 'source': 'command'},
+            'WORKSPACE_READONLY': {'value': '1', 'source': readonly_source},
             'WRITE_DIRS': {'value': '\n'.join(write_dirs), 'source': 'command'},
         })
     if requested is not None:
@@ -793,7 +1001,7 @@ def start_task(ctx, root, args):
             resource_check = None
         skipped = []
         if args.isolate:
-            ctx, skipped = isolate(ctx, job)
+            ctx, skipped = isolate(ctx, job, selected)
         env = clean_environment(ctx)
         if leaf is not None:
             env['CAPBOX_TASK_CGROUP'] = str(leaf)
@@ -1224,15 +1432,30 @@ def diff_summary(job, scan_secrets=False):
     new = sorted(set(current) - set(baseline))
     origin = Path(plan['origin'])
     conflicts = []
-    for name in set(baseline) | set(new):
-        old = baseline.get(name)
+    for name, old in baseline.items():
         try:
             data, st = read_regular(origin, name)
-            if old is None or hashlib.sha256(data).hexdigest() != old['sha256'] or bool(st.st_mode & 0o111) != old['executable']:
+            if hashlib.sha256(data).hexdigest() != old['sha256'] or bool(st.st_mode & 0o111) != old['executable']:
                 conflicts.append(name)
         except (OSError, AgentError):
-            if old is not None:
-                conflicts.append(name)
+            conflicts.append(name)
+    if new:
+        try:
+            origin_fd = os.open(origin, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            conflicts.extend(new)
+        else:
+            try:
+                for name in new:
+                    try:
+                        relative_stat(origin_fd, name)
+                    except FileNotFoundError:
+                        continue
+                    except (OSError, AgentError):
+                        pass  # 无法安全核验源路径，按冲突处理。
+                    conflicts.append(name)
+            finally:
+                os.close(origin_fd)
     conflicts.sort()
     changed = sorted(name for name in set(current) | set(baseline)
                      if current.get(name) != baseline.get(name))
@@ -1243,8 +1466,8 @@ def diff_task(ctx, job, as_json, scan_secrets):
     summary, new = diff_summary(job, scan_secrets)
     view, index = job / 'workspace', job / 'review.git'
     if new:
-        payload = b''.join(name.encode() + b'\0' for name in new)
-        git(ctx, ['add', '--intent-to-add', '--force', '--pathspec-from-file=-',
+        payload = b''.join(os.fsencode(name) + b'\0' for name in new)
+        git(ctx, ['--literal-pathspecs', 'add', '--intent-to-add', '--force', '--pathspec-from-file=-',
                   '--pathspec-file-nul'], work=view, index=index, data=payload)
     diff_args = ['diff', '--binary', '--no-ext-diff', '--no-textconv']
     if scan_secrets:
@@ -1332,6 +1555,7 @@ def parser():
     start.add_argument('--isolate', action='store_true', help=i18n.t('task.help_isolate'))
     start.add_argument('--workspace-readonly', action='store_true', help=i18n.t('task.help_workspace_readonly'))
     start.add_argument('--write-dir', action='append', default=[], help=i18n.t('task.help_write_dir'))
+    start.add_argument('--input', action='append', metavar='PATH', help=i18n.t('task.help_input'))
     start.add_argument('--max-output-bytes', type=nonnegative, default=MAX_STREAM)
     start.add_argument('command', nargs=argparse.REMAINDER)
     listing = commands.add_parser('list')

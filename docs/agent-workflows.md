@@ -122,6 +122,21 @@ capbox task diff TASK_ID --json
 
 任务会拒绝含符号链接的路径、受保护路径、重叠的 `FS_HIDE` 路径、与隐藏路径相交的可写范围，以及配置了 `FS_BINDS` 的请求。MCP 服务接受 `capbox_execute` 请求中的 `workspace_readonly: true` 和 `write_dirs: ["build", "output"]`。
 
+### 选择隔离任务的输入
+
+宿主操作者可在可信模板的根目录（与 `bin/`、`lib/` 同级）创建 `agent-inputs.json`。它接受一个项目相对路径数组，例如 `["src", "Makefile", "build/fixtures"]`。文件应由宿主用户或 root 持有，禁止组和其他用户写入。配置适用于该模板提交的隔离 CLI 与 MCP 任务。
+
+```sh
+mkdir -p build
+capbox task start --isolate --input src --input Makefile --write-dir build -- \
+  make BUILD_DIR=build
+```
+
+- `--input` 可重复，每项是文件或目录。目录匹配自身及后代。宿主设限后，请求中的每项都必须落在允许范围内。配置与请求各最多 256 项。省略 `--input` 时使用宿主范围。宿主配置为 `[]` 时工作树起始为空。宿主配置和请求均省略时，使用原有的完整工作树复制语义。
+- Git 根复制所选的已跟踪工作树文件（包括已跟踪但匹配忽略规则的文件）及未被忽略的未跟踪文件。非 Git 项目按普通文件遍历。凭据排除规则始终优先。直接指定被忽略、被排除或不存在的文件会失败。所选范围内的符号链接、硬链接和特殊文件会被拒绝。
+- 输入选择自动将工作树挂载为只读。仅 `--write-dir` 指定的目录可写，允许在私有副本中创建空的输出目录。可写目录必须在源项目中已存在，其未选中的文件仍留在源项目。
+- 任务状态的 `input_paths` 返回实际采用的选择器（排序去重）。`task diff` 相对提交时复制的文件生成补丁。源树里未被复制的文件不会产生删除项。任务在同一路径新建输出时，`origin_changed` 会报告冲突，补丁只包含任务生成的内容。
+
 ### 查看任务失败证据
 
 ```bash

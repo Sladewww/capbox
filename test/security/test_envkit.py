@@ -187,6 +187,7 @@ class MCPTests(Fixture):
         server = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: calls.append(c) or Proc())
         result = server.call('capbox_execute', {
             'argv': ['true'], 'workspace_readonly': True, 'write_dirs': ['build'],
+            'input_paths': ['src', '--literal-name'],
         })
         self.assertFalse(result['isError'])
         command = calls[0]
@@ -194,8 +195,12 @@ class MCPTests(Fixture):
         self.assertNotIn('--profile', command)
         self.assertNotIn('--net', command)
         self.assertIn('--workspace-readonly', command)
+        self.assertIn('--input=src', command)
+        self.assertIn('--input=--literal-name', command)
         self.assertIn('--write-dir=build', command)
         self.assertEqual(command[command.index('--max-output-bytes') + 1], str(MCP_DEFAULTS.MAX_OUTPUT_BYTES))
+        with self.assertRaises(MCP_STDIO.ProtocolError):
+            server.call('capbox_execute', {'argv': ['true'], 'input_paths': []})
 
     def test_restricted_server_passes_mode_and_task_subset(self):
         calls = []

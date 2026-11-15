@@ -79,3 +79,14 @@ sudo systemd-run --wait --pipe --collect --uid="$(id -u)" --property=Delegate=ye
 ```bash
 python3 test/security/test_agent_workflows.py PolicyTests.test_missing_cgroup_delegation_refuses_before_execution
 ```
+
+### 隔离任务的输入范围
+
+```sh
+python3 test/security/test_agent_workflows.py InputSelectionTests
+python3 test/security/test_envkit.py MCPTests
+CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.py \
+  TaskTests.test_selected_inputs_in_concurrent_guest_builds
+```
+
+第一条测试宿主范围、Git 复制规则、路径替换、并发副本和部分补丁。有宿主 C 编译器时还会从选中的文件编译并运行程序。第三条需要支持 Agent 强隔离的 Linux 宿主和已准备好的 Alpine rootfs。两个 guest 用各自的输入打包，并检查只读输入、私有输出和二进制补丁。

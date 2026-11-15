@@ -1,7 +1,17 @@
 {
   "schema": "capbox.agent.v1",
   "commands": {
-    "task start": {"output": "JSON task state", "exit": "0 means accepted; inspect wait/status for execution result"},
+    "task start": {
+      "output": "JSON task state",
+      "exit": "0 means accepted; inspect wait/status for execution result",
+      "input": {
+        "cli": "Repeat --input PATH on isolated tasks",
+        "mcp": "capbox_execute.input_paths accepts 1–256 project-relative paths",
+        "host_scope": "Optional agent-inputs.json in the trusted template root; requests must select paths within this scope. An omitted request uses the host scope.",
+        "state": "input_paths is the sorted, deduplicated selector array when selection is active; omitted for legacy full copies",
+        "mount": "Selection enables a read-only worktree with writable exceptions from --write-dir"
+      }
+    },
     "task list": {"output": "JSON object containing tasks"},
     "task status": {"output": "JSON task state"},
     "task logs --json": {"output": "JSON byte-range with base64 data", "cursor": "per-stream byte offsets"},
