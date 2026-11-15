@@ -133,6 +133,7 @@ jobs:
           python3 test/security/test_agent_workflows.py
           python3 test/security/test_task_checkpoint.py
           python3 test/security/test_envkit.py
+          python3 test/security/test_credentials.py
 
       - name: Make failure logs readable
         if: failure()
