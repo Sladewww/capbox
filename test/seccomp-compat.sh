@@ -90,9 +90,13 @@ for profile in compat untrusted strict; do
   fi
   "${box[@]}" "${args[@]}" -- /bin/sh -ec '
     "$1" probe.py "$2" "$3"
-    node -e '\''const { Worker } = require("node:worker_threads"); new Worker("0", {eval: true}).on("exit", code => { if (code) process.exitCode = code })'\''
+    node -e '\''let Worker; try { ({ Worker } = require("node:worker_threads")) } catch { ({ Worker } = require("worker_threads")) } new Worker("0", {eval: true}).on("exit", code => { if (code) process.exitCode = code })'\''
     npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false
-    apt-get --simulate check
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get --simulate check
+    else
+      echo "apt simulation skipped: apt-get unavailable"
+    fi
     if [ "$4" != 1 ]; then
       GOTOOLCHAIN=local GOPROXY=off go build -o ./thread-probe thread.go
       timeout 10 ./thread-probe

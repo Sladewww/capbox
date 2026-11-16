@@ -93,19 +93,20 @@ CAPBOX_TEST_ROOTFS="$PWD/os/alpine" python3 test/security/test_agent_workflows.p
 
 ## Bubblewrap 内核面探针
 
-在普通 Linux 用户会话安装 Bubblewrap 0.12.0 或更新版、libseccomp、Python、Node/npm、Go 和 apt，运行：
+在普通 Linux 用户会话安装 Bubblewrap 0.12.0 或更新版、libseccomp、Python、Node/npm 和 Go，运行：
 
 ```sh
 bash test/seccomp-compat.sh
 ```
 
-脚本以只读方式使用宿主运行时，在临时目录写入 fixture。它分别运行无 CapBox 过滤器的对照和两种加固档的生成产物，检查生效的过滤器数量、若干拒绝规则、线程、离线 npm、apt 模拟和 Unix socket。损坏的 BPF 必须在执行 guest 标记命令前被拒绝。网络探针检查命名空间标识、回环、宿主监听器和外部路由，并记录继承的描述符。该脚本直接运行 bwrap，结果应与配置了对应安全档和 `CAPBOX_NET=none` 的实际 CapBox 工作负载一起验证。
+脚本以只读方式使用宿主运行时，在临时目录写入 fixture。它分别运行无 CapBox 过滤器的对照和两种加固档的生成产物，检查生效的过滤器数量、若干拒绝规则、线程、离线 npm、apt 模拟和 Unix socket。没有 `apt-get` 的发行版会跳过 apt 模拟并打印原因；Node 低于 14 时退回到不带 `node:` 前缀的 `worker_threads`。损坏的 BPF 必须在执行 guest 标记命令前被拒绝。网络探针检查命名空间标识、回环、宿主监听器和外部路由，并记录继承的描述符。该脚本直接运行 bwrap，结果应与配置了对应安全档和 `CAPBOX_NET=none` 的实际 CapBox 工作负载一起验证。
 
 | 宿主 | 实测 |
 |---|---|
 | Debian 13 x86_64、Linux 6.18.57、glibc 2.41、Bubblewrap 0.12.0，外层已有一个过滤器 | Python 3.12.14 线程、Node 24.22.1 Worker、npm 11.9.0 离线安装、apt 3.0.3 模拟检查通过。加固档观察到第二个过滤器。损坏的 BPF 被拒绝。 |
 | 同一宿主 | 外层拒绝创建 AF_UNIX 和 NETLINK_ROUTE socket。Unix socket 与 `net=none` 成功路径未验证。未取得可用 Go 工具链。未读到 AppArmor 状态或 guest 标签。 |
-| Ubuntu 24.04/26.04、aarch64、Alpine/musl | 待实测。 |
+| 同一宿主，rootless podman 6.1.4：Ubuntu 22.04/24.04/26.04 与 Alpine 3.22 x86_64 | 三档过滤器、`clone3` `EINVAL`、损坏 BPF 拒绝、Unix socket、Go 线程和私有 netns 探针全部通过。Ubuntu 上 apt 模拟真实执行，Alpine 无 `apt-get` 按预期跳过。Bubblewrap 0.13.1 在 Ubuntu 容器内按发行版构建，Alpine 用发行版的 0.12.0。 |
+| aarch64、启用 AppArmor confinement 的宿主 | 待实测。本地 podman 需要宿主注册 binfmt/qemu；AppArmor 状态是宿主全局的，需在开启 AppArmor 的 CI runner 或主机上验证。 |
 
 在上述受限宿主复跑已通过的子集：
 
@@ -115,7 +116,7 @@ CAPBOX_PROBE_SKIP_IPC=1 CAPBOX_PROBE_SKIP_GO=1 CAPBOX_PROBE_NETWORK=0 bash test/
 
 这台宿主上三档的 `clone3(NULL, 0)` 均返回 `EINVAL`，线程负载通过。保留现有 `clone3` 行为。后续可跨 glibc、musl 和架构验证 `ENOSYS` 回退，以及传统 `clone` 的命名空间标志限制。按地址族过滤也待有完整网络和 IPC 实测后评估。
 
-显式打开的宿主 FD 9 在启用 PID namespace 的 bwrap guest 中仍可见。用 `untrusted`、单 UID、`net=open` 的 CapBox `exec` 也观察到了同一结果。`net=none` 通过 `--unshare-net` 请求新网络命名空间，不启用 restricted 专用的代理目录挂载。共享启动器的描述符清理应在宿主策略入口合入后验证。需要覆盖原有 stdio、seccomp、UID 映射及启动握手使用的 FD，并测试继承的宿主 socket 和普通 FD。
+显式打开的宿主 FD 9 在启用 PID namespace 的 bwrap guest 中仍可见。用 `untrusted`、单 UID、`net=open` 的 CapBox `exec` 也观察到了同一结果。`net=none` 通过 `--unshare-net` 请求新网络命名空间，不启用 restricted 专用的代理目录挂载。宿主策略入口（#70）合入后，`lib/security.sh` 的 `_security_close_fd` 在 `exec`/`pkg` 返回后关闭共享启动器持有的 seccomp BPF fd；显式继承给调用的普通 FD 仍可见，这是 bwrap 对继承描述符的行为，不属于该清理路径。
 
 真实 CLI 的加载失败探针可在已初始化的一次性项目中复跑。项目用 `untrusted`、单 UID 和当前宿主支持的网络模式，临时运行目录要在工作区外：
 
@@ -134,9 +135,25 @@ CAPBOX_PROBE_SKIP_IPC=1 CAPBOX_PROBE_SKIP_GO=1 CAPBOX_PROBE_NETWORK=0 bash test/
 
 本次 CapBox `exec` 返回 1，bwrap 报告 `PR_SET_SECCOMP` 返回 `EINVAL`，guest 标记未创建。`EINVAL` 也可能来自其他加载条件，诊断保留 bwrap 的原始输出。
 
+### 本地发行版矩阵（rootless podman）
+
+没有多台机器或 GitHub arm runner 时，可用 rootless podman 在本地复跑发行版矩阵：
+
+```sh
+CAPBOX_PROBE_APT_MIRROR=http://mirrors.aliyun.com/ubuntu \
+CAPBOX_PROBE_APK_MIRROR=mirrors.aliyun.com \
+CAPBOX_PROBE_GITHUB_PROXY=http://127.0.0.1:7897 \
+bash tools/probe-matrix.sh
+```
+
+默认覆盖 `ubuntu-22.04 ubuntu-24.04 ubuntu-26.04 alpine-3.22`，也可只传需要的发行版；`--keep` 保留容器以便排查。脚本用 `--privileged`、`--network host` 和 `seccomp=unconfined` 启动容器，仓库只读挂载到 `/w`，日志写到 `$CAPBOX_PROBE_WORK/logs/`。Ubuntu 容器在发行版 Bubblewrap 低于 0.12.0 时按固定校验和构建 0.13.1；Alpine 使用发行版包并安装 `libseccomp`。apt 走容器内的镜像源，下载 Bubblewrap 源码走 `CAPBOX_PROBE_GITHUB_PROXY`。
+
+aarch64 需要宿主机先注册 binfmt/qemu，脚本不假设这一点；active AppArmor confinement 依赖宿主全局 AppArmor 状态，需在开启 AppArmor 的 runner 或主机上验证。
+
 ### AppArmor 诊断
 
 `capbox doctor` 分别报告当前会话可读的宿主 AppArmor 状态、实际 bwrap user namespace 探针及 guest shell 的 AppArmor 标签。guest 探针没有运行或属性不可读时，标签未知。bwrap 失败时根据原始错误和内核日志判断原因。
 
 - Ubuntu 24.04 及之后，检查 `sysctl kernel.apparmor_restrict_unprivileged_userns`、`sudo aa-status` 与 `sudo journalctl -k -b`。核对拒绝事件、实际 bwrap 路径和附着的策略。发行版说明见 [Ubuntu AppArmor 文档](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/)。
 - Debian，先用 `sudo aa-status` 和 `sudo journalctl -k -b` 确认加载状态及拒绝事件。若运行于容器内，另在外层核对安全策略和日志。
+- Ubuntu 24.04 及之后，把 `kernel.apparmor_restrict_unprivileged_userns` 设为 0 会让 bwrap 附着发行版的 `unpriv_bwrap` profile。guest 里 `CapEff` 仍是全量，但该 profile 拒绝 `chown` 与 `setgid` 到映射内的非 0 ID，`exec --uid` 与多 UID 用例因此失败。CI 的 acceptance 作业保持 runner 的默认策略，多 UID 映射由 `multi-uid` 作业覆盖。

@@ -90,15 +90,11 @@ jobs:
 
       - uses: ./.github/actions/setup-runtime
 
-      - name: Enable unprivileged userns (best effort)
-        run: |
-          if [ -w /proc/sys/kernel/unprivileged_userns_clone ]; then
-            echo 1 | sudo tee /proc/sys/kernel/unprivileged_userns_clone || true
-          fi
-          if [ -w /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
-          fi
-          sysctl kernel.unprivileged_userns_clone 2>/dev/null || true
+      # 保持 runner 自带的宿主策略。把
+      # kernel.apparmor_restrict_unprivileged_userns 设为 0 后，newuidmap 能写
+      # 多行 UID 映射，但 guest 会附着发行版的 unpriv_bwrap profile：capability
+      # 看着是全量，chown 与 setgid 到映射内的非 0 ID 却被拒绝，T27/T31 因此失败。
+      # 多 UID 映射由 multi-uid 作业覆盖。
 
       - name: Init alpine rootfs
         env:
@@ -214,10 +210,71 @@ jobs:
       - name: Verify execution or explicit refusal under unchanged host policy
         run: python3 test/compatibility/default_policy.py
 
+  bubblewrap-probe:
+    name: Bubblewrap probe (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04, ubuntu-22.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-runtime
+      - name: Enable unprivileged userns (best effort)
+        run: |
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          fi
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          fi
+      - name: Install Go and Node tooling
+        run: sudo apt-get install -y -qq golang-go nodejs npm
+      - name: Host syscall, namespace and network probe
+        run: bash test/seccomp-compat.sh
+
+  apparmor-probe:
+    name: AppArmor host and guest label
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-runtime
+      - name: Host AppArmor is enabled and reported
+        run: |
+          set -euo pipefail
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          fi
+          test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+          ./bin/capbox init --distro alpine
+          CAPBOX_LANG=en ./bin/capbox doctor > "$RUNNER_TEMP/doctor.log" 2>&1 || true
+          cat "$RUNNER_TEMP/doctor.log"
+          grep -q 'Host AppArmor is enabled' "$RUNNER_TEMP/doctor.log"
+          grep -Eq 'AppArmor label reported by the guest shell:|Guest AppArmor label unavailable' "$RUNNER_TEMP/doctor.log"
+      - name: Guest label is observable under confinement
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq apparmor-utils
+          printf 'profile capbox-probe flags=(complain) {\n}\n' | sudo tee /etc/apparmor.d/capbox-probe >/dev/null
+          sudo apparmor_parser -a /etc/apparmor.d/capbox-probe
+          # bwrap runs as root here, so it needs no uid map; a user namespace
+          # would be denied by the host's AppArmor userns policy.
+          label="$(sudo aa-exec -p capbox-probe -- bwrap --ro-bind / / --clearenv \
+            --setenv PATH /usr/bin:/bin -- cat /proc/self/attr/apparmor/current)"
+          echo "process label: $label"
+          case "$label" in
+            *capbox-probe*) ;;
+            *) echo "process did not inherit the test profile" >&2; exit 1 ;;
+          esac
+
   compatibility-gate:
     name: Compatibility coverage
     if: always()
-    needs: [compatibility, multi-uid, default-policy]
+    needs: [bubblewrap-probe, compatibility, multi-uid, default-policy]
     runs-on: ubuntu-latest
     steps:
       - name: Require every compatibility job to succeed
