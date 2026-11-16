@@ -156,3 +156,4 @@ aarch64 需要宿主机先注册 binfmt/qemu，脚本不假设这一点；active
 
 - Ubuntu 24.04 及之后，检查 `sysctl kernel.apparmor_restrict_unprivileged_userns`、`sudo aa-status` 与 `sudo journalctl -k -b`。核对拒绝事件、实际 bwrap 路径和附着的策略。发行版说明见 [Ubuntu AppArmor 文档](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/)。
 - Debian，先用 `sudo aa-status` 和 `sudo journalctl -k -b` 确认加载状态及拒绝事件。若运行于容器内，另在外层核对安全策略和日志。
+- Ubuntu 24.04 及之后，把 `kernel.apparmor_restrict_unprivileged_userns` 设为 0 会让 bwrap 附着发行版的 `unpriv_bwrap` profile。guest 里 `CapEff` 仍是全量，但该 profile 拒绝 `chown` 与 `setgid` 到映射内的非 0 ID，`exec --uid` 与多 UID 用例因此失败。CI 的 acceptance 作业保持 runner 的默认策略，多 UID 映射由 `multi-uid` 作业覆盖。
