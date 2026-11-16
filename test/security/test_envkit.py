@@ -184,7 +184,7 @@ class MCPTests(Fixture):
             stdout = '{"task_id":"' + ('0' * 32) + '","state":"running"}'
 
         args = ENVKIT.build_mcp_parser().parse_args(['serve'])
-        server = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: calls.append(c) or Proc())
+        server = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda c: calls.append(c) or Proc())
         result = server.call('capbox_execute', {
             'argv': ['true'], 'workspace_readonly': True, 'write_dirs': ['build'],
             'input_paths': ['src', '--literal-name'],
@@ -208,7 +208,7 @@ class MCPTests(Fixture):
         payload = {'values': {'SECURITY_PROFILE': {'value': 'strict'},
                               'NET': {'value': 'restricted'}}}
         proc = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr='')
-        server = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda cmd: calls.append(cmd) or proc)
+        server = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda cmd: calls.append(cmd) or proc)
         for tool, params in (('capbox_execute', {'argv': ['true']}), ('capbox_policy', {})):
             server.call(tool, {**params, 'net_allow': 'example.com:443'})
             self.assertIn('--net=restricted', calls[-1])
@@ -273,7 +273,7 @@ class MCPTests(Fixture):
             })
             stderr = b''
         args = SimpleNamespace(max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'a' * 32})
         self.assertFalse(result['isError'])
         text = result['content'][0]['text']
@@ -291,7 +291,7 @@ class MCPTests(Fixture):
             })
             stderr = b''
         args = SimpleNamespace(max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda c: Proc()).call(
             'capbox_logs', {'task_id': 'b' * 32, 'offset': 99})
         text = result['content'][0]['text']
         self.assertIn('文件末尾', text)
@@ -304,7 +304,7 @@ class MCPTests(Fixture):
             stdout = b'not-json'
             stderr = '[capbox] 找不到 task ID\n'.encode()
         args = SimpleNamespace(max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda c: Proc()).call(
             'capbox_status', {'task_id': 'c' * 32})
         self.assertTrue(result['isError'])
         text = result['content'][0]['text']
@@ -319,7 +319,7 @@ class MCPTests(Fixture):
             stdout = b''
             stderr = '[capbox] diff 只支持已结束且非 lost 的隔离任务\n'.encode()
         args = SimpleNamespace(max_timeout=600)
-        result = MCP_STDIO.Server({'version': '0.5.2'}, args, lambda c: Proc()).call(
+        result = MCP_STDIO.Server({'version': '0.6.0'}, args, lambda c: Proc()).call(
             'capbox_diff', {'task_id': 'd' * 32})
         self.assertTrue(result['isError'])
         self.assertIn('从不自动应用', result['content'][0]['text'])
